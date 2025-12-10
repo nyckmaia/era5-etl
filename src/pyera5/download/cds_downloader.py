@@ -1,6 +1,8 @@
 """CDS API downloader for ERA5/ERA5-Land data."""
 
 import logging
+import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -132,6 +134,10 @@ class CDSDownloader:
 
         self.logger.info(f"Downloading: {year}-{month:02d}")
 
+        # Use temporary file for download
+        temp_file = self.config.output_dir / f"temp_{year}{month:02d}.download"
+        temp_dir = self.config.output_dir / f"temp_extract_{year}{month:02d}"
+
         try:
             # Build CDS API request
             request = self._build_cds_request(year, month)
@@ -140,8 +146,41 @@ class CDSDownloader:
             self.client.retrieve(
                 self.config.get_cds_dataset_name(),
                 request,
-                str(output_file),
+                str(temp_file),
             )
+
+            # Check if downloaded file is a ZIP
+            if zipfile.is_zipfile(temp_file):
+                self.logger.info("ZIP file detected, extracting...")
+                temp_dir.mkdir(exist_ok=True)
+
+                with zipfile.ZipFile(temp_file, 'r') as zip_ref:
+                    zip_ref.extractall(temp_dir)
+
+                # Find .nc files
+                nc_files = list(temp_dir.glob("*.nc"))
+
+                if not nc_files:
+                    raise RuntimeError("No .nc file found in ZIP archive!")
+
+                if len(nc_files) == 1:
+                    # Move single file to output
+                    shutil.move(str(nc_files[0]), str(output_file))
+                    self.logger.info(f"Extracted single file: {output_file.name}")
+                else:
+                    # Multiple files - use first one or merge them
+                    # For now, just use the first file
+                    self.logger.warning(
+                        f"Multiple .nc files found ({len(nc_files)}), using first one"
+                    )
+                    shutil.move(str(nc_files[0]), str(output_file))
+
+                # Clean up temp directory
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                temp_file.unlink()
+            else:
+                # Not a ZIP, just rename to final name
+                temp_file.rename(output_file)
 
             self.logger.info(
                 f"Downloaded: {output_file.name} "
@@ -152,7 +191,11 @@ class CDSDownloader:
 
         except Exception as e:
             self.logger.error(f"Download failed for {year}-{month:02d}: {e}")
-            # Clean up partial download
+            # Clean up partial downloads
+            if temp_file.exists():
+                temp_file.unlink()
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
             if output_file.exists():
                 output_file.unlink()
             raise DownloadError(f"Failed to download {year}-{month:02d}: {e}") from e
@@ -182,7 +225,8 @@ class CDSDownloader:
         # Build request
         request = {
             "product_type": "reanalysis",
-            "format": "netcdf",
+            "data_format": "netcdf",
+            "download_format": "unarchived",
             "variable": self.config.variables,
             "year": str(year),
             "month": f"{month:02d}",

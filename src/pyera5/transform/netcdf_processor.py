@@ -58,7 +58,8 @@ class NetCDFProcessor:
 
         try:
             # Read NetCDF file
-            ds = xr.open_dataset(netcdf_file, engine="netcdf4")
+            ds = xr.open_dataset(netcdf_file, engine="netcdf4", chunks={})
+            ds = ds.unify_chunks()
 
             # Process dataset
             ds = self._process_dataset(ds)
