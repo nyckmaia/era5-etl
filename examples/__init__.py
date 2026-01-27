@@ -1,1 +1,1 @@
-"""PyERA5 configuration examples."""
+"""ERA5-ETL configuration examples."""

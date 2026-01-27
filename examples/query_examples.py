@@ -1,14 +1,13 @@
 """Exemplos de consultas SQL no DuckDB com dados ERA5.
 
 Este script demonstra diferentes tipos de consultas que podem
-ser realizadas nos dados processados pelo PyERA5.
+ser realizadas nos dados processados pelo ERA5-ETL.
 """
 
 from pathlib import Path
 
-from pyera5.config import DatabaseConfig
-from pyera5.storage.data_exporter import DataExporter
-from pyera5.storage.duckdb_manager import DuckDBManager
+from era5_etl.config import DatabaseConfig
+from era5_etl.storage.duckdb_manager import DuckDBManager
 
 # Configurar acesso ao banco de dados
 db_config = DatabaseConfig(
@@ -165,10 +164,9 @@ def example_export_to_csv():
             ORDER BY date
         """)
 
-        # Exportar para CSV
-        exporter = DataExporter()
+        # Exportar para CSV usando o resultado diretamente
         output_file = Path("./monthly_summary.csv")
-        exporter.export_to_csv(result, output_file)
+        result.to_csv(str(output_file), index=False)
 
         print(f"\nDados exportados para: {output_file}")
         print(f"Total de linhas: {len(result)}")

@@ -1,1 +1,1 @@
-"""PyERA5 test suite."""
+"""ERA5-ETL test suite."""

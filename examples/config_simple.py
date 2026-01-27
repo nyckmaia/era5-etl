@@ -1,4 +1,4 @@
-"""Exemplo simples de configuração do PyERA5.
+"""Exemplo simples de configuração do ERA5-ETL.
 
 Este exemplo mostra uma configuração básica para download e
 processamento de dados ERA5-Land.
@@ -6,11 +6,11 @@ processamento de dados ERA5-Land.
 
 from pathlib import Path
 
-from pyera5.config import (
+from era5_etl.config import (
     DatabaseConfig,
     DownloadConfig,
     PipelineConfig,
-    ProcessingConfig,
+    TransformConfig,
     StorageConfig,
 )
 
@@ -26,7 +26,7 @@ config = PipelineConfig(
         start_date="2023-01-01",
         end_date="2023-01-31",
     ),
-    processing=ProcessingConfig(
+    transform=TransformConfig(
         input_dir=Path("./data/netcdf"),
         output_dir=Path("./data/processed"),
     ),
@@ -41,7 +41,7 @@ config = PipelineConfig(
 
 # Uso:
 if __name__ == "__main__":
-    from pyera5 import ERA5Pipeline
+    from era5_etl import ERA5Pipeline
 
     pipeline = ERA5Pipeline(config)
     result = pipeline.run()

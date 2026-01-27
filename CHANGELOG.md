@@ -2,7 +2,7 @@
 
 ## [0.1.0] - 2024-12-09
 
-### Implementação Completa do PyERA5
+### Implementação Completa do ERA5-ETL
 
 #### Adicionado
 - **Interface CLI completa** (`cli.py`)
@@ -22,7 +22,7 @@
   - `test_processor.py`: Testes para processamento NetCDF (7 testes)
   - `test_storage.py`: Testes para storage e DuckDB (10 testes)
   - `conftest.py`: Fixtures compartilhadas
-  - **38 testes passando** ✅
+  - **38 testes passando**
 
 - **Documentação Expandida**
   - README.md completo com:
@@ -41,23 +41,22 @@
   - `README.md`: Documentação dos exemplos
 
 #### Componentes Core (já existentes)
-- ✅ `core/pipeline.py`: Pipeline base com Template Method pattern
-- ✅ `core/stage.py`: Stages abstratos com Chain of Responsibility
-- ✅ `core/context.py`: Context object para compartilhar estado
-- ✅ `download/cds_downloader.py`: Download via CDS API
-- ✅ `transform/netcdf_processor.py`: Processamento NetCDF com xarray
-- ✅ `storage/parquet_writer.py`: Escrita de Parquet particionado
-- ✅ `storage/duckdb_manager.py`: Gerenciamento DuckDB
-- ✅ `storage/data_exporter.py`: Exportação de dados
-- ✅ `pipeline/era5_pipeline.py`: Pipeline ERA5 completo
-- ✅ `config.py`: Configurações com Pydantic
-- ✅ `constants.py`: Constantes e mapeamentos
-- ✅ `types.py`: Type aliases
-- ✅ `exceptions.py`: Exceções customizadas
+- `core/pipeline.py`: Pipeline base com Template Method pattern
+- `core/stage.py`: Stages abstratos com Chain of Responsibility
+- `core/context.py`: Context object para compartilhar estado
+- `download/cds_downloader.py`: Download via CDS API
+- `transform/netcdf_to_parquet.py`: Processamento NetCDF com xarray
+- `storage/parquet_manager.py`: Escrita de Parquet particionado
+- `storage/duckdb_manager.py`: Gerenciamento DuckDB
+- `pipeline/era5_pipeline.py`: Pipeline ERA5 completo
+- `config.py`: Configurações com Pydantic
+- `constants.py`: Constantes e mapeamentos
+- `types.py`: Type aliases
+- `exceptions.py`: Exceções customizadas
 
 #### Melhorias
 - Instalação funcionando com `pip install -e .`
-- Comando CLI `pyera5` disponível globalmente
+- Comando CLI `era5` disponível globalmente
 - Todos os testes passando (38/38)
 - Documentação completa e profissional
 - Exemplos práticos prontos para uso
@@ -72,14 +71,14 @@
 
 ### Status do Projeto
 
-✅ **Totalmente funcional e pronto para uso!**
+**Totalmente funcional e pronto para uso!**
 
 #### Testado
-- ✅ Instalação via pip
-- ✅ CLI funcionando
-- ✅ Imports corretos
-- ✅ 38 testes passando
-- ✅ Exemplos executáveis
+- Instalação via pip
+- CLI funcionando
+- Imports corretos
+- 38 testes passando
+- Exemplos executáveis
 
 #### Para Produção
 - [ ] Publicar no PyPI
@@ -95,10 +94,10 @@
 pip install -e .
 
 # Executar pipeline completo
-pyera5 run --data-dir ./data --dataset era5-land --start-date 2023-01-01 --end-date 2023-01-31
+era5 run --data-dir ./data --dataset era5-land --start-date 2023-01-01 --end-date 2023-01-31
 
 # Ver ajuda
-pyera5 --help
+era5 --help
 
 # Executar testes
 pytest tests/ -v
@@ -107,7 +106,7 @@ pytest tests/ -v
 ### Arquitetura
 
 ```
-pyera5/
+era5_etl/
 ├── cli.py              # Interface CLI completa
 ├── core/               # Pipeline base
 ├── download/           # Download CDS

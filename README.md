@@ -1,4 +1,4 @@
-# PyERA5
+# ERA5-ETL
 
 Pipeline profissional para download, processamento e análise de dados ERA5/ERA5-Land do Copernicus Climate Data Store (CDS).
 
@@ -27,14 +27,14 @@ Pipeline profissional para download, processamento e análise de dados ERA5/ERA5
 ### Instalar via pip
 
 ```bash
-pip install pyera5
+pip install era5-etl
 ```
 
 ### Instalar do código fonte
 
 ```bash
-git clone https://github.com/seu-usuario/pyera5.git
-cd pyera5
+git clone https://github.com/seu-usuario/era5-etl.git
+cd era5-etl
 pip install -e .
 ```
 
@@ -56,7 +56,7 @@ key: {seu-uid}:{sua-api-key}
 Execute o pipeline completo com um único comando:
 
 ```bash
-pyera5 run \
+era5 run \
   --data-dir ./data \
   --dataset era5-land \
   --start-date 2020-01-01 \
@@ -67,17 +67,17 @@ pyera5 run \
 ```
 
 Isso irá:
-1. ✅ Fazer download dos dados do CDS
-2. ✅ Processar arquivos NetCDF
-3. ✅ Converter para Parquet particionado
-4. ✅ Carregar no DuckDB
+1. Fazer download dos dados do CDS
+2. Processar arquivos NetCDF
+3. Converter para Parquet particionado
+4. Carregar no DuckDB
 
 ### Comandos Individuais
 
 #### 1. Download de Dados
 
 ```bash
-pyera5 download \
+era5 download \
   --dataset era5-land \
   --start-date 2023-01-01 \
   --end-date 2023-01-31 \
@@ -89,31 +89,31 @@ pyera5 download \
 #### 2. Processar NetCDF
 
 ```bash
-pyera5 process ./data/netcdf ./data/processed
+era5 process ./data/netcdf ./data/processed
 ```
 
 #### 3. Converter para Parquet
 
 ```bash
-pyera5 convert ./data/processed ./data/parquet --compression snappy
+era5 convert ./data/processed ./data/parquet --compression snappy
 ```
 
 #### 4. Consultar Dados (SQL)
 
 ```bash
-pyera5 query "SELECT * FROM era5land_202301 LIMIT 10" --db ./data/era5.duckdb
+era5 query "SELECT * FROM era5land_202301 LIMIT 10" --db ./data/era5.duckdb
 ```
 
 #### 5. Exportar Dados
 
 ```bash
-pyera5 export ./data/parquet/era5land_202301 output.csv
+era5 export ./data/parquet/era5land_202301 output.csv
 ```
 
 #### 6. Informações do Banco
 
 ```bash
-pyera5 info --db ./data/era5.duckdb
+era5 info --db ./data/era5.duckdb
 ```
 
 ## Uso Programático
@@ -122,8 +122,8 @@ pyera5 info --db ./data/era5.duckdb
 
 ```python
 from pathlib import Path
-from pyera5 import ERA5Pipeline, PipelineConfig
-from pyera5.config import DownloadConfig, ProcessingConfig, StorageConfig, DatabaseConfig
+from era5_etl import ERA5Pipeline, PipelineConfig
+from era5_etl.config import DownloadConfig, TransformConfig, StorageConfig, DatabaseConfig
 
 # Configurar pipeline
 config = PipelineConfig(
@@ -134,7 +134,7 @@ config = PipelineConfig(
         start_date="2023-01-01",
         end_date="2023-01-31",
     ),
-    processing=ProcessingConfig(
+    transform=TransformConfig(
         input_dir=Path("./data/netcdf"),
         output_dir=Path("./data/processed"),
     ),
@@ -158,8 +158,8 @@ print(f"Arquivos processados: {result.get_metadata('processed_count')}")
 
 ```python
 from pathlib import Path
-from pyera5.storage.duckdb_manager import DuckDBManager
-from pyera5.config import DatabaseConfig
+from era5_etl.storage.duckdb_manager import DuckDBManager
+from era5_etl.config import DatabaseConfig
 
 config = DatabaseConfig(db_path=Path("./data/era5.duckdb"), read_only=True)
 
@@ -182,10 +182,10 @@ with DuckDBManager(config) as db:
 
 ```python
 from pathlib import Path
-from pyera5.transform.netcdf_processor import NetCDFProcessor
-from pyera5.config import ProcessingConfig
+from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
+from era5_etl.config import TransformConfig
 
-config = ProcessingConfig(
+config = TransformConfig(
     input_dir=Path("./data/netcdf"),
     output_dir=Path("./data/processed"),
     convert_kelvin_to_celsius=True,
@@ -193,14 +193,14 @@ config = ProcessingConfig(
     resample_frequency="1D",  # Resample diário
 )
 
-processor = NetCDFProcessor(config)
+converter = NetCDFToParquetConverter(config)
 
 # Processar um arquivo
-output = processor.process_file(Path("./data/netcdf/era5land_202301.nc"))
+output = converter.process_file(Path("./data/netcdf/era5land_202301.nc"))
 print(f"Arquivo processado: {output}")
 
 # Processar diretório completo
-stats = processor.process_directory()
+stats = converter.process_directory()
 print(f"Processados: {stats['processed']}, Falhas: {stats['failed']}")
 ```
 
@@ -237,8 +237,8 @@ Crie um arquivo `config.py`:
 
 ```python
 from pathlib import Path
-from pyera5.config import PipelineConfig, DownloadConfig, ProcessingConfig, StorageConfig, DatabaseConfig
-from pyera5.constants import BRAZIL_BBOX
+from era5_etl.config import PipelineConfig, DownloadConfig, TransformConfig, StorageConfig, DatabaseConfig
+from era5_etl.constants import BRAZIL_BBOX
 
 config = PipelineConfig(
     download=DownloadConfig(
@@ -255,7 +255,7 @@ config = PipelineConfig(
         area=BRAZIL_BBOX,  # Área do Brasil
         hours=["00:00", "06:00", "12:00", "18:00"],  # 4 horários por dia
     ),
-    processing=ProcessingConfig(
+    transform=TransformConfig(
         input_dir=Path("./data/raw"),
         output_dir=Path("./data/processed"),
         convert_kelvin_to_celsius=True,
@@ -280,7 +280,7 @@ E use:
 
 ```python
 from config import config
-from pyera5 import ERA5Pipeline
+from era5_etl import ERA5Pipeline
 
 pipeline = ERA5Pipeline(config)
 pipeline.run()
@@ -323,7 +323,7 @@ pip install -e ".[dev]"
 pytest
 
 # Com coverage
-pytest --cov=pyera5 --cov-report=html
+pytest --cov=era5_etl --cov-report=html
 
 # Testes específicos
 pytest tests/test_config.py
@@ -335,8 +335,8 @@ pytest tests/test_core.py -v
 ### Setup
 
 ```bash
-git clone https://github.com/seu-usuario/pyera5.git
-cd pyera5
+git clone https://github.com/seu-usuario/era5-etl.git
+cd era5-etl
 pip install -e ".[dev]"
 ```
 
@@ -350,12 +350,12 @@ ruff format .
 ruff check .
 
 # Type checking
-mypy src/pyera5
+mypy src/era5_etl
 ```
 
 ## Arquitetura
 
-PyERA5 usa design patterns profissionais:
+ERA5-ETL usa design patterns profissionais:
 
 - **Template Method**: Pipeline abstrato com stages customizáveis
 - **Chain of Responsibility**: Encadeamento de stages
@@ -365,7 +365,7 @@ PyERA5 usa design patterns profissionais:
 ### Componentes Principais
 
 ```
-pyera5/
+era5_etl/
 ├── core/              # Pipeline base e contexto
 │   ├── pipeline.py    # Template Method pattern
 │   ├── stage.py       # Stage abstrato
@@ -373,11 +373,10 @@ pyera5/
 ├── download/          # Download do CDS
 │   └── cds_downloader.py
 ├── transform/         # Processamento NetCDF
-│   └── netcdf_processor.py
+│   └── netcdf_to_parquet.py
 ├── storage/           # Armazenamento
-│   ├── parquet_writer.py
-│   ├── duckdb_manager.py
-│   └── data_exporter.py
+│   ├── parquet_manager.py
+│   └── duckdb_manager.py
 ├── pipeline/          # Pipeline ERA5
 │   └── era5_pipeline.py
 └── cli.py            # Interface CLI
@@ -409,7 +408,7 @@ config = DownloadConfig(
 Use processamento incremental ou reduza `max_workers`:
 
 ```python
-config = ProcessingConfig(
+config = TransformConfig(
     max_workers=1,  # Processar sequencialmente
     ...
 )
@@ -431,14 +430,14 @@ Apache License 2.0 - veja [LICENSE](LICENSE) para detalhes.
 
 ## Citação
 
-Se você usar PyERA5 em sua pesquisa, por favor cite:
+Se você usar ERA5-ETL em sua pesquisa, por favor cite:
 
 ```bibtex
-@software{pyera5,
-  title = {PyERA5: Pipeline profissional para dados ERA5},
+@software{era5_etl,
+  title = {ERA5-ETL: Pipeline profissional para dados ERA5},
   author = {Developer},
   year = {2024},
-  url = {https://github.com/seu-usuario/pyera5}
+  url = {https://github.com/seu-usuario/era5-etl}
 }
 ```
 
@@ -451,6 +450,6 @@ Se você usar PyERA5 em sua pesquisa, por favor cite:
 
 ## Suporte
 
-- 📧 Email: dev@example.com
-- 🐛 Issues: https://github.com/seu-usuario/pyera5/issues
-- 💬 Discussions: https://github.com/seu-usuario/pyera5/discussions
+- Email: dev@example.com
+- Issues: https://github.com/seu-usuario/era5-etl/issues
+- Discussions: https://github.com/seu-usuario/era5-etl/discussions

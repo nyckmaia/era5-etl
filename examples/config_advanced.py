@@ -1,4 +1,4 @@
-"""Exemplo avançado de configuração do PyERA5.
+"""Exemplo avançado de configuração do ERA5-ETL.
 
 Este exemplo mostra configurações avançadas incluindo:
 - Área geográfica customizada (Brasil)
@@ -10,14 +10,14 @@ Este exemplo mostra configurações avançadas incluindo:
 
 from pathlib import Path
 
-from pyera5.config import (
+from era5_etl.config import (
     DatabaseConfig,
     DownloadConfig,
     PipelineConfig,
-    ProcessingConfig,
+    TransformConfig,
     StorageConfig,
 )
-from pyera5.constants import BRAZIL_BBOX
+from era5_etl.constants import BRAZIL_BBOX
 
 # Configuração avançada para dados climáticos do Brasil
 config = PipelineConfig(
@@ -51,7 +51,7 @@ config = PipelineConfig(
         override=False,  # Não sobrescrever arquivos existentes
         timeout=7200,  # 2 horas de timeout
     ),
-    processing=ProcessingConfig(
+    transform=TransformConfig(
         input_dir=Path("./data/brazil/netcdf"),
         output_dir=Path("./data/brazil/processed"),
         convert_kelvin_to_celsius=True,
@@ -76,7 +76,7 @@ config = PipelineConfig(
 
 # Uso:
 if __name__ == "__main__":
-    from pyera5 import ERA5Pipeline
+    from era5_etl import ERA5Pipeline
 
     print("Iniciando pipeline avançado para dados climáticos do Brasil...")
     print(f"Período: 2020-01-01 até 2023-12-31")

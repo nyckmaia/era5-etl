@@ -1,0 +1,130 @@
+# ERA5-ETL Variable and Configuration Reference
+# Single source of truth for variable definitions and float precision settings.
+
+float_precision:
+  enabled: true
+  decimal_places: 4
+
+variables:
+  # === ERA5 + ERA5-Land (both datasets) ===
+  - api_name: "2m_temperature"
+    short_name: "t2m"
+    friendly_name: "temperature_2m"
+    full_name: "2-metre temperature"
+    description: "Temperature of air at 2m above the surface of land, sea or inland waters."
+    unit: "K"
+    datasets: ["era5", "era5-land"]
+
+  - api_name: "2m_dewpoint_temperature"
+    short_name: "d2m"
+    friendly_name: "dewpoint_2m"
+    full_name: "2-metre dewpoint temperature"
+    description: "Temperature to which air at 2m above the surface must be cooled to become saturated."
+    unit: "K"
+    datasets: ["era5", "era5-land"]
+
+  - api_name: "10m_u_component_of_wind"
+    short_name: "u10"
+    friendly_name: "wind_u_10m"
+    full_name: "10-metre U wind component"
+    description: "Eastward component of the 10m wind. Combined with V component to derive wind speed."
+    unit: "m/s"
+    datasets: ["era5", "era5-land"]
+
+  - api_name: "10m_v_component_of_wind"
+    short_name: "v10"
+    friendly_name: "wind_v_10m"
+    full_name: "10-metre V wind component"
+    description: "Northward component of the 10m wind. Combined with U component to derive wind speed."
+    unit: "m/s"
+    datasets: ["era5", "era5-land"]
+
+  - api_name: "surface_pressure"
+    short_name: "sp"
+    friendly_name: "surface_pressure"
+    full_name: "Surface pressure"
+    description: "Pressure of the atmosphere on the surface of land, sea and inland water."
+    unit: "Pa"
+    datasets: ["era5", "era5-land"]
+
+  - api_name: "total_precipitation"
+    short_name: "tp"
+    friendly_name: "total_precipitation"
+    full_name: "Total precipitation"
+    description: "Accumulated liquid and frozen water, including rain and snow, that falls to the Earth's surface."
+    unit: "m"
+    datasets: ["era5", "era5-land"]
+
+  # === ERA5-only variables ===
+  - api_name: "skin_temperature"
+    short_name: "skt"
+    friendly_name: "skin_temperature"
+    full_name: "Skin temperature"
+    description: "Temperature of the surface of the Earth (skin temperature)."
+    unit: "K"
+    datasets: ["era5"]
+
+  - api_name: "mean_sea_level_pressure"
+    short_name: "msl"
+    friendly_name: "msl_pressure"
+    full_name: "Mean sea level pressure"
+    description: "Pressure adjusted to the height of mean sea level."
+    unit: "Pa"
+    datasets: ["era5"]
+
+  - api_name: "surface_solar_radiation_downwards"
+    short_name: "ssrd"
+    friendly_name: "solar_radiation"
+    full_name: "Surface solar radiation downwards"
+    description: "Amount of solar radiation (shortwave) reaching the Earth's surface."
+    unit: "J/m2"
+    datasets: ["era5"]
+
+  - api_name: "surface_thermal_radiation_downwards"
+    short_name: "strd"
+    friendly_name: "thermal_radiation"
+    full_name: "Surface thermal radiation downwards"
+    description: "Amount of thermal radiation (longwave) emitted by the atmosphere reaching the surface."
+    unit: "J/m2"
+    datasets: ["era5"]
+
+  - api_name: "total_cloud_cover"
+    short_name: "tcc"
+    friendly_name: "cloud_cover"
+    full_name: "Total cloud cover"
+    description: "Proportion of a grid box covered by cloud (0 = clear sky, 1 = fully cloudy)."
+    unit: "(0-1)"
+    datasets: ["era5"]
+
+  - api_name: "evaporation"
+    short_name: "e"
+    friendly_name: "evaporation"
+    full_name: "Evaporation"
+    description: "Accumulated amount of water that has evaporated from the Earth's surface."
+    unit: "m"
+    datasets: ["era5"]
+
+  - api_name: "relative_humidity"
+    short_name: "r"
+    friendly_name: "relative_humidity"
+    full_name: "Relative humidity"
+    description: "Percentage of water vapour in the air relative to saturation."
+    unit: "%"
+    datasets: ["era5"]
+
+  # === ERA5-Land-only variables ===
+  - api_name: "soil_temperature_level_1"
+    short_name: "stl1"
+    friendly_name: "soil_temperature_level_1"
+    full_name: "Soil temperature level 1"
+    description: "Temperature of the soil in layer 1 (0-7 cm depth)."
+    unit: "K"
+    datasets: ["era5-land"]
+
+  - api_name: "volumetric_soil_water_layer_1"
+    short_name: "swvl1"
+    friendly_name: "volumetric_soil_water_layer_1"
+    full_name: "Volumetric soil water layer 1"
+    description: "Volume of water in soil layer 1 (0-7 cm) as a fraction of total volume."
+    unit: "m3/m3"
+    datasets: ["era5-land"]

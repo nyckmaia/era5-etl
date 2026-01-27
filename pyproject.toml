@@ -3,32 +3,47 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pyera5"
+name = "era5-etl"
 version = "0.1.0"
-description = "Pipeline profissional para dados ERA5/ERA5-Land"
+description = "Professional ETL pipeline for ERA5/ERA5-Land climate reanalysis data from Copernicus CDS."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Developer", email = "dev@example.com" }
 ]
-keywords = ["era5", "climate", "meteorology", "netcdf", "data-pipeline"]
+keywords = [
+    "era5",
+    "era5-land",
+    "climate",
+    "meteorology",
+    "netcdf",
+    "data-pipeline",
+    "etl",
+    "parquet",
+    "duckdb",
+    "copernicus",
+    "reanalysis",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Database",
+    "Typing :: Typed",
 ]
-
 dependencies = [
     "polars>=0.20.0",
     "pyarrow>=15.0.0",
     "duckdb>=0.10.0",
     "pydantic>=2.0",
-    "typer[all]>=0.9.0",
+    "typer>=0.9.0",
     "rich>=13.0.0",
     "tqdm>=4.66.0",
     "xarray>=2024.1.0",
@@ -36,40 +51,120 @@ dependencies = [
     "cdsapi>=0.6.1",
     "cfgrib>=0.9.10",
     "h5netcdf>=1.3.0",
+    "psutil>=5.9.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
     "pytest-mock>=3.12.0",
-    "ruff>=0.1.0",
-    "mypy>=1.7.0",
+    "ruff>=0.3",
+    "mypy>=1.8",
+    "types-tqdm",
 ]
 
 [project.scripts]
-pyera5 = "pyera5.cli:app"
+era5 = "era5_etl.cli:app"
+era5-etl = "era5_etl.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/user/era5-etl"
+Repository = "https://github.com/user/era5-etl"
+Issues = "https://github.com/user/era5-etl/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pyera5"]
+packages = ["src/era5_etl"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/era5_etl/_data" = "era5_etl/_data"
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
-ignore = []
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "TCH", "RUF",
+]
+ignore = ["E501", "N818"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/**/*.py" = ["S101", "PLR2004"]
+"**/cli.py" = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["era5_etl"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+check_untyped_defs = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "cdsapi.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "xarray.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "netCDF4.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "cfgrib.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "h5netcdf.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyarrow.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
+pythonpath = ["src"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=era5_etl",
+    "--cov-report=term-missing",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = ["tests/*", "**/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]

@@ -1,6 +1,6 @@
-# Exemplos de Configuração do PyERA5
+# Exemplos de Configuração do ERA5-ETL
 
-Este diretório contém exemplos práticos de configuração e uso do PyERA5.
+Este diretório contém exemplos práticos de configuração e uso do ERA5-ETL.
 
 ## Arquivos Disponíveis
 
@@ -59,7 +59,7 @@ python examples/query_examples.py
 
 Antes de executar os exemplos, certifique-se de:
 
-1. **Instalar o PyERA5:**
+1. **Instalar o ERA5-ETL:**
    ```bash
    pip install -e .
    ```
@@ -104,7 +104,7 @@ download=DownloadConfig(
 ### Alterar Área Geográfica
 
 ```python
-from pyera5.constants import BRAZIL_BBOX, GLOBAL_BBOX
+from era5_etl.constants import BRAZIL_BBOX, GLOBAL_BBOX
 
 download=DownloadConfig(
     area=BRAZIL_BBOX,  # Brasil
@@ -121,8 +121,8 @@ download=DownloadConfig(
 Se você só quer fazer download dos dados:
 
 ```python
-from pyera5.download.cds_downloader import CDSDownloader
-from pyera5.config import DownloadConfig
+from era5_etl.download.cds_downloader import CDSDownloader
+from era5_etl.config import DownloadConfig
 
 config = DownloadConfig(
     output_dir=Path("./data/netcdf"),
@@ -142,18 +142,18 @@ print(f"Baixados {len(files)} arquivos")
 Se você já tem os arquivos NetCDF e quer apenas processá-los:
 
 ```python
-from pyera5.transform.netcdf_processor import NetCDFProcessor
-from pyera5.config import ProcessingConfig
+from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
+from era5_etl.config import TransformConfig
 
-config = ProcessingConfig(
+config = TransformConfig(
     input_dir=Path("./data/netcdf"),
     output_dir=Path("./data/processed"),
     convert_kelvin_to_celsius=True,
     calculate_wind_speed=True,
 )
 
-processor = NetCDFProcessor(config)
-stats = processor.process_directory()
+converter = NetCDFToParquetConverter(config)
+stats = converter.process_directory()
 print(f"Processados: {stats['processed']}")
 ```
 
@@ -179,7 +179,7 @@ download=DownloadConfig(
 Reduza o número de workers:
 
 ```python
-processing=ProcessingConfig(
+transform=TransformConfig(
     max_workers=1,  # Processar sequencialmente
     ...
 )
@@ -195,5 +195,5 @@ processing=ProcessingConfig(
 
 Em caso de dúvidas ou problemas:
 
-- Abra uma issue: https://github.com/seu-usuario/pyera5/issues
-- Consulte a documentação: https://github.com/seu-usuario/pyera5
+- Abra uma issue: https://github.com/seu-usuario/era5-etl/issues
+- Consulte a documentação: https://github.com/seu-usuario/era5-etl

@@ -1,0 +1,102 @@
+"""Complete ERA5/ERA5-Land data processing pipeline."""
+
+import duckdb
+
+from era5_etl.config import PipelineConfig
+from era5_etl.core.context import PipelineContext
+from era5_etl.core.pipeline import Pipeline
+from era5_etl.core.stage import Stage
+from era5_etl.download.cds_downloader import CDSDownloader
+from era5_etl.storage.parquet_manager import ParquetManager
+from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
+
+
+class DownloadStage(Stage):
+    """Stage for downloading ERA5 data from CDS."""
+
+    def __init__(self, config: PipelineConfig) -> None:
+        super().__init__("Download ERA5 Data")
+        self.config = config
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        """Execute download stage."""
+        downloader = CDSDownloader(self.config.download)
+        files = downloader.download()
+        context.set("downloaded_files", files)
+        context.set_metadata("download_count", len(files))
+        self.logger.info(f"Downloaded {len(files)} files")
+        return context
+
+
+class ConvertToParquetStage(Stage):
+    """Stage for converting NetCDF directly to Parquet (no CSV intermediate)."""
+
+    def __init__(self, config: PipelineConfig) -> None:
+        super().__init__("Convert NetCDF to Parquet")
+        self.config = config
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        """Execute conversion stage."""
+        output_dir = self.config.get_parquet_dir()
+        converter = NetCDFToParquetConverter(
+            transform_config=self.config.transform,
+            storage_config=self.config.storage,
+            output_dir=output_dir,
+        )
+        stats = converter.convert_directory(
+            self.config.download.output_dir,
+            max_workers=self.config.transform.max_workers,
+        )
+        context.set("conversion_stats", stats)
+        context.set_metadata("converted_count", stats["converted"])
+        self.logger.info(
+            f"Converted {stats['converted']}/{stats['total']} files to Parquet"
+        )
+        return context
+
+
+class CreateViewStage(Stage):
+    """Stage for creating a DuckDB VIEW pointing to Parquet files."""
+
+    def __init__(self, config: PipelineConfig) -> None:
+        super().__init__("Create DuckDB View")
+        self.config = config
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        """Create DuckDB VIEW from Parquet files."""
+        view_name = self.config.dataset_name.replace("-", "_")
+        db_path = self.config.get_database_path()
+
+        manager = ParquetManager(self.config.storage.database_dir, self.config.dataset_name)
+
+        if not manager.exists():
+            self.logger.warning("No Parquet files found. Skipping VIEW creation.")
+            return context
+
+        conn = duckdb.connect(str(db_path))
+        try:
+            manager.create_duckdb_view(conn, view_name)
+            context.set_metadata("view_name", view_name)
+            context.set_metadata("database_path", str(db_path))
+            self.logger.info(f"Created VIEW '{view_name}' in {db_path}")
+        finally:
+            conn.close()
+
+        return context
+
+
+class ERA5Pipeline(Pipeline[PipelineConfig]):
+    """Complete ERA5/ERA5-Land data processing pipeline.
+
+    Orchestrates:
+    1. Download ERA5/ERA5-Land data from CDS
+    2. Convert NetCDF directly to Parquet format
+    3. Create DuckDB VIEW pointing to Parquet files
+    """
+
+    def setup_stages(self) -> None:
+        """Set up all pipeline stages."""
+        self.add_stage(DownloadStage(self.config))
+        self.add_stage(ConvertToParquetStage(self.config))
+        self.add_stage(CreateViewStage(self.config))
+        self.logger.info(f"Pipeline configured with {len(self._stages)} stages")
