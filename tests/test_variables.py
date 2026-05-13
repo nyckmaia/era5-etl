@@ -68,7 +68,12 @@ class TestGetVarNameMap:
 
 
 class TestGetDefaultVariables:
-    """Tests for get_default_variables()."""
+    """Tests for get_default_variables().
+
+    Defaults are a *curated preset* (a sensible small set for a quick test
+    download), not the full list of available variables for the dataset.
+    Callers that need the full list should use ``list_variables(dataset)``.
+    """
 
     def test_era5_land_defaults(self):
         vars_list = get_default_variables("era5-land")
@@ -79,7 +84,19 @@ class TestGetDefaultVariables:
     def test_era5_defaults(self):
         vars_list = get_default_variables("era5")
         assert isinstance(vars_list, list)
-        assert "mean_sea_level_pressure" in vars_list
+        assert len(vars_list) > 0
+        assert "2m_temperature" in vars_list
+
+    def test_defaults_are_subset_of_full_variable_list(self):
+        for dataset in ("era5", "era5-land"):
+            defaults = set(get_default_variables(dataset))
+            all_vars = set(list_variables(dataset)["api_name"].to_list())
+            assert defaults <= all_vars
+
+    def test_era5_full_list_contains_msl_pressure(self):
+        # mean_sea_level_pressure is single-level-only; available in era5 only.
+        api_names = list_variables("era5")["api_name"].to_list()
+        assert "mean_sea_level_pressure" in api_names
 
 
 class TestGetFloatPrecisionConfig:

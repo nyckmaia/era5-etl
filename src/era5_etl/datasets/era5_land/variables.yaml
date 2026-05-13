@@ -1,0 +1,123 @@
+# Available variables for the ERA5-LAND dataset.
+# `defaults` lists the variables included in the "default download" preset.
+
+defaults:
+  - 2m_temperature
+  - 2m_dewpoint_temperature
+  - 10m_u_component_of_wind
+  - 10m_v_component_of_wind
+  - surface_pressure
+  - total_precipitation
+
+variables:
+  - api_name: "2m_temperature"
+    short_name: "t2m"
+    friendly_name: "temperature_2m"
+    full_name: "2-metre temperature"
+    description: "Temperature of air at 2m above the land surface."
+    unit: "K"
+
+  - api_name: "2m_dewpoint_temperature"
+    short_name: "d2m"
+    friendly_name: "dewpoint_2m"
+    full_name: "2-metre dewpoint temperature"
+    description: "Temperature to which air at 2m above the land surface must be cooled to become saturated."
+    unit: "K"
+
+  - api_name: "10m_u_component_of_wind"
+    short_name: "u10"
+    friendly_name: "wind_u_10m"
+    full_name: "10-metre U wind component"
+    description: "Eastward component of the 10m wind over land. Combined with V to derive wind speed."
+    unit: "m/s"
+
+  - api_name: "10m_v_component_of_wind"
+    short_name: "v10"
+    friendly_name: "wind_v_10m"
+    full_name: "10-metre V wind component"
+    description: "Northward component of the 10m wind over land. Combined with U to derive wind speed."
+    unit: "m/s"
+
+  - api_name: "surface_pressure"
+    short_name: "sp"
+    friendly_name: "surface_pressure"
+    full_name: "Surface pressure"
+    description: "Atmospheric pressure on the land surface."
+    unit: "Pa"
+
+  - api_name: "total_precipitation"
+    short_name: "tp"
+    friendly_name: "total_precipitation"
+    full_name: "Total precipitation"
+    description: "Accumulated liquid and frozen water that falls to the land surface."
+    unit: "m"
+
+  - api_name: "soil_temperature_level_1"
+    short_name: "stl1"
+    friendly_name: "soil_temperature_level_1"
+    full_name: "Soil temperature level 1"
+    description: "Temperature of the soil in layer 1 (0-7 cm depth)."
+    unit: "K"
+
+  - api_name: "soil_temperature_level_2"
+    short_name: "stl2"
+    friendly_name: "soil_temperature_level_2"
+    full_name: "Soil temperature level 2"
+    description: "Temperature of the soil in layer 2 (7-28 cm depth)."
+    unit: "K"
+
+  - api_name: "soil_temperature_level_3"
+    short_name: "stl3"
+    friendly_name: "soil_temperature_level_3"
+    full_name: "Soil temperature level 3"
+    description: "Temperature of the soil in layer 3 (28-100 cm depth)."
+    unit: "K"
+
+  - api_name: "soil_temperature_level_4"
+    short_name: "stl4"
+    friendly_name: "soil_temperature_level_4"
+    full_name: "Soil temperature level 4"
+    description: "Temperature of the soil in layer 4 (100-289 cm depth)."
+    unit: "K"
+
+  - api_name: "volumetric_soil_water_layer_1"
+    short_name: "swvl1"
+    friendly_name: "volumetric_soil_water_layer_1"
+    full_name: "Volumetric soil water layer 1"
+    description: "Volume of water in soil layer 1 (0-7 cm) as a fraction of total volume."
+    unit: "m3/m3"
+
+  - api_name: "volumetric_soil_water_layer_2"
+    short_name: "swvl2"
+    friendly_name: "volumetric_soil_water_layer_2"
+    full_name: "Volumetric soil water layer 2"
+    description: "Volume of water in soil layer 2 (7-28 cm) as a fraction of total volume."
+    unit: "m3/m3"
+
+  - api_name: "volumetric_soil_water_layer_3"
+    short_name: "swvl3"
+    friendly_name: "volumetric_soil_water_layer_3"
+    full_name: "Volumetric soil water layer 3"
+    description: "Volume of water in soil layer 3 (28-100 cm) as a fraction of total volume."
+    unit: "m3/m3"
+
+  - api_name: "volumetric_soil_water_layer_4"
+    short_name: "swvl4"
+    friendly_name: "volumetric_soil_water_layer_4"
+    full_name: "Volumetric soil water layer 4"
+    description: "Volume of water in soil layer 4 (100-289 cm) as a fraction of total volume."
+    unit: "m3/m3"
+
+  - api_name: "skin_temperature"
+    short_name: "skt"
+    friendly_name: "skin_temperature"
+    full_name: "Skin temperature"
+    description: "Temperature of the land surface (skin temperature)."
+    unit: "K"
+
+  - api_name: "snow_depth"
+    short_name: "sde"
+    friendly_name: "snow_depth"
+    full_name: "Snow depth"
+    description: "Depth of snow on the land surface (water equivalent)."
+    unit: "m"

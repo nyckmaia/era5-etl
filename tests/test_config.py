@@ -151,11 +151,15 @@ def test_pipeline_config_directory_structure(tmp_path: Path):
     parquet_dir = config.get_parquet_dir()
     db_path = config.get_database_path()
 
-    assert "era5land" in str(netcdf_dir)
-    assert "netcdf" in str(netcdf_dir)
-    assert "parquet" in str(parquet_dir)
-    assert "era5land" in str(parquet_dir)
-    assert str(db_path).endswith(".duckdb")
+    # NetCDF downloads land in <base>/_tmp_netcdf/<dataset>/
+    assert "_tmp_netcdf" in str(netcdf_dir)
+    assert "era5-land" in str(netcdf_dir)
+    # Parquet lives under <base>/climate_data_store_db/<dataset>/
+    assert "climate_data_store_db" in str(parquet_dir)
+    assert parquet_dir.name == "era5-land"
+    # DuckDB file sits alongside the parquet dataset
+    assert db_path.name == "era5-land.duckdb"
+    assert "climate_data_store_db" in str(db_path)
 
 
 def test_pipeline_config_era5_dataset(tmp_path: Path):
@@ -166,7 +170,9 @@ def test_pipeline_config_era5_dataset(tmp_path: Path):
     )
 
     assert config.dataset_name == "era5"
-    assert "era5" in str(config.get_parquet_dir())
+    parquet_dir = config.get_parquet_dir()
+    assert parquet_dir.name == "era5"
+    assert "climate_data_store_db" in str(parquet_dir)
     assert config.download.dataset == "era5"
 
 

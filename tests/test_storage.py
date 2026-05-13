@@ -1,12 +1,13 @@
 """Tests for storage components."""
 
+from datetime import date
 from pathlib import Path
 
 import polars as pl
 
 from era5_etl.config import DatabaseConfig
 from era5_etl.storage.duckdb_manager import DuckDBManager
-from era5_etl.storage.parquet_manager import ParquetManager
+from era5_etl.storage.parquet_manager import ParquetManager, merge_into_partitioned_parquet
 
 # -- ParquetManager tests --
 
@@ -15,10 +16,12 @@ def test_parquet_manager_initialization(tmp_path: Path):
     """Test ParquetManager initialization."""
     manager = ParquetManager(tmp_path, "era5-land")
 
-    assert manager.dataset == "era5land"
+    # Dataset name is preserved as-is (with hyphen)
+    assert manager.dataset == "era5-land"
     assert manager.parquet_dir.exists()
-    assert "parquet" in str(manager.parquet_dir)
-    assert "era5land" in str(manager.parquet_dir)
+    # Lives under the canonical storage root
+    assert "climate_data_store_db" in str(manager.parquet_dir)
+    assert manager.parquet_dir.name == "era5-land"
 
 
 def test_parquet_manager_manifest_tracking(tmp_path: Path):
@@ -127,6 +130,166 @@ def test_parquet_manager_exists(tmp_path: Path):
     df.write_parquet(manager.parquet_dir / "test.parquet")
 
     assert manager.exists() is True
+
+
+# -- ParquetManager.write_dataframe / merge_into_partitioned_parquet --
+
+
+def _sample_grid_df(
+    *,
+    lat_range: tuple[float, float],
+    lon_range: tuple[float, float],
+    date_str: str = "2024-01-01",
+    hour: int = 12,
+    var_name: str = "t2m",
+    var_value: float = 273.15,
+    step: float = 0.1,
+) -> pl.DataFrame:
+    """Build a synthetic grid DataFrame for write tests."""
+    lats: list[float] = []
+    lons: list[float] = []
+    lat = lat_range[0]
+    while lat <= lat_range[1] + 1e-9:
+        lon = lon_range[0]
+        while lon <= lon_range[1] + 1e-9:
+            lats.append(round(lat, 3))
+            lons.append(round(lon, 3))
+            lon += step
+        lat += step
+    return pl.DataFrame({
+        "latitude": lats,
+        "longitude": lons,
+        "date": [date_str] * len(lats),
+        "hour_utc": [hour] * len(lats),
+        var_name: [var_value] * len(lats),
+    })
+
+
+def test_write_then_read_back(tmp_path: Path):
+    """Sanity: write a batch and read it back via ParquetManager glob."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(lat_range=(-22.0, -21.5), lon_range=(-44.0, -43.5))
+
+    manager.write_dataframe(df)
+
+    files = manager.list_parquet_files()
+    assert len(files) == 1
+    readback = pl.read_parquet(files[0])
+    assert len(readback) == len(df)
+
+
+def test_overlap_does_not_duplicate(tmp_path: Path):
+    """Two writes covering an overlapping region collapse to no duplicates."""
+    manager = ParquetManager(tmp_path, "era5-land")
+
+    # Batch A: -22..-21.5 N, -44..-43.5 E (small SP-ish square).
+    a = _sample_grid_df(lat_range=(-22.0, -21.5), lon_range=(-44.0, -43.5), var_value=300.0)
+    # Batch B: -21.7..-21.2 N, -43.7..-43.2 E (overlaps A on -21.7..-21.5 N, -43.7..-43.5 E).
+    b = _sample_grid_df(lat_range=(-21.7, -21.2), lon_range=(-43.7, -43.2), var_value=310.0)
+
+    manager.write_dataframe(a)
+    manager.write_dataframe(b)
+
+    files = manager.list_parquet_files()
+    # The partition should now contain a single merged file (old file got deleted).
+    assert len(files) == 1
+    final = pl.read_parquet(files[0])
+
+    # Every (latitude, longitude, hour_utc) must be unique.
+    keys = final.select(["latitude", "longitude", "hour_utc"])
+    assert len(keys) == len(keys.unique())
+
+    # Row count = |union(A, B)| (no dup) >= max(|A|, |B|) and < |A| + |B|.
+    assert len(final) < len(a) + len(b)
+    assert len(final) >= max(len(a), len(b))
+
+
+def test_overlap_new_value_wins(tmp_path: Path):
+    """For conflicting (lat, lon, hour_utc), the second write's value wins."""
+    manager = ParquetManager(tmp_path, "era5-land")
+
+    a = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=300.0)
+    b = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=310.0)
+
+    manager.write_dataframe(a)
+    manager.write_dataframe(b)
+
+    final = pl.read_parquet(manager.list_parquet_files()[0])
+    assert (final["t2m"] == 310.0).all()
+
+
+def test_variable_disjoint_columns_merge(tmp_path: Path):
+    """Two writes with disjoint variable columns produce rows with both columns filled."""
+    manager = ParquetManager(tmp_path, "era5-land")
+
+    a = _sample_grid_df(
+        lat_range=(-22.0, -21.9),
+        lon_range=(-44.0, -43.9),
+        var_name="t2m",
+        var_value=300.0,
+    )
+    b = _sample_grid_df(
+        lat_range=(-22.0, -21.9),
+        lon_range=(-44.0, -43.9),
+        var_name="tp",
+        var_value=0.0035,
+    )
+
+    manager.write_dataframe(a)
+    manager.write_dataframe(b)
+
+    final = pl.read_parquet(manager.list_parquet_files()[0])
+    assert "t2m" in final.columns and "tp" in final.columns
+    assert final["t2m"].null_count() == 0
+    assert final["tp"].null_count() == 0
+
+
+def test_write_creates_partition_directory(tmp_path: Path):
+    """Partition directories follow the date=YYYY-MM-DD naming."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9))
+    manager.write_dataframe(df)
+    expected = manager.parquet_dir / "date=2024-01-01"
+    assert expected.exists() and expected.is_dir()
+
+
+def test_write_handles_date_typed_column(tmp_path: Path):
+    """A Polars Date column should be cast to string for partition naming."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9))
+    df = df.with_columns(pl.col("date").str.to_date().alias("date"))
+    manager.write_dataframe(df)
+    assert (manager.parquet_dir / "date=2024-01-01").exists()
+
+
+def test_dedup_existing_partitions(tmp_path: Path):
+    """dedup_existing_partitions collapses pre-existing duplicate rows."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    partition_dir = manager.parquet_dir / "date=2024-01-01"
+    partition_dir.mkdir(parents=True)
+
+    base = _sample_grid_df(
+        lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=300.0
+    ).drop("date")
+    # Simulate two old-style writes co-existing in the same partition (duplicates).
+    base.write_parquet(partition_dir / "part-a.parquet")
+    base.with_columns(pl.col("t2m") * 1.05).write_parquet(partition_dir / "part-b.parquet")
+
+    stats = manager.dedup_existing_partitions()
+    assert stats["partitions_processed"] == 1
+    assert stats["rows_after"] == len(base)
+    assert stats["rows_after"] < stats["rows_before"]
+
+    files = sorted(partition_dir.glob("*.parquet"))
+    assert len(files) == 1
+
+
+def test_merge_into_partitioned_parquet_module_function(tmp_path: Path):
+    """The module-level helper works without a ParquetManager."""
+    parquet_dir = tmp_path / "demo_dataset"
+    df = _sample_grid_df(lat_range=(0.0, 0.2), lon_range=(0.0, 0.2))
+    merge_into_partitioned_parquet(df, parquet_dir)
+    assert (parquet_dir / "date=2024-01-01").exists()
 
 
 # -- DuckDBManager tests --

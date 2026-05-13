@@ -1,7 +1,22 @@
-"""Command-line interface for ERA5-ETL."""
+"""Command-line interface for ERA5-ETL.
+
+Commands:
+    pipeline    Download + convert end-to-end (era5, era5-land, or both).
+    download    Download only.
+    convert     NetCDF -> Parquet only.
+    update      Detect missing chunks in the manifest and fetch only those.
+    status      Show per-dataset storage stats (replaces the old `info`).
+    query       Run a SQL query against the dataset's DuckDB view.
+    variables   List variables available for a dataset.
+    ibge        Generate IBGE municipality lookup parquet.
+    ui          Launch the local FastAPI + React web UI (Phase 4+).
+"""
+
+from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -11,30 +26,56 @@ from rich.table import Table
 
 from era5_etl.__version__ import __version__
 from era5_etl.config import PipelineConfig
+from era5_etl.datasets import DatasetRegistry
 
-# Create CLI app
 app = typer.Typer(
     name="era5-etl",
     help="Professional ETL pipeline for ERA5/ERA5-Land climate data from Copernicus CDS.",
     add_completion=False,
 )
-
-# Rich console for output
 console = Console()
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """Configure logging with Rich handler."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(message)s",
         handlers=[RichHandler(rich_tracebacks=True, console=console)],
     )
+    install_cdsapi_log_filter()
+
+
+_ARCO_LOG_NEEDLES = (
+    "Analysis Ready Cloud Optimized",
+    "reanalysis-era5-land-timeseries",
+    "reanalysis-era5-single-levels-timeseries",
+)
+
+
+def _arco_notice_filter(record: logging.LogRecord) -> bool:
+    """Drop cdsapi log records that advertise the ARCO/Zarr time-series endpoint.
+
+    The notice is irrelevant for area-bbox downloads (which is what this
+    project does) and clutters every run. The README documents the ARCO
+    endpoint for users who want to fetch single-point time-series.
+    """
+    return not any(needle in record.getMessage() for needle in _ARCO_LOG_NEEDLES)
+
+
+def install_cdsapi_log_filter() -> None:
+    """Attach the ARCO-notice filter to the ``cdsapi`` logger once."""
+    cdsapi_logger = logging.getLogger("cdsapi")
+    for existing in cdsapi_logger.filters:
+        if getattr(existing, "_era5_etl_arco", False):
+            return
+    flt = logging.Filter()
+    flt.filter = _arco_notice_filter  # type: ignore[method-assign]
+    flt._era5_etl_arco = True  # type: ignore[attr-defined]
+    cdsapi_logger.addFilter(flt)
 
 
 def version_callback(value: bool) -> None:
-    """Print version and exit."""
     if value:
         console.print(f"ERA5-ETL version {__version__}")
         raise typer.Exit()
@@ -55,57 +96,102 @@ def main(
     setup_logging(verbose)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 def _resolve_area(
+    pais: str = "Brasil",
     municipio: str | None = None,
     uf: str | None = None,
     regiao_imediata: str | None = None,
     regiao_intermediaria: str | None = None,
-) -> list[float] | None:
-    """Resolve geographic area from IBGE region options.
+) -> list[float]:
+    """Resolve a bbox from country + IBGE region options.
 
-    Priority: municipio > regiao_imediata > regiao_intermediaria > uf (alone).
+    Resolution order: the most-specific flag wins. Order of specificity
+    (smallest area first) is: ``municipio`` > ``regiao_imediata`` >
+    ``regiao_intermediaria`` > ``uf`` > ``pais``.
 
-    Returns:
-        Bounding box as [North, West, South, East], or None if no region specified.
+    ``municipio`` may be combined with ``uf`` to disambiguate homonyms; any
+    other pair of region flags raises ``typer.BadParameter``. A non-Brazilian
+    ``pais`` combined with any sub-region flag also raises (IBGE loaders only
+    cover Brazil).
+
+    Always returns a ``[N, W, S, E]`` list.
     """
+    from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
+
+    sub_flags = {
+        "--municipio": municipio,
+        "--regiao-imediata": regiao_imediata,
+        "--regiao-intermediaria": regiao_intermediaria,
+        "--uf": uf,
+    }
+    active = [name for name, value in sub_flags.items() if value]
+    # municipio + uf is a permitted combo (uf disambiguates municipio).
+    if set(active) - {"--municipio", "--uf"} and len(active) > 1:
+        raise typer.BadParameter(
+            "Use at most one sub-region flag at a time "
+            f"(got: {', '.join(active)}). "
+            "Only --municipio + --uf may be combined (to disambiguate municipalities)."
+        )
+    if active and pais.lower() != "brasil":
+        raise typer.BadParameter(
+            f"Sub-region flags ({', '.join(active)}) are only supported for "
+            f"--pais Brasil; got --pais {pais!r}."
+        )
+
     if municipio:
-        from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
-
         area = lookup_region_bbox(RegionType.MUNICIPIO, municipio, uf=uf)
-        console.print(
-            f"[cyan]Area from municipality '{municipio}': "
-            f"N={area[0]}, W={area[1]}, S={area[2]}, E={area[3]}[/cyan]"
-        )
+        _print_area("municipality", municipio, area)
         return area
-    elif regiao_imediata:
-        from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
-
+    if regiao_imediata:
         area = lookup_region_bbox(RegionType.RG_IMEDIATA, regiao_imediata)
-        console.print(
-            f"[cyan]Area from immediate region '{regiao_imediata}': "
-            f"N={area[0]}, W={area[1]}, S={area[2]}, E={area[3]}[/cyan]"
-        )
+        _print_area("immediate region", regiao_imediata, area)
         return area
-    elif regiao_intermediaria:
-        from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
-
+    if regiao_intermediaria:
         area = lookup_region_bbox(RegionType.RG_INTERMEDIARIA, regiao_intermediaria)
-        console.print(
-            f"[cyan]Area from intermediate region '{regiao_intermediaria}': "
-            f"N={area[0]}, W={area[1]}, S={area[2]}, E={area[3]}[/cyan]"
-        )
+        _print_area("intermediate region", regiao_intermediaria, area)
         return area
-    elif uf and not municipio:
-        from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
-
+    if uf:
         area = lookup_region_bbox(RegionType.UF, uf)
-        console.print(
-            f"[cyan]Area from UF '{uf}': "
-            f"N={area[0]}, W={area[1]}, S={area[2]}, E={area[3]}[/cyan]"
-        )
+        _print_area("UF", uf, area)
         return area
 
-    return None
+    try:
+        area = lookup_region_bbox(RegionType.PAIS, pais)
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(
+            f"Country '{pais}' is not supported yet. Add a row to the bundled "
+            f"pais.csv to enable it. Underlying error: {exc}"
+        ) from exc
+    _print_area("country", pais, area)
+    return area
+
+
+def _print_area(kind: str, name: str, area: list[float]) -> None:
+    console.print(
+        f"[cyan]Area from {kind} '{name}': "
+        f"N={area[0]}, W={area[1]}, S={area[2]}, E={area[3]}[/cyan]"
+    )
+
+
+def _expand_datasets(name: str) -> list[str]:
+    """``"all"`` -> all registered datasets; otherwise validate and return a single name."""
+    if name == "all":
+        return list(DatasetRegistry.names())
+    if name not in DatasetRegistry.names():
+        raise typer.BadParameter(
+            f"Unknown dataset '{name}'. Available: {', '.join(DatasetRegistry.names())} or 'all'."
+        )
+    return [name]
+
+
+# ---------------------------------------------------------------------------
+# pipeline
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -114,69 +200,131 @@ def pipeline(
         Path("./data"),
         "--data-dir",
         "-d",
-        help="Base directory for data storage",
+        help="Base directory for data storage (parent of climate_data_store_db/)",
     ),
-    dataset: str = typer.Option("era5-land", "--dataset", help="Dataset (era5 or era5-land)"),
+    dataset: str = typer.Option(
+        "era5-land",
+        "--dataset",
+        help="Dataset (era5, era5-land, or 'all' to run both sequentially)",
+    ),
     start_date: str = typer.Option("2020-01-01", "--start-date", help="Start date (YYYY-MM-DD)"),
     end_date: str | None = typer.Option(None, "--end-date", help="End date (YYYY-MM-DD)"),
     variables: list[str] | None = typer.Option(None, "--var", help="Variables to download"),
     compression: str = typer.Option("zstd", "--compression", help="Parquet compression"),
     override: bool = typer.Option(False, "--override", help="Override existing files"),
-    workers: int | None = typer.Option(None, "--workers", "-w", help="Number of parallel workers for conversion"),
+    workers: int | None = typer.Option(
+        None, "--workers", "-w", help="Parallel workers for conversion"
+    ),
+    pais: str = typer.Option(
+        "Brasil",
+        "--pais",
+        help="Country (default: Brasil). Without sub-region flags, resolves to the country bbox.",
+    ),
     municipio: str | None = typer.Option(None, "--municipio", help="Municipality name (IBGE)"),
-    uf: str | None = typer.Option(None, "--uf", help="State (UF) abbreviation for disambiguation or download"),
-    regiao_imediata: str | None = typer.Option(None, "--regiao-imediata", help="Immediate region name (IBGE)"),
-    regiao_intermediaria: str | None = typer.Option(None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"),
+    uf: str | None = typer.Option(None, "--uf", help="State (UF) abbreviation"),
+    regiao_imediata: str | None = typer.Option(
+        None, "--regiao-imediata", help="Immediate region name (IBGE)"
+    ),
+    regiao_intermediaria: str | None = typer.Option(
+        None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Plan the requests and print the size estimate without contacting CDS",
+    ),
 ) -> None:
-    """Execute the complete ERA5 data pipeline (download + convert to Parquet)."""
-    from era5_etl.pipeline.era5_pipeline import ERA5Pipeline
+    """Execute the complete ERA5 data pipeline (download + convert)."""
+    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+    datasets = _expand_datasets(dataset)
 
-    console.print("\n[bold blue]ERA5-ETL Pipeline[/bold blue]\n")
+    for ds_name in datasets:
+        console.print(f"\n[bold blue]ERA5-ETL pipeline -- {ds_name}[/bold blue]\n")
+        config = PipelineConfig.create(
+            base_dir=data_dir,
+            dataset=ds_name,
+            start_date=start_date,
+            end_date=end_date,
+            variables=variables,
+            override=override,
+            compression=compression,  # type: ignore[arg-type]
+            area=area,
+        )
+        config.transform.max_workers = workers
 
-    # Resolve geographic area from region options
-    area = _resolve_area(
-        municipio=municipio,
-        uf=uf,
-        regiao_imediata=regiao_imediata,
-        regiao_intermediaria=regiao_intermediaria,
-    )
+        if dry_run:
+            _print_plan(config)
+            continue
 
-    config = PipelineConfig.create(
-        base_dir=data_dir,
-        dataset=dataset,  # type: ignore[arg-type]
-        start_date=start_date,
-        end_date=end_date,
-        variables=variables,
-        override=override,
-        compression=compression,  # type: ignore[arg-type]
-        area=area,
-    )
-    config.transform.max_workers = workers
+        try:
+            from era5_etl.pipeline.era5_pipeline import ERA5Pipeline
 
-    try:
-        era5_pipeline = ERA5Pipeline(config)
-        context = era5_pipeline.run()
+            era5_pipeline = ERA5Pipeline(config)
+            context = era5_pipeline.run()
+            _print_summary(context, ds_name)
+        except Exception as exc:
+            console.print(f"\n[bold red]Pipeline failed for {ds_name}:[/bold red] {exc}")
+            sys.exit(1)
 
-        console.print("\n[bold green]Pipeline completed successfully![/bold green]\n")
 
-        table = Table(title="Pipeline Summary")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
+def _print_plan(config: PipelineConfig) -> None:
+    from era5_etl.download.request_planner import plan_requests
+    from era5_etl.download.size_estimator import estimate_request_size
 
-        if context.get_metadata("download_count"):
-            table.add_row("Files downloaded", str(context.get_metadata("download_count")))
-        if context.get_metadata("converted_count"):
-            table.add_row("Files converted", str(context.get_metadata("converted_count")))
-        if context.get_metadata("view_name"):
-            table.add_row("DuckDB VIEW", context.get_metadata("view_name"))
-        if context.get_metadata("database_path"):
-            table.add_row("Database", context.get_metadata("database_path"))
+    chunks = plan_requests(config.download)
+    total_mb = 0.0
+    for c in chunks:
+        est = estimate_request_size(
+            num_variables=len(c.variables),
+            num_hours=len(c.hours),
+            num_days=len(c.days),
+            area=list(c.area),
+            dataset=c.dataset,
+            max_bytes=config.download.max_request_bytes,
+        )
+        total_mb += est.estimated_mb
 
-        console.print(table)
+    table = Table(title=f"Plan -- {config.dataset_name}")
+    table.add_column("#")
+    table.add_column("chunk_id", style="cyan")
+    table.add_column("year-month")
+    table.add_column("days")
+    table.add_column("variables")
+    table.add_column("area (N,W,S,E)")
+    for i, c in enumerate(chunks, 1):
+        days_repr = f"{c.days[0]:02d}-{c.days[-1]:02d}" if c.days else "-"
+        table.add_row(
+            str(i),
+            c.chunk_id,
+            f"{c.year}-{c.month:02d}",
+            days_repr,
+            ", ".join(c.variables),
+            f"{c.area[0]:.2f},{c.area[1]:.2f},{c.area[2]:.2f},{c.area[3]:.2f}",
+        )
+    console.print(table)
+    console.print(f"[green]Total planned chunks: {len(chunks)}[/green]")
+    console.print(f"[green]Estimated total uncompressed size: {total_mb:,.1f} MB[/green]")
 
-    except Exception as e:
-        console.print(f"\n[bold red]Pipeline failed:[/bold red] {e}")
-        sys.exit(1)
+
+def _print_summary(context, dataset: str) -> None:
+    console.print(f"\n[bold green]Pipeline completed -- {dataset}[/bold green]\n")
+    table = Table(title="Pipeline Summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    if context.get_metadata("download_count"):
+        table.add_row("Files downloaded", str(context.get_metadata("download_count")))
+    if context.get_metadata("converted_count"):
+        table.add_row("Files converted", str(context.get_metadata("converted_count")))
+    if context.get_metadata("view_name"):
+        table.add_row("DuckDB VIEW", context.get_metadata("view_name"))
+    if context.get_metadata("database_path"):
+        table.add_row("Database", context.get_metadata("database_path"))
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# download
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -187,41 +335,53 @@ def download(
     end_date: str | None = typer.Option(None, "--end-date", help="End date"),
     variables: list[str] | None = typer.Option(None, "--var", help="Variables to download"),
     override: bool = typer.Option(False, "--override", help="Override existing files"),
+    pais: str = typer.Option(
+        "Brasil",
+        "--pais",
+        help="Country (default: Brasil). Without sub-region flags, resolves to the country bbox.",
+    ),
     municipio: str | None = typer.Option(None, "--municipio", help="Municipality name (IBGE)"),
-    uf: str | None = typer.Option(None, "--uf", help="State (UF) abbreviation for disambiguation or download"),
-    regiao_imediata: str | None = typer.Option(None, "--regiao-imediata", help="Immediate region name (IBGE)"),
-    regiao_intermediaria: str | None = typer.Option(None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"),
+    uf: str | None = typer.Option(None, "--uf", help="State (UF) abbreviation"),
+    regiao_imediata: str | None = typer.Option(
+        None, "--regiao-imediata", help="Immediate region name (IBGE)"
+    ),
+    regiao_intermediaria: str | None = typer.Option(
+        None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, do not download"),
 ) -> None:
     """Download ERA5/ERA5-Land data from Copernicus CDS."""
-    from era5_etl.download.cds_downloader import CDSDownloader
+    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"\n[bold blue]Downloading {ds_name}[/bold blue]\n")
+        config = PipelineConfig.create(
+            base_dir=data_dir,
+            dataset=ds_name,
+            start_date=start_date,
+            end_date=end_date,
+            variables=variables,
+            override=override,
+            area=area,
+        )
 
-    console.print("\n[bold blue]Downloading ERA5 data[/bold blue]\n")
+        if dry_run:
+            _print_plan(config)
+            continue
 
-    # Resolve geographic area from region options
-    area = _resolve_area(
-        municipio=municipio,
-        uf=uf,
-        regiao_imediata=regiao_imediata,
-        regiao_intermediaria=regiao_intermediaria,
-    )
+        try:
+            from era5_etl.download.cds_downloader import CDSDownloader
 
-    config = PipelineConfig.create(
-        base_dir=data_dir,
-        dataset=dataset,  # type: ignore[arg-type]
-        start_date=start_date,
-        end_date=end_date,
-        variables=variables,
-        override=override,
-        area=area,
-    )
+            downloader = CDSDownloader(config.download)
+            files = downloader.download()
+            console.print(f"\n[green]Downloaded {len(files)} files for {ds_name}[/green]")
+        except Exception as exc:
+            console.print(f"\n[bold red]Download failed for {ds_name}:[/bold red] {exc}")
+            sys.exit(1)
 
-    try:
-        downloader = CDSDownloader(config.download)
-        files = downloader.download()
-        console.print(f"\n[green]Downloaded {len(files)} files successfully![/green]")
-    except Exception as e:
-        console.print(f"\n[bold red]Download failed:[/bold red] {e}")
-        sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# convert
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -230,35 +390,200 @@ def convert(
     dataset: str = typer.Option("era5-land", "--dataset", help="Dataset name"),
     compression: str = typer.Option("zstd", "--compression", help="Parquet compression"),
     override: bool = typer.Option(False, "--override", help="Override existing files"),
-    workers: int | None = typer.Option(None, "--workers", "-w", help="Number of parallel workers"),
+    workers: int | None = typer.Option(None, "--workers", "-w", help="Parallel workers"),
 ) -> None:
     """Convert NetCDF files to Parquet format."""
     from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
 
-    console.print("\n[bold blue]Converting NetCDF to Parquet[/bold blue]\n")
-
-    config = PipelineConfig.create(
-        base_dir=data_dir,
-        dataset=dataset,  # type: ignore[arg-type]
-        override=override,
-        compression=compression,  # type: ignore[arg-type]
-    )
-
-    try:
-        converter = NetCDFToParquetConverter(
-            transform_config=config.transform,
-            storage_config=config.storage,
-            output_dir=config.get_parquet_dir(),
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"\n[bold blue]Converting -- {ds_name}[/bold blue]\n")
+        config = PipelineConfig.create(
+            base_dir=data_dir,
+            dataset=ds_name,
+            override=override,
+            compression=compression,  # type: ignore[arg-type]
         )
-        stats = converter.convert_directory(config.get_netcdf_dir(), max_workers=workers)
+        try:
+            converter = NetCDFToParquetConverter(
+                transform_config=config.transform,
+                storage_config=config.storage,
+                output_dir=config.get_parquet_dir(),
+            )
+            stats = converter.convert_directory(config.get_netcdf_dir(), max_workers=workers)
+            console.print(
+                f"[green]Done -- {ds_name}: converted={stats['converted']}, "
+                f"skipped={stats['skipped']}, failed={stats['failed']}[/green]"
+            )
+        except Exception as exc:
+            console.print(f"\n[bold red]Conversion failed for {ds_name}:[/bold red] {exc}")
+            sys.exit(1)
 
-        console.print("\n[green]Conversion complete![/green]")
-        console.print(f"  Converted: {stats['converted']}")
-        console.print(f"  Skipped: {stats['skipped']}")
-        console.print(f"  Failed: {stats['failed']}")
-    except Exception as e:
-        console.print(f"\n[bold red]Conversion failed:[/bold red] {e}")
-        sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# update (incremental)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def update(
+    data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
+    dataset: str = typer.Option(
+        "era5-land", "--dataset", help="Dataset (era5, era5-land, or 'all')"
+    ),
+    start_date: str = typer.Option("2020-01-01", "--start-date", help="Start date"),
+    end_date: str | None = typer.Option(None, "--end-date", help="End date"),
+    variables: list[str] | None = typer.Option(None, "--var", help="Variables"),
+    pais: str = typer.Option(
+        "Brasil",
+        "--pais",
+        help="Country (default: Brasil). Without sub-region flags, resolves to the country bbox.",
+    ),
+    municipio: str | None = typer.Option(None, "--municipio", help="Municipality name (IBGE)"),
+    uf: str | None = typer.Option(None, "--uf", help="State (UF) abbreviation"),
+    regiao_imediata: str | None = typer.Option(
+        None, "--regiao-imediata", help="Immediate region name (IBGE)"
+    ),
+    regiao_intermediaria: str | None = typer.Option(
+        None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Only list the chunks that would be downloaded"
+    ),
+) -> None:
+    """Incrementally download chunks for grid cells not yet in the manifest.
+
+    Computes the missing region per ``(variable, year, month)`` as the
+    requested area minus already-covered rectangles, then plans chunks only
+    for what's missing. Robust to area changes between runs (does not depend
+    on chunk_id collisions). Use with cron to keep a dataset up to date.
+    """
+    from era5_etl.download.cds_downloader import CDSDownloader
+    from era5_etl.download.request_planner import plan_incremental_requests
+    from era5_etl.storage.manifest import Manifest
+
+    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"\n[bold blue]Update -- {ds_name}[/bold blue]\n")
+        config = PipelineConfig.create(
+            base_dir=data_dir,
+            dataset=ds_name,
+            start_date=start_date,
+            end_date=end_date,
+            variables=variables,
+            area=area,
+        )
+        manifest = Manifest(data_dir, ds_name)
+        missing = plan_incremental_requests(config.download, manifest)
+
+        console.print(
+            f"Manifest records: {len(manifest)}; missing chunk(s) to download: {len(missing)}"
+        )
+
+        if dry_run or not missing:
+            for c in missing:
+                area_repr = f"{c.area[0]:.2f},{c.area[1]:.2f},{c.area[2]:.2f},{c.area[3]:.2f}"
+                console.print(
+                    f"  - [yellow]{c.chunk_id}[/yellow]  vars={list(c.variables)}  area=[{area_repr}]"
+                )
+            continue
+
+        try:
+            downloader = CDSDownloader(config.download, manifest=manifest)
+            downloader.download_chunks(missing)
+            console.print(f"[green]Downloaded {len(missing)} missing chunk(s).[/green]")
+        except Exception as exc:
+            console.print(f"\n[bold red]Update failed for {ds_name}:[/bold red] {exc}")
+            sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def status(
+    data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
+    dataset: str = typer.Option(
+        "all", "--dataset", help="Dataset to report on (era5, era5-land, or 'all')"
+    ),
+) -> None:
+    """Report per-dataset storage stats and manifest coverage."""
+    from era5_etl.storage.manifest import Manifest
+    from era5_etl.storage.parquet_manager import ParquetManager
+
+    console.print(f"\n[bold blue]Storage status -- base={data_dir}[/bold blue]\n")
+
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"[bold cyan]Dataset: {ds_name}[/bold cyan]")
+        manager = ParquetManager(data_dir, ds_name)
+        manifest = Manifest(data_dir, ds_name)
+
+        stats = manager.get_storage_stats()
+        size_mb = stats.total_size_bytes / (1024 * 1024)
+
+        table = Table(box=None)
+        table.add_column("metric", style="cyan")
+        table.add_column("value", style="green")
+        table.add_row("Parquet files", str(stats.total_files))
+        table.add_row("Total size", f"{size_mb:,.2f} MB")
+        table.add_row("Partitions (date=)", str(len(stats.partitions)))
+        table.add_row("Manifest chunks", str(len(manifest)))
+        if stats.partitions:
+            first, last = stats.partitions[0], stats.partitions[-1]
+            table.add_row("First partition", first)
+            table.add_row("Last partition", last)
+        table.add_row("Parquet directory", str(manager.parquet_dir))
+        console.print(table)
+        console.print()
+
+
+# ---------------------------------------------------------------------------
+# dedup
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def dedup(
+    data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
+    dataset: str = typer.Option(
+        "all", "--dataset", help="Dataset to dedup (era5, era5-land, or 'all')"
+    ),
+    compression: str = typer.Option("zstd", "--compression", help="Parquet compression"),
+) -> None:
+    """Rewrite each partition with duplicate ``(lat, lon, hour_utc)`` rows collapsed.
+
+    One-off migration for datasets created before merge-on-key writes landed.
+    Idempotent: re-running after a clean dataset is a no-op.
+    """
+    from era5_etl.storage.parquet_manager import ParquetManager
+
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"\n[bold blue]Dedup -- {ds_name}[/bold blue]")
+        manager = ParquetManager(data_dir, ds_name)
+        if not manager.exists():
+            console.print(f"  [yellow]No Parquet data for {ds_name}, skipping.[/yellow]")
+            continue
+        stats = manager.dedup_existing_partitions(
+            compression=compression,  # type: ignore[arg-type]
+        )
+        table = Table(box=None)
+        table.add_column("metric", style="cyan")
+        table.add_column("value", style="green")
+        table.add_row("Partitions processed", str(stats["partitions_processed"]))
+        table.add_row("Rows before", f"{stats['rows_before']:,}")
+        table.add_row("Rows after", f"{stats['rows_after']:,}")
+        table.add_row(
+            "Duplicates removed",
+            f"{stats['rows_before'] - stats['rows_after']:,}",
+        )
+        console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# query
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -269,71 +594,41 @@ def query(
     output: Path | None = typer.Option(None, "--output", "-o", help="Output CSV file"),
     limit: int = typer.Option(100, "--limit", "-n", help="Limit displayed results"),
 ) -> None:
-    """Execute SQL query on ERA5 Parquet data."""
+    """Execute a SQL query against the dataset's Parquet view."""
     import duckdb
 
     from era5_etl.storage.parquet_manager import ParquetManager
 
-    console.print("\n[bold blue]Executing query[/bold blue]\n")
+    if dataset == "all":
+        console.print("[red]--dataset all is not supported for query; pick one.[/red]")
+        sys.exit(2)
 
-    config = PipelineConfig.create(base_dir=data_dir, dataset=dataset)  # type: ignore[arg-type]
-    manager = ParquetManager(config.storage.database_dir, config.dataset_name)
-
+    manager = ParquetManager(data_dir, dataset)
     if not manager.exists():
         console.print("[red]No Parquet data found. Run the pipeline first.[/red]")
         sys.exit(1)
 
     try:
         conn = duckdb.connect(":memory:")
-        manager.create_duckdb_view(conn, "era5")
-
+        view_name = dataset.replace("-", "_") + "_view"
+        manager.create_duckdb_view(conn, view_name)
         result = conn.execute(sql).pl()
         console.print(f"[green]Query returned {len(result):,} rows[/green]\n")
-
-        display_df = result.head(limit)
-        console.print(display_df)
-
+        console.print(result.head(limit))
         if len(result) > limit:
             console.print(f"\n[yellow]... and {len(result) - limit} more rows[/yellow]")
-
         if output:
             result.write_csv(output)
             console.print(f"\n[green]Exported to {output}[/green]")
-
         conn.close()
-    except Exception as e:
-        console.print(f"\n[bold red]Query failed:[/bold red] {e}")
+    except Exception as exc:
+        console.print(f"\n[bold red]Query failed:[/bold red] {exc}")
         sys.exit(1)
 
 
-@app.command()
-def info(
-    data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
-    dataset: str = typer.Option("era5-land", "--dataset", help="Dataset name"),
-) -> None:
-    """Show information about ERA5 data storage."""
-    from era5_etl.storage.parquet_manager import ParquetManager
-
-    console.print("\n[bold blue]ERA5-ETL Data Information[/bold blue]\n")
-
-    config = PipelineConfig.create(base_dir=data_dir, dataset=dataset)  # type: ignore[arg-type]
-    manager = ParquetManager(config.storage.database_dir, config.dataset_name)
-
-    if not manager.exists():
-        console.print("[yellow]No Parquet data found.[/yellow]")
-        return
-
-    stats = manager.get_storage_stats()
-    size_mb = stats.total_size_bytes / (1024 * 1024)
-
-    table = Table(title=f"Storage: {dataset}")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Parquet files", str(stats.total_files))
-    table.add_row("Total size", f"{size_mb:.2f} MB")
-    table.add_row("Partitions", str(len(stats.partitions)))
-    table.add_row("Processed files", str(len(manager.get_processed_files())))
-    console.print(table)
+# ---------------------------------------------------------------------------
+# ibge / variables / ui
+# ---------------------------------------------------------------------------
 
 
 @app.command()
@@ -345,19 +640,14 @@ def ibge(
         help="Output path for IBGE Parquet file",
     ),
 ) -> None:
-    """Generate IBGE municipalities Parquet from bundled CSV."""
+    """Generate the IBGE municipalities Parquet from the bundled CSV."""
     from era5_etl.utils.ibge_loader import generate_ibge_parquet
-
-    console.print("\n[bold blue]Generating IBGE Parquet[/bold blue]\n")
 
     try:
         result_path = generate_ibge_parquet(output)
         console.print(f"[green]Generated: {result_path}[/green]")
-    except FileNotFoundError as e:
-        console.print(f"[red]{e}[/red]")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"\n[bold red]Failed:[/bold red] {e}")
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
         sys.exit(1)
 
 
@@ -367,24 +657,20 @@ def variables(
         None, "--dataset", help="Filter by dataset (era5 or era5-land)"
     ),
 ) -> None:
-    """List available ERA5/ERA5-Land variables for download."""
+    """List available ERA5 / ERA5-Land variables."""
     from era5_etl.utils.variables import list_variables
 
-    console.print("\n[bold blue]Available ERA5 Variables[/bold blue]\n")
-
     df = list_variables(dataset)
-
     if len(df) == 0:
-        console.print("[yellow]No variables found for the specified dataset.[/yellow]")
+        console.print("[yellow]No variables found.[/yellow]")
         return
 
     table = Table(title=f"Variables{f' ({dataset})' if dataset else ' (all datasets)'}")
-    table.add_column("API Name", style="cyan", no_wrap=True)
-    table.add_column("Full Name", style="green")
+    table.add_column("API name", style="cyan", no_wrap=True)
+    table.add_column("Full name", style="green")
     table.add_column("Description")
     table.add_column("Unit", style="yellow", no_wrap=True)
     table.add_column("Datasets", style="magenta", no_wrap=True)
-
     for row in df.iter_rows(named=True):
         table.add_row(
             row["api_name"],
@@ -393,9 +679,54 @@ def variables(
             row["unit"],
             row["datasets"],
         )
-
     console.print(table)
     console.print(f"\n[green]Total: {len(df)} variables[/green]")
+
+
+@app.command()
+def ui(
+    data_dir: Path = typer.Option(
+        Path("./data"),
+        "--data-dir",
+        "-d",
+        help="Base directory for data storage",
+    ),
+    port: int = typer.Option(8788, "--port", help="HTTP port"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser"),
+) -> None:
+    """Launch the local web UI (FastAPI + React)."""
+    try:
+        import uvicorn  # type: ignore[import-untyped]
+
+        from era5_etl.web.server import create_app
+    except ImportError as exc:
+        console.print(f"[red]Web UI dependencies not installed: {exc}[/red]")
+        console.print(
+            "Install web extras: [cyan]pip install 'era5-etl[web]'[/cyan] or "
+            "the full requirements."
+        )
+        sys.exit(1)
+
+    if not no_browser:
+        import threading
+        import webbrowser
+
+        def _open():
+            import time as _t
+
+            _t.sleep(1.0)
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+
+        threading.Thread(target=_open, daemon=True).start()
+
+    app_instance = create_app(data_dir)
+    console.print(f"[green]Starting ERA5-ETL UI on http://127.0.0.1:{port}/[/green]")
+    uvicorn.run(app_instance, host="127.0.0.1", port=port, log_level="info")
+
+
+# Hide unused datetime import (used only by web in some flows). Keeping it here is harmless,
+# but ruff will complain if truly unused. We reference it lazily below.
+_ = datetime
 
 
 if __name__ == "__main__":

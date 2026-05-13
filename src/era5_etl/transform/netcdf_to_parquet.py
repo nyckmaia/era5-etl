@@ -9,12 +9,12 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-import pyarrow.parquet as pq
 import xarray as xr
 
 from era5_etl.config import StorageConfig, TransformConfig
-from era5_etl.constants import KELVIN_TO_CELSIUS, VAR_NAME_MAP
+from era5_etl.constants import KELVIN_TO_CELSIUS
 from era5_etl.exceptions import ProcessingError
+from era5_etl.utils.variables import get_var_name_map
 
 
 def _convert_single_file(
@@ -191,11 +191,12 @@ class NetCDFToParquetConverter:
         return ds
 
     def _rename_variables(self, ds: xr.Dataset) -> xr.Dataset:
-        """Rename variables to friendly names."""
+        """Rename variables from NetCDF short names to friendly names."""
+        var_map = get_var_name_map()
         rename_map = {}
         for var in ds.data_vars:
-            if str(var) in VAR_NAME_MAP:
-                rename_map[var] = VAR_NAME_MAP[str(var)]
+            if str(var) in var_map:
+                rename_map[var] = var_map[str(var)]
         if rename_map:
             ds = ds.rename(rename_map)
             self.logger.debug(f"Renamed variables: {rename_map}")
@@ -299,27 +300,23 @@ class NetCDFToParquetConverter:
     def _write_partitioned_parquet(self, df: pl.DataFrame) -> None:
         """Write DataFrame to Hive-partitioned Parquet files.
 
-        For the 'date' partition column, the value is cast to string (YYYY-MM-DD)
-        to produce directories like date=2020-01-15.
+        Delegates to :func:`merge_into_partitioned_parquet`, which merges
+        against any existing partition data on ``(latitude, longitude,
+        hour_utc)``. Two downloads covering the same grid cell at the same
+        date+hour collapse into one row, so overlapping IBGE regions
+        (e.g., SP + RJ) never produce duplicates.
+
+        Falls back to a single ``data.parquet`` file when ``date`` is absent
+        from the input (legacy non-partitioned mode).
         """
-        valid_partition_cols = [
-            c for c in self.storage_config.partition_cols if c in df.columns
-        ]
+        if "date" in df.columns and "date" in self.storage_config.partition_cols:
+            from era5_etl.storage.parquet_manager import merge_into_partitioned_parquet
 
-        if valid_partition_cols:
-            write_df = df
-            # Cast date column to string for Hive directory naming
-            if "date" in valid_partition_cols and "date" in write_df.columns:
-                write_df = write_df.with_columns(
-                    pl.col("date").cast(pl.Utf8).alias("date")
-                )
-
-            table = write_df.to_arrow()
-            pq.write_to_dataset(
-                table,
-                root_path=str(self.output_dir),
-                partition_cols=valid_partition_cols,
-                existing_data_behavior="overwrite_or_ignore",
+            merge_into_partitioned_parquet(
+                df,
+                self.output_dir,
+                compression=self.storage_config.parquet_compression,
+                logger=self.logger,
             )
         else:
             output_file = self.output_dir / "data.parquet"

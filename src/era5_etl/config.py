@@ -1,17 +1,39 @@
-"""Configuration management for ERA5-ETL using Pydantic."""
+"""Configuration management for ERA5-ETL using Pydantic.
+
+All on-disk path decisions go through :mod:`era5_etl.storage.paths`; dataset
+identity goes through :class:`era5_etl.datasets.DatasetRegistry`. The factory
+:meth:`PipelineConfig.create` is the recommended entry point for assembling a
+full configuration from a single ``base_dir`` and a handful of user options.
+"""
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from era5_etl.constants import (
-    BRAZIL_BBOX,
-    DATASET_ERA5_LAND,
-    DATASET_ERA5_SINGLE_LEVEL,
-    DEFAULT_VARIABLES,
-    HOURS_ALL,
+from era5_etl.constants import BRAZIL_BBOX, HOURS_ALL
+from era5_etl.datasets import DatasetRegistry
+from era5_etl.storage.paths import (
+    resolve_base_dir,
+    resolve_dataset_dir,
+    resolve_duckdb_path,
+    resolve_netcdf_temp_dir,
 )
+
+
+def _default_variables_for(dataset: str) -> list[str]:
+    """Return the default variable list for a registered dataset."""
+    try:
+        return list(DatasetRegistry.get(dataset).default_variables)
+    except KeyError:
+        # During config construction we may not have a registered name yet
+        # (e.g. when a test instantiates DownloadConfig with a custom dataset
+        # for validation paths). Fall back to a small, sane default.
+        from era5_etl.constants import DEFAULT_VARIABLES
+
+        return list(DEFAULT_VARIABLES)
 
 
 class DownloadConfig(BaseModel):
@@ -21,13 +43,13 @@ class DownloadConfig(BaseModel):
         default=Path("./data/era5/netcdf"),
         description="Directory to save downloaded NetCDF files",
     )
-    dataset: Literal["era5", "era5-land"] = Field(
+    dataset: str = Field(
         default="era5-land",
-        description="Dataset to download (era5 or era5-land)",
+        description="Dataset name. Must be a registered DatasetConfig name (era5, era5-land).",
     )
     variables: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_VARIABLES),
-        description="Variables to download",
+        default_factory=lambda: _default_variables_for("era5-land"),
+        description="Variables to download (CDS API names)",
     )
     start_date: str = Field(
         default="2020-01-01",
@@ -67,13 +89,21 @@ class DownloadConfig(BaseModel):
     max_request_bytes: int = Field(
         default=500 * 1024 * 1024,
         ge=1024 * 1024,
-        description="Maximum estimated request size in bytes before auto-splitting geographic area",
+        description="Maximum estimated request size in bytes before auto-splitting",
     )
 
     @field_validator("output_dir")
     @classmethod
     def validate_output_dir(cls, v: Path) -> Path:
         return v.resolve()
+
+    @field_validator("dataset")
+    @classmethod
+    def validate_dataset(cls, v: str) -> str:
+        if v not in DatasetRegistry.names():
+            valid = ", ".join(DatasetRegistry.names())
+            raise ValueError(f"Unknown dataset '{v}'. Available: {valid}")
+        return v
 
     @field_validator("area")
     @classmethod
@@ -88,18 +118,12 @@ class DownloadConfig(BaseModel):
         return v
 
     def get_cds_dataset_name(self) -> str:
-        """Get the CDS API dataset name."""
-        if self.dataset == "era5":
-            return DATASET_ERA5_SINGLE_LEVEL
-        return DATASET_ERA5_LAND
+        """Return the CDS API dataset identifier for this download."""
+        return DatasetRegistry.get(self.dataset).CDS_DATASET_ID
 
 
 class TransformConfig(BaseModel):
-    """Configuration for NetCDF-to-Parquet transformation.
-
-    Handles the direct NetCDF -> Parquet pipeline, replacing the old
-    ProcessingConfig + StorageConfig split.
-    """
+    """Configuration for NetCDF-to-Parquet transformation."""
 
     convert_kelvin_to_celsius: bool = Field(
         default=True,
@@ -117,7 +141,11 @@ class TransformConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    """Configuration for Parquet storage."""
+    """Configuration for Parquet storage.
+
+    ``database_dir`` is the user-facing base directory. The actual on-disk
+    layout under it is computed by :mod:`era5_etl.storage.paths`.
+    """
 
     database_dir: Path = Field(description="Base directory for data storage")
     parquet_compression: Literal["snappy", "zstd", "gzip"] = Field(
@@ -163,7 +191,7 @@ class PipelineConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     dataset_name: str = Field(
         default="era5-land",
-        description="Dataset name (era5, era5-land). Used to organize output directories.",
+        description="Dataset name (era5, era5-land). Drives output directory layout.",
     )
     keep_temp_files: bool = Field(
         default=False,
@@ -172,11 +200,19 @@ class PipelineConfig(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    @field_validator("dataset_name")
+    @classmethod
+    def validate_dataset_name(cls, v: str) -> str:
+        if v not in DatasetRegistry.names():
+            valid = ", ".join(DatasetRegistry.names())
+            raise ValueError(f"Unknown dataset '{v}'. Available: {valid}")
+        return v
+
     @classmethod
     def create(
         cls,
         base_dir: str | Path,
-        dataset: Literal["era5", "era5-land"] = "era5-land",
+        dataset: str = "era5-land",
         start_date: str = "2020-01-01",
         end_date: str | None = None,
         variables: list[str] | None = None,
@@ -186,63 +222,53 @@ class PipelineConfig(BaseModel):
         keep_temp_files: bool = False,
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
     ) -> "PipelineConfig":
-        """Factory method to create PipelineConfig with automatic path configuration.
+        """Assemble a full ``PipelineConfig`` from a ``base_dir`` and options.
 
-        Creates a standardized directory structure:
-            base_dir/
-            +-- {dataset}/
-            |   +-- netcdf/    (downloaded files - temporary)
-            +-- parquet/
-            |   +-- {dataset}/ (output Parquet files, Hive-partitioned)
+        On-disk layout::
 
-        Args:
-            base_dir: Base directory for all data storage
-            dataset: ERA5 dataset name (era5, era5-land)
-            start_date: Start date in YYYY-MM-DD format
-            end_date: End date in YYYY-MM-DD format (None=today)
-            variables: List of ERA5 variables to download
-            area: Geographic bounds [North, West, South, East]
-            hours: List of hours to download
-            override: Whether to override existing files
-            keep_temp_files: Keep NetCDF files after conversion
-            compression: Parquet compression algorithm
+            <base_dir>/
+              climate_data_store_db/
+                <dataset>/                    -> Parquet partitions + manifest + DuckDB
+              _tmp_netcdf/
+                <dataset>/                    -> raw NetCDF downloads (temporary)
         """
-        base_dir = Path(base_dir)
-        dataset_dir_name = dataset.replace("-", "")  # era5land, era5
+        base = resolve_base_dir(base_dir)
+        netcdf_dir = resolve_netcdf_temp_dir(base, dataset)
+        db_path = resolve_duckdb_path(base, dataset)
+
+        # Default variables come from the dataset's own YAML if none provided.
+        if variables is None:
+            variables = list(DatasetRegistry.get(dataset).default_variables)
 
         return cls(
             download=DownloadConfig(
-                output_dir=base_dir / dataset_dir_name / "netcdf",
+                output_dir=netcdf_dir,
                 dataset=dataset,
-                variables=variables or list(DEFAULT_VARIABLES),
+                variables=variables,
                 start_date=start_date,
                 end_date=end_date,
-                area=area or [float(x) for x in BRAZIL_BBOX],
-                hours=hours or list(HOURS_ALL),
+                area=area if area is not None else [float(x) for x in BRAZIL_BBOX],
+                hours=hours if hours is not None else list(HOURS_ALL),
                 override=override,
             ),
             transform=TransformConfig(override=override),
             storage=StorageConfig(
-                database_dir=base_dir,
+                database_dir=base,
                 parquet_compression=compression,
             ),
-            database=DatabaseConfig(
-                db_path=base_dir / f"{dataset_dir_name}.duckdb",
-            ),
+            database=DatabaseConfig(db_path=db_path),
             dataset_name=dataset,
             keep_temp_files=keep_temp_files,
         )
 
     def get_parquet_dir(self) -> Path:
-        """Get the path to the Parquet output directory for this dataset."""
-        dataset_dir_name = self.dataset_name.replace("-", "")
-        return self.storage.database_dir / "parquet" / dataset_dir_name
+        """Per-dataset Parquet output directory."""
+        return resolve_dataset_dir(self.storage.database_dir, self.dataset_name)
 
     def get_netcdf_dir(self) -> Path:
-        """Get the path to the NetCDF input directory."""
+        """Temporary NetCDF directory for this dataset (matches ``download.output_dir``)."""
         return self.download.output_dir
 
     def get_database_path(self) -> Path:
-        """Get the path to the DuckDB database file."""
-        dataset_dir_name = self.dataset_name.replace("-", "")
-        return self.storage.database_dir / f"{dataset_dir_name}.duckdb"
+        """DuckDB file path for this dataset."""
+        return resolve_duckdb_path(self.storage.database_dir, self.dataset_name)

@@ -1,8 +1,15 @@
 """ERA5 variable definitions loader.
 
-Loads variable metadata from the bundled YAML configuration file and provides
-filtering by dataset. Also exposes float precision settings from the same YAML.
+This module delegates to :class:`era5_etl.datasets.DatasetRegistry` for the
+authoritative variable metadata. Each dataset (``era5``, ``era5-land``) keeps
+its own ``variables.yaml`` next to its ``DatasetConfig`` subclass.
+
+The float-precision setting still lives in the legacy
+``_data/era5_variables.yaml`` (when present) so users who pinned a custom
+precision setting don't lose it; otherwise sensible defaults are returned.
 """
+
+from __future__ import annotations
 
 import logging
 from functools import lru_cache
@@ -12,18 +19,14 @@ from typing import Any
 import polars as pl
 import yaml
 
+from era5_etl.datasets import DatasetRegistry
+
 logger = logging.getLogger(__name__)
 
+DEFAULT_FLOAT_PRECISION = {"enabled": True, "decimal_places": 4}
 
-def _get_variables_yaml_path() -> Path:
-    """Get path to the bundled era5_variables.yaml file.
 
-    Returns:
-        Path to the YAML file.
-
-    Raises:
-        FileNotFoundError: If the YAML file is not found.
-    """
+def _legacy_yaml_path() -> Path | None:
     try:
         from importlib.resources import files
 
@@ -36,32 +39,34 @@ def _get_variables_yaml_path() -> Path:
 
     package_dir = Path(__file__).parent.parent
     fallback = package_dir / "_data" / "era5_variables.yaml"
-    if fallback.exists():
-        return fallback
-
-    raise FileNotFoundError(
-        f"era5_variables.yaml not found. Expected at: {fallback}"
-    )
+    return fallback if fallback.exists() else None
 
 
 @lru_cache(maxsize=1)
-def _load_yaml_config() -> dict[str, Any]:
-    """Load the full YAML config (variables + float_precision)."""
-    yaml_path = _get_variables_yaml_path()
-    logger.debug(f"Loading variables config from {yaml_path}")
-    with open(yaml_path, encoding="utf-8") as f:
-        data: dict[str, Any] = yaml.safe_load(f)
-    return data
+def _legacy_yaml_data() -> dict[str, Any]:
+    """Read the legacy YAML for float-precision config only."""
+    path = _legacy_yaml_path()
+    if path is None:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data: dict[str, Any] = yaml.safe_load(f) or {}
+        return data
+    except OSError as exc:
+        logger.warning("Failed to read legacy variables YAML %s: %s", path, exc)
+        return {}
 
 
 def get_float_precision_config() -> dict[str, Any]:
-    """Get the float precision configuration from the YAML.
+    """Return the float-precision configuration.
 
-    Returns:
-        Dict with keys: 'enabled' (bool), 'decimal_places' (int).
+    Reads ``float_precision`` from the legacy YAML if present; otherwise
+    returns the documented defaults (enabled, 4 decimal places).
     """
-    config = _load_yaml_config()
-    return config.get("float_precision", {"enabled": True, "decimal_places": 4})
+    cfg = _legacy_yaml_data().get("float_precision")
+    if isinstance(cfg, dict):
+        return cfg
+    return dict(DEFAULT_FLOAT_PRECISION)
 
 
 def list_variables(dataset: str | None = None) -> pl.DataFrame:
@@ -69,59 +74,76 @@ def list_variables(dataset: str | None = None) -> pl.DataFrame:
 
     Args:
         dataset: Filter by dataset name ('era5' or 'era5-land').
-                 If None, returns all variables.
+                 If None, returns all variables across all datasets, with the
+                 ``datasets`` column reflecting which datasets each variable
+                 belongs to (joined with ", ").
 
     Returns:
         DataFrame with columns: api_name, short_name, friendly_name,
         full_name, description, unit, datasets.
     """
-    config = _load_yaml_config()
-    variables: list[dict[str, Any]] = config.get("variables", [])
+    rows: list[dict[str, Any]] = []
 
-    if dataset:
-        variables = [v for v in variables if dataset in v.get("datasets", [])]
+    if dataset is not None:
+        configs = (DatasetRegistry.get(dataset),)
+    else:
+        configs = DatasetRegistry.all()
 
-    rows = []
-    for v in variables:
-        rows.append({
-            "api_name": v["api_name"],
-            "short_name": v.get("short_name", ""),
-            "friendly_name": v.get("friendly_name", ""),
-            "full_name": v.get("full_name", ""),
-            "description": v.get("description", ""),
-            "unit": v.get("unit", ""),
-            "datasets": ", ".join(v.get("datasets", [])),
-        })
+    # When listing all datasets we want one row per api_name with merged
+    # provenance, so we walk by api_name -> set(datasets).
+    if dataset is None:
+        merged: dict[str, dict[str, Any]] = {}
+        for cfg in configs:
+            for var in cfg.variables:
+                entry = merged.setdefault(
+                    var.api_name,
+                    {
+                        "api_name": var.api_name,
+                        "short_name": var.short_name,
+                        "friendly_name": var.friendly_name,
+                        "full_name": var.full_name,
+                        "description": var.description,
+                        "unit": var.unit,
+                        "datasets": set(),
+                    },
+                )
+                entry["datasets"].add(cfg.NAME)
+        for entry in merged.values():
+            entry["datasets"] = ", ".join(sorted(entry["datasets"]))
+            rows.append(entry)
+    else:
+        cfg = configs[0]
+        for var in cfg.variables:
+            rows.append(
+                {
+                    "api_name": var.api_name,
+                    "short_name": var.short_name,
+                    "friendly_name": var.friendly_name,
+                    "full_name": var.full_name,
+                    "description": var.description,
+                    "unit": var.unit,
+                    "datasets": cfg.NAME,
+                }
+            )
 
     return pl.DataFrame(rows)
 
 
 def get_default_variables(dataset: str = "era5-land") -> list[str]:
-    """Get the list of API variable names available for a dataset.
+    """Return the API variable names that make up the default selection for ``dataset``."""
+    return list(DatasetRegistry.get(dataset).default_variables)
+
+
+def get_var_name_map(dataset: str | None = None) -> dict[str, str]:
+    """Return the NetCDF short_name -> friendly_name map.
 
     Args:
-        dataset: Dataset name ('era5' or 'era5-land').
-
-    Returns:
-        List of API variable name strings.
+        dataset: Restrict to one dataset, or merge across all datasets if None.
     """
-    config = _load_yaml_config()
-    variables: list[dict[str, Any]] = config.get("variables", [])
-    return [v["api_name"] for v in variables if dataset in v.get("datasets", [])]
+    if dataset is not None:
+        return dict(DatasetRegistry.get(dataset).var_name_map)
 
-
-def get_var_name_map() -> dict[str, str]:
-    """Get mapping from NetCDF short_name to friendly_name.
-
-    This replaces the VAR_NAME_MAP constant in constants.py.
-
-    Returns:
-        Dict mapping short variable names to friendly names.
-    """
-    config = _load_yaml_config()
-    variables: list[dict[str, Any]] = config.get("variables", [])
-    return {
-        v["short_name"]: v["friendly_name"]
-        for v in variables
-        if v.get("short_name") and v.get("friendly_name")
-    }
+    merged: dict[str, str] = {}
+    for cfg in DatasetRegistry.all():
+        merged.update(cfg.var_name_map)
+    return merged
