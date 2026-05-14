@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -87,7 +87,13 @@ class PipelineRunIn(BaseModel):
     end_date: str | None = None
     area: list[float] = Field(min_length=4, max_length=4)
     hours: list[str]
-    apply_diff: bool = True
+    apply_diff: bool = Field(
+        default=True,
+        description=(
+            "Skip already-covered cells via the coverage index (smart diff, v0.6.0+). "
+            "Set False to plan the full request without subtraction."
+        ),
+    )
 
 
 class PipelineRunOut(BaseModel):
@@ -101,7 +107,7 @@ class DiffPreviewIn(BaseModel):
     area: list[float] = Field(min_length=4, max_length=4)
     date_from: str
     date_to: str
-    hours: list[int] = Field(default_factory=list)
+    hours: list[Annotated[int, Field(ge=0, le=23)]] = Field(default_factory=list)
     variables: list[str]
 
 

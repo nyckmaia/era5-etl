@@ -473,12 +473,18 @@ def _date_range(start: str, end: str | None) -> list[date_cls]:
     return [s + timedelta(days=i) for i in range(days + 1)]
 
 
-def _build_request_cells(
+def build_request_cells(
     config: DownloadConfig,
     resolution: float,
     snapped_area: list[float],
 ) -> pl.DataFrame:
-    """Expand ``config`` into a (lat, lon, date, variable, requested_mask) DF."""
+    """Expand ``config`` into a (lat, lon, date, variable, requested_mask) DF.
+
+    Public API consumed by the planner itself and by ``/api/pipeline/diff-preview``.
+    Output schema: ``latitude (Float32), longitude (Float32), date (Date),
+    variable (str), requested_mask (UInt32)`` — must stay stable since the
+    coverage-index ``diff()`` JOIN relies on the dtypes matching exactly.
+    """
     n, w, s, e = snapped_area
     lats = _grid_axis(s, n, resolution)
     lons = _grid_axis(w, e, resolution)
@@ -619,7 +625,7 @@ def plan_with_diff(
     resolution = DatasetRegistry.get(config.dataset).GRID_RESOLUTION_DEG
     snapped_area = snap_area_to_grid(list(config.area), resolution)
 
-    cells_df = _build_request_cells(config, resolution, snapped_area)
+    cells_df = build_request_cells(config, resolution, snapped_area)
     if cells_df.is_empty():
         return []
 

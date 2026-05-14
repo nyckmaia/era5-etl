@@ -392,15 +392,18 @@ def test_diff_preview_no_coverage(client: TestClient):
 
 
 def test_run_endpoint_accepts_apply_diff(client: TestClient):
-    """POST with apply_diff=False starts a run; pipeline construction is mocked."""
+    """POST with apply_diff=False starts a run AND the value reaches the pipeline."""
+
+    captured: dict = {}
 
     class _DummyCtx:
         def set_progress_callback(self, cb):  # noqa: ARG002
             return None
 
     class _DummyPipe:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
-            self.kwargs = kwargs
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
 
         def run(self):
             return _DummyCtx()
@@ -421,3 +424,50 @@ def test_run_endpoint_accepts_apply_diff(client: TestClient):
     assert payload["dataset"] == "era5-land"
     assert payload["status"] in {"pending", "running", "completed"}
     assert "run_id" in payload
+    assert captured.get("kwargs", {}).get("apply_diff") is False, (
+        f"apply_diff=False was not forwarded to ERA5Pipeline; got kwargs={captured.get('kwargs')}"
+    )
+
+
+def test_run_endpoint_apply_diff_defaults_true(client: TestClient):
+    """When apply_diff is omitted from body, the pipeline receives True (v0.6.0 default)."""
+
+    captured: dict = {}
+
+    class _DummyCtx:
+        def set_progress_callback(self, cb):  # noqa: ARG002
+            return None
+
+    class _DummyPipe:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def run(self):
+            return _DummyCtx()
+
+    body = {
+        "dataset": "era5-land",
+        "variables": ["2m_temperature"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-01",
+        "area": [-10.0, -50.0, -20.0, -40.0],
+        "hours": ["00:00"],
+    }
+    with patch("era5_etl.pipeline.era5_pipeline.ERA5Pipeline", _DummyPipe):
+        r = client.post("/api/pipeline/run", json=body)
+    assert r.status_code == 200, r.text
+    assert captured.get("kwargs", {}).get("apply_diff") is True
+
+
+def test_diff_preview_rejects_invalid_hours(client: TestClient):
+    """DiffPreviewIn.hours must be 0..23; out-of-range value yields 422."""
+    body = {
+        "dataset": "era5-land",
+        "area": [-10.0, -50.0, -20.0, -40.0],
+        "date_from": "2024-01-01",
+        "date_to": "2024-01-01",
+        "hours": [99],
+        "variables": ["2m_temperature"],
+    }
+    r = client.post("/api/pipeline/diff-preview", json=body)
+    assert r.status_code == 422, r.text

@@ -153,7 +153,7 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
     from era5_etl.config import DownloadConfig
     from era5_etl.datasets import DatasetRegistry as _DR
     from era5_etl.download.grid import snap_area_to_grid
-    from era5_etl.download.request_planner import _build_request_cells
+    from era5_etl.download.request_planner import build_request_cells
     from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
     from era5_etl.storage.paths import resolve_dataset_dir
 
@@ -172,7 +172,7 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
 
     resolution = _DR.get(cfg.dataset).GRID_RESOLUTION_DEG
     snapped = snap_area_to_grid(list(cfg.area), resolution)
-    cells_df = _build_request_cells(cfg, resolution, snapped)
+    cells_df = build_request_cells(cfg, resolution, snapped)
     requested = cells_df.height
 
     base_dir: Path = request.app.state.data_dir
