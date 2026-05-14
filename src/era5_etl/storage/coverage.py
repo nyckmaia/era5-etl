@@ -81,7 +81,6 @@ def _ddl() -> str:
         key   VARCHAR PRIMARY KEY,
         value VARCHAR
     );
-    INSERT OR IGNORE INTO coverage_meta VALUES ('schema_version', '1');
     """
 
 
@@ -122,7 +121,7 @@ class CoverageIndex:
 
     >>> with CoverageIndex("era5-land", base_dir) as cov:
     ...     cov.upsert_from_dataframe(df)
-    ...     cov.query_grid_points(...)
+    ...     cov.query_grid_points()
 
     A single connection is held per instance. DuckDB serializes per-
     connection access, so reusing one ``CoverageIndex`` from multiple
@@ -170,6 +169,10 @@ class CoverageIndex:
         self._dataset_dir.mkdir(parents=True, exist_ok=True)
         self._conn = duckdb.connect(str(self._db_path))
         self._conn.execute(_ddl())
+        self._conn.execute(
+            "INSERT OR IGNORE INTO coverage_meta VALUES (?, ?)",
+            ["schema_version", COVERAGE_SCHEMA_VERSION],
+        )
         return self._conn
 
     # ---- writes ------------------------------------------------------
@@ -205,63 +208,69 @@ class CoverageIndex:
             df = df.with_columns(pl.col("date").cast(pl.Date))
 
         total = 0
-        for var in var_cols:
-            # Project to a staging frame with one row per (lat, lon, date, hour) for this var,
-            # excluding nulls. Then aggregate the hours_mask in DuckDB SQL (set-based).
-            staging = df.select(["latitude", "longitude", "date", "hour_utc", var]).filter(
-                pl.col(var).is_not_null()
-            )
-            if staging.is_empty():
-                continue
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            for var in var_cols:
+                # Project to a staging frame with one row per (lat, lon, date, hour) for this var,
+                # excluding nulls. Then aggregate the hours_mask in DuckDB SQL (set-based).
+                staging = df.select(["latitude", "longitude", "date", "hour_utc", var]).filter(
+                    pl.col(var).is_not_null()
+                )
+                if staging.is_empty():
+                    continue
 
-            arrow_tbl = staging.to_arrow()
-            conn.register("coverage_staging", arrow_tbl)
-            try:
-                # Aggregate in DuckDB: OR-fold (1 << hour_utc), one row per cell+date,
-                # then upsert. We materialize the aggregated row count first so we can
-                # report how many cell+date+variable rows were touched (DuckDB has no
-                # standard ROW_COUNT() across statements, and ON CONFLICT updates do
-                # not show up in `RETURNING *` in 1.4.x reliably).
-                affected_row = conn.execute(
-                    """
-                    WITH agg AS (
+                arrow_tbl = staging.to_arrow()
+                conn.register("coverage_staging", arrow_tbl)
+                try:
+                    # Aggregate in DuckDB: OR-fold (1 << hour_utc), one row per cell+date,
+                    # then upsert. We materialize the aggregated row count first so we can
+                    # report how many cell+date+variable rows were touched (DuckDB has no
+                    # standard ROW_COUNT() across statements, and ON CONFLICT updates do
+                    # not show up in `RETURNING *` in 1.4.x reliably).
+                    affected_row = conn.execute(
+                        """
+                        WITH agg AS (
+                            SELECT
+                                latitude,
+                                longitude,
+                                date,
+                                CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER))
+                                     AS UINTEGER) AS hours_mask
+                            FROM coverage_staging
+                            WHERE hour_utc BETWEEN 0 AND 23
+                            GROUP BY latitude, longitude, date
+                        )
+                        SELECT COUNT(*) FROM agg
+                        """
+                    ).fetchone()
+                    affected = int(affected_row[0]) if affected_row else 0
+
+                    conn.execute(
+                        """
+                        INSERT INTO coverage (latitude, longitude, date, variable, hours_mask)
                         SELECT
                             latitude,
                             longitude,
                             date,
-                            CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER))
-                                 AS UINTEGER) AS hours_mask
+                            ? AS variable,
+                            CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER)) AS UINTEGER)
+                                AS hours_mask
                         FROM coverage_staging
                         WHERE hour_utc BETWEEN 0 AND 23
                         GROUP BY latitude, longitude, date
+                        ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
+                        SET hours_mask  = coverage.hours_mask | EXCLUDED.hours_mask,
+                            ingested_at = now();
+                        """,
+                        [var],
                     )
-                    SELECT COUNT(*) FROM agg
-                    """
-                ).fetchone()
-                affected = int(affected_row[0]) if affected_row else 0
-
-                conn.execute(
-                    """
-                    INSERT INTO coverage (latitude, longitude, date, variable, hours_mask)
-                    SELECT
-                        latitude,
-                        longitude,
-                        date,
-                        ? AS variable,
-                        CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER)) AS UINTEGER)
-                            AS hours_mask
-                    FROM coverage_staging
-                    WHERE hour_utc BETWEEN 0 AND 23
-                    GROUP BY latitude, longitude, date
-                    ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
-                    SET hours_mask  = coverage.hours_mask | EXCLUDED.hours_mask,
-                        ingested_at = now();
-                    """,
-                    [var],
-                )
-                total += affected
-            finally:
-                conn.unregister("coverage_staging")
+                    total += affected
+                finally:
+                    conn.unregister("coverage_staging")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
         return total
 
@@ -384,36 +393,28 @@ class CoverageIndex:
         )
         conn.register("region_cells", inside_df.to_arrow())
         try:
-            # Date range + average variables per cell.
+            # Date range over polygon cells + average variables per polygon cell.
             row = conn.execute(
                 """
-                SELECT MIN(c.date)                                AS min_date,
-                       MAX(c.date)                                AS max_date,
-                       COALESCE(AVG(per_cell_vars.n_vars), 0.0)   AS vars_avg
-                FROM coverage c
-                JOIN region_cells r USING (latitude, longitude)
-                LEFT JOIN (
+                WITH per_cell_vars AS (
                     SELECT latitude, longitude, COUNT(DISTINCT variable) AS n_vars
                     FROM coverage
                     GROUP BY latitude, longitude
-                ) per_cell_vars
-                  ON per_cell_vars.latitude  = c.latitude
-                 AND per_cell_vars.longitude = c.longitude
+                )
+                SELECT
+                    (SELECT MIN(c.date)
+                       FROM coverage c
+                       JOIN region_cells r USING (latitude, longitude))   AS min_date,
+                    (SELECT MAX(c.date)
+                       FROM coverage c
+                       JOIN region_cells r USING (latitude, longitude))   AS max_date,
+                    (SELECT COALESCE(AVG(p.n_vars), 0.0)
+                       FROM per_cell_vars p
+                       JOIN region_cells r USING (latitude, longitude))   AS vars_avg
                 """
             ).fetchone()
             min_date, max_date, vars_avg = row if row is not None else (None, None, 0.0)
-            # Recompute vars_avg cleanly over only the cells inside the polygon.
-            vars_avg_row = conn.execute(
-                """
-                SELECT AVG(n_vars) FROM (
-                    SELECT COUNT(DISTINCT variable) AS n_vars
-                    FROM coverage c
-                    JOIN region_cells r USING (latitude, longitude)
-                    GROUP BY c.latitude, c.longitude
-                )
-                """
-            ).fetchone()
-            vars_avg = float(vars_avg_row[0]) if vars_avg_row and vars_avg_row[0] is not None else 0.0
+            vars_avg = float(vars_avg) if vars_avg is not None else 0.0
 
             # Gap analysis: for each date with any coverage, count distinct
             # in-polygon cells that have at least one row.
@@ -553,7 +554,7 @@ def rebuild_from_parquet(
     base_dir: str | Path,
     *,
     progress: Any | None = None,
-    log: logging.Logger | None = None,
+    logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Rebuild ``_coverage.duckdb`` from every parquet file under the dataset.
 
@@ -564,7 +565,7 @@ def rebuild_from_parquet(
     provided, the function adds a per-file task and updates it. The function
     does **not** start/stop the Progress -- the caller controls its lifetime.
     """
-    log = log or logger
+    log = logger or logging.getLogger(__name__)
     parquet_dir = resolve_dataset_dir(base_dir, dataset)
     files = _list_partition_files(parquet_dir)
 
@@ -606,7 +607,7 @@ def ensure_coverage_index(
     dataset: str,
     base_dir: str | Path,
     *,
-    log: logging.Logger | None = None,
+    logger: logging.Logger | None = None,
 ) -> bool:
     """Rebuild the coverage index if it is missing or empty.
 
@@ -617,7 +618,7 @@ def ensure_coverage_index(
     and ``update`` flows: if the user has parquet data on disk but no
     coverage index, build it transparently before planning.
     """
-    log = log or logger
+    log = logger or logging.getLogger(__name__)
     parquet_dir = resolve_dataset_dir(base_dir, dataset)
     files = _list_partition_files(parquet_dir)
     if not files:
@@ -634,7 +635,7 @@ def ensure_coverage_index(
         dataset,
         len(files),
     )
-    rebuild_from_parquet(dataset, base_dir, log=log)
+    rebuild_from_parquet(dataset, base_dir, logger=log)
     return True
 
 

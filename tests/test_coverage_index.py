@@ -214,6 +214,53 @@ def test_upsert_with_null_values(tmp_path: Path) -> None:
         assert mask == _bits([0, 12])
 
 
+def test_upsert_rolls_back_on_failure(tmp_path: Path) -> None:
+    """A failure mid-loop must roll back any prior variables upserted in the
+    same call -- nothing partially committed.
+    """
+    df = _grid_df(
+        lats=[-22.5],
+        lons=[-43.5],
+        hours=[0, 12],
+        variables={"t2m": 295.0, "tp": 0.001},
+    )
+
+    class _FlakyConn:
+        """Proxy that delegates to a real DuckDB connection but raises on the
+        second ``INSERT INTO coverage`` to simulate a mid-loop failure.
+        """
+
+        def __init__(self, real):  # type: ignore[no-untyped-def]
+            self._real = real
+            self._insert_calls = 0
+
+        def execute(self, sql: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if sql.lstrip().startswith("INSERT INTO coverage"):
+                self._insert_calls += 1
+                if self._insert_calls == 2:
+                    raise RuntimeError("simulated mid-loop failure")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+            return getattr(self._real, name)
+
+    with CoverageIndex("era5-land", tmp_path) as cov:
+        # Force schema creation so the underlying connection exists, then
+        # wrap it with the flaky proxy.
+        cov.stats()
+        assert cov._conn is not None  # noqa: SLF001
+        real_conn = cov._conn  # noqa: SLF001
+        cov._conn = _FlakyConn(real_conn)  # type: ignore[assignment]  # noqa: SLF001
+        try:
+            with pytest.raises(RuntimeError, match="simulated mid-loop failure"):
+                cov.upsert_from_dataframe(df)
+        finally:
+            cov._conn = real_conn  # noqa: SLF001
+
+        # Rollback must have wiped the first variable's insert as well.
+        assert cov.stats()["total_rows"] == 0
+
+
 # ----------------------------------------------------------------------
 # 7-9. query_grid_points
 # ----------------------------------------------------------------------
@@ -384,9 +431,6 @@ def test_diff_partial_coverage(tmp_path: Path) -> None:
 def test_diff_unknown_cell(tmp_path: Path) -> None:
     """Cell not present in coverage -> missing_mask equals requested_mask."""
     with CoverageIndex("era5-land", tmp_path) as cov:
-        # Force schema creation even though we won't write to it.
-        cov.stats()
-
         request = pl.DataFrame({
             "latitude": [10.0],
             "longitude": [20.0],
@@ -406,15 +450,7 @@ def test_diff_unknown_cell(tmp_path: Path) -> None:
 
 def test_query_region_summary_basic(tmp_path: Path) -> None:
     """4 points forming a square, polygon contains them all -> n_points=4."""
-    # Place 4 points around (-22, -43).
-    df = _grid_df(
-        lats=[-22.5, -22.5, -21.5, -21.5],
-        lons=[-43.5, -42.5, -43.5, -42.5],
-        hours=[0, 12],
-        variables={"t2m": 1.0, "tp": 0.0},
-    )
-    # Each (lat, lon) gets its own row in df via the cartesian helper -- so
-    # actually using lats=[a, b] x lons=[c, d] gives 4 points; perfect.
+    # Place 4 points around (-22, -43). Cartesian product of 2 lats x 2 lons.
     df = _grid_df(
         lats=[-22.5, -21.5],
         lons=[-43.5, -42.5],
