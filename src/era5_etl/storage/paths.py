@@ -102,6 +102,19 @@ def resolve_netcdf_temp_dir(base_dir: str | Path, dataset: str) -> Path:
     return resolve_base_dir(base_dir) / NETCDF_TMP_DIRNAME / dataset
 
 
+def base_dir_from_netcdf_dir(netcdf_dir: str | Path) -> Path | None:
+    """Inverse of :func:`resolve_netcdf_temp_dir`.
+
+    Given a path of the form ``<base>/_tmp_netcdf/<dataset>/``, return
+    ``<base>``. Returns ``None`` if the layout doesn't match (caller
+    supplied a custom ``output_dir`` and should pass ``base_dir`` explicitly).
+    """
+    p = Path(netcdf_dir).resolve()
+    if p.parent.name != NETCDF_TMP_DIRNAME:
+        return None
+    return p.parent.parent
+
+
 def ensure_dataset_dirs(base_dir: str | Path, dataset: str) -> tuple[Path, Path]:
     """Create the per-dataset storage and NetCDF-temp directories if missing.
 

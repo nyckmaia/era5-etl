@@ -380,7 +380,9 @@ def download(
         "--apply-diff/--no-apply-diff",
         help=(
             "Subtract cells already present in the coverage index before "
-            "downloading (smart diff). Default: enabled."
+            "downloading (smart diff). Default: enabled (new in v0.6.0). "
+            "Pass --no-apply-diff to restore pre-v0.6.0 behavior of always "
+            "planning the full request."
         ),
     ),
 ) -> None:

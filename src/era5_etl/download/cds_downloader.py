@@ -118,18 +118,12 @@ class CDSDownloader:
     def _infer_base_dir(self) -> Path:
         """Best-effort recovery of the user-supplied base_dir from output_dir.
 
-        The standard layout is ``<base>/_tmp_netcdf/<dataset>``; we walk up
-        two parents. Falls back to ``output_dir`` if the layout doesn't
-        match (callers using a custom ``output_dir`` should pass
-        ``base_dir`` explicitly).
+        Delegates to :func:`paths.base_dir_from_netcdf_dir`; falls back to
+        ``output_dir`` if the layout doesn't match (callers using a custom
+        ``output_dir`` should pass ``base_dir`` explicitly).
         """
-        out = self.config.output_dir
-        try:
-            if out.parent.name == "_tmp_netcdf":
-                return out.parent.parent
-        except (AttributeError, OSError):
-            pass
-        return out
+        from era5_etl.storage.paths import base_dir_from_netcdf_dir
+        return base_dir_from_netcdf_dir(self.config.output_dir) or self.config.output_dir
 
     def download_chunks(self, chunks: list[RequestChunk]) -> list[Path]:
         """Download a pre-built list of chunks (used by the ``update`` command)."""
