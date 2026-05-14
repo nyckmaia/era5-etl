@@ -22,9 +22,15 @@ from __future__ import annotations
 
 import calendar
 import logging
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date as date_cls
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import numpy as np
+import polars as pl
 
 from era5_etl.config import DownloadConfig
 from era5_etl.datasets import DatasetRegistry
@@ -38,6 +44,7 @@ from era5_etl.download.size_estimator import (
 from era5_etl.exceptions import DownloadSizeError
 
 if TYPE_CHECKING:
+    from era5_etl.storage.coverage import CoverageIndex
     from era5_etl.storage.manifest import Manifest
 
 logger = logging.getLogger(__name__)
@@ -413,3 +420,381 @@ def plan_incremental_requests(
         len(manifest),
     )
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Cell-level smart-diff planning (uses CoverageIndex)
+# ---------------------------------------------------------------------------
+
+
+def _hours_to_mask(hours: list[str]) -> int:
+    """Convert ``["00:00", "12:00"]`` -> 24-bit UINTEGER mask."""
+    mask = 0
+    for h in hours:
+        # Accept "HH:00" or "HH" or "HH:MM"
+        hh = int(h.split(":")[0]) if ":" in h else int(h)
+        if 0 <= hh <= 23:
+            mask |= 1 << hh
+    return mask
+
+
+def _mask_to_hours(mask: int) -> list[str]:
+    """Inverse of :func:`_hours_to_mask`. Output is sorted, ``["HH:00"]``."""
+    return [f"{h:02d}:00" for h in range(24) if (mask >> h) & 1]
+
+
+def _grid_axis(low: float, high: float, resolution: float) -> np.ndarray:
+    """Return cell-center coordinates inside ``[low, high]`` at ``resolution`` step.
+
+    The bbox is assumed pre-snapped to the grid (so ``low`` and ``high`` are
+    multiples of ``resolution``); cell centers are at ``low + resolution/2``,
+    ``low + 3*resolution/2``, ... up to (but not exceeding) ``high``.
+    """
+    if high <= low:
+        return np.array([low + resolution / 2.0], dtype=float)
+    n_cells = int(round((high - low) / resolution))
+    if n_cells <= 0:
+        return np.array([low + resolution / 2.0], dtype=float)
+    centers = low + resolution / 2.0 + np.arange(n_cells) * resolution
+    return np.round(centers, 6)
+
+
+def _date_range(start: str, end: str | None) -> list[date_cls]:
+    """Inclusive list of dates between ``start`` and ``end`` (or today)."""
+    s = datetime.strptime(start, "%Y-%m-%d").date()
+    e = (
+        datetime.strptime(end, "%Y-%m-%d").date()
+        if end
+        else datetime.now().date()
+    )
+    if e < s:
+        return []
+    days = (e - s).days
+    return [s + timedelta(days=i) for i in range(days + 1)]
+
+
+def _build_request_cells(
+    config: DownloadConfig,
+    resolution: float,
+    snapped_area: list[float],
+) -> pl.DataFrame:
+    """Expand ``config`` into a (lat, lon, date, variable, requested_mask) DF."""
+    n, w, s, e = snapped_area
+    lats = _grid_axis(s, n, resolution)
+    lons = _grid_axis(w, e, resolution)
+    dates = _date_range(config.start_date, config.end_date)
+    variables = list(config.variables)
+    requested_mask = _hours_to_mask(list(config.hours))
+
+    if not lats.size or not lons.size or not dates or not variables:
+        return pl.DataFrame(
+            schema={
+                "latitude": pl.Float64,
+                "longitude": pl.Float64,
+                "date": pl.Date,
+                "variable": pl.Utf8,
+                "requested_mask": pl.UInt32,
+            }
+        )
+
+    # Cartesian product via numpy broadcasting.
+    n_lat, n_lon, n_date, n_var = len(lats), len(lons), len(dates), len(variables)
+    total = n_lat * n_lon * n_date * n_var
+
+    lat_arr = np.repeat(lats, n_lon * n_date * n_var).astype(float)
+    lon_arr = np.tile(np.repeat(lons, n_date * n_var), n_lat).astype(float)
+
+    # Build the date column as a Polars Date series directly (numpy object
+    # arrays of python ``date`` instances cannot be cast through
+    # ``pl.Series(..., dtype=pl.Date)`` reliably -- ComputeError 'cannot cast
+    # Object type'). Constructing from a Python list of dates works.
+    date_pattern = list(dates)  # length n_date
+    # Tile to length total using Python list ops (n_lat * n_lon * n_date * n_var).
+    # Layout: outer = n_lat*n_lon, then per-date repeated n_var times.
+    date_list: list[date_cls] = []
+    for d in date_pattern:
+        date_list.extend([d] * n_var)
+    date_full = date_list * (n_lat * n_lon)
+    var_full = list(variables) * (n_lat * n_lon * n_date)
+
+    return pl.DataFrame(
+        {
+            # CoverageIndex stores lat/lon as FLOAT (Float32). Match that type
+            # so the LEFT JOIN in CoverageIndex.diff() compares apples to
+            # apples -- a Float64/Float32 join would lose -49.95 to its
+            # -49.950001 Float32 representation and treat the cell as missing.
+            "latitude": pl.Series("latitude", lat_arr, dtype=pl.Float32),
+            "longitude": pl.Series("longitude", lon_arr, dtype=pl.Float32),
+            "date": pl.Series("date", date_full, dtype=pl.Date),
+            "variable": pl.Series("variable", var_full, dtype=pl.Utf8),
+            "requested_mask": pl.Series(
+                "requested_mask", [requested_mask] * total, dtype=pl.UInt32
+            ),
+        }
+    )
+
+
+def _connected_components(grid: np.ndarray) -> list[np.ndarray]:
+    """Return one boolean mask per 4-connected component of ``True`` cells.
+
+    ``grid`` is a 2D boolean array. Returned masks have the same shape and
+    are mutually disjoint; their OR equals ``grid``. 4-connectivity (N/S/E/W)
+    is enough for our use case -- diagonal-only neighbours stay separate,
+    which yields slightly more chunks but never misses cells.
+    """
+    if grid.size == 0 or not grid.any():
+        return []
+    visited = np.zeros_like(grid, dtype=bool)
+    rows, cols = grid.shape
+    components: list[np.ndarray] = []
+
+    for r0 in range(rows):
+        for c0 in range(cols):
+            if not grid[r0, c0] or visited[r0, c0]:
+                continue
+            comp = np.zeros_like(grid, dtype=bool)
+            queue: deque[tuple[int, int]] = deque()
+            queue.append((r0, c0))
+            visited[r0, c0] = True
+            while queue:
+                r, c = queue.popleft()
+                comp[r, c] = True
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] and not visited[nr, nc]:
+                        visited[nr, nc] = True
+                        queue.append((nr, nc))
+            components.append(comp)
+    return components
+
+
+def _bbox_from_cells(
+    cell_lats: np.ndarray,
+    cell_lons: np.ndarray,
+    resolution: float,
+) -> list[float]:
+    """Return ``[N, W, S, E]`` bounding box for a set of cell-center coords.
+
+    Each cell's footprint extends ``resolution/2`` from its center in every
+    direction; the returned bbox encloses every cell footprint.
+    """
+    half = resolution / 2.0
+    s = float(cell_lats.min()) - half
+    n = float(cell_lats.max()) + half
+    w = float(cell_lons.min()) - half
+    e = float(cell_lons.max()) + half
+    return [round(n, 6), round(w, 6), round(s, 6), round(e, 6)]
+
+
+def plan_with_diff(
+    config: DownloadConfig,
+    base_dir: str | Path,
+    coverage_index: CoverageIndex | None = None,
+) -> list[RequestChunk]:
+    """Plan chunks while subtracting cells already present in the coverage index.
+
+    Algorithm:
+
+    1. Snap the requested ``config.area`` to the dataset grid.
+    2. Build a per-(lat, lon, date, variable) DataFrame with the requested
+       hour bitmap.
+    3. Ask :meth:`CoverageIndex.diff` what's missing (``missing_mask > 0``).
+    4. Group missing cells by (year, month, variable). Within each group,
+       project the missing cells onto a 2D (lat, lon) grid and compute
+       4-connected components; one chunk per component, dates = union of
+       dates that have any missing cell in the component, hours = union of
+       missing-mask bits across the component restricted by the requested
+       mask.
+    5. Hand each seed slice to the existing :func:`_split_to_fit` cascade so
+       size limits still apply.
+
+    If the index is empty / non-existent, behaves identically to
+    :func:`plan_requests`. If the index already covers everything, returns
+    ``[]``.
+    """
+    # Local import avoids a circular import at module load.
+    from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
+    from era5_etl.storage.paths import resolve_dataset_dir
+
+    resolution = DatasetRegistry.get(config.dataset).GRID_RESOLUTION_DEG
+    snapped_area = snap_area_to_grid(list(config.area), resolution)
+
+    cells_df = _build_request_cells(config, resolution, snapped_area)
+    if cells_df.is_empty():
+        return []
+
+    # Short-circuit: no coverage DB yet -> behave like plan_requests.
+    db_path = resolve_dataset_dir(base_dir, config.dataset) / COVERAGE_DB_FILENAME
+    if coverage_index is None and not db_path.exists():
+        logger.info(
+            "plan_with_diff: no coverage index for %s; falling back to full plan_requests.",
+            config.dataset,
+        )
+        return plan_requests(config)
+
+    owns_cov = coverage_index is None
+    cov = coverage_index if coverage_index is not None else CoverageIndex(
+        config.dataset, base_dir
+    )
+    try:
+        # If the (just-opened or passed-in) index has zero rows, treat as no diff.
+        if cov.stats()["total_rows"] == 0:
+            logger.info(
+                "plan_with_diff: coverage index for %s is empty; "
+                "falling back to full plan_requests.",
+                config.dataset,
+            )
+            return plan_requests(config)
+        missing_df = cov.diff(cells_df)
+    finally:
+        if owns_cov:
+            cov.close()
+
+    if missing_df.is_empty():
+        logger.info("plan_with_diff: coverage already complete; nothing to download.")
+        return []
+
+    # Did diff change anything? If the missing mask equals the requested
+    # mask for every requested cell, nothing is covered -- fall back to the
+    # plain planner (saves regrouping overhead and yields identical chunks).
+    if (
+        missing_df.height == cells_df.height
+        and missing_df["missing_mask"].eq(missing_df["requested_mask"]).all()
+    ):
+        logger.info(
+            "plan_with_diff: zero overlap with coverage; using plan_requests output."
+        )
+        return plan_requests(config)
+
+    # Add (year, month) columns for grouping.
+    missing_df = missing_df.with_columns(
+        pl.col("date").dt.year().alias("year"),
+        pl.col("date").dt.month().alias("month"),
+    )
+
+    chunks: list[RequestChunk] = []
+    grouped = missing_df.group_by(["year", "month", "variable"], maintain_order=True)
+    for (year, month, variable), group in grouped:
+        chunks.extend(
+            _chunks_for_group(
+                year=int(year),
+                month=int(month),
+                variable=str(variable),
+                group=group,
+                config=config,
+                resolution=resolution,
+                snapped_area=snapped_area,
+            )
+        )
+
+    logger.info(
+        "plan_with_diff: %d chunk(s) for %s (after diff vs coverage index).",
+        len(chunks),
+        config.dataset,
+    )
+    return chunks
+
+
+def _chunks_for_group(
+    *,
+    year: int,
+    month: int,
+    variable: str,
+    group: pl.DataFrame,
+    config: DownloadConfig,
+    resolution: float,
+    snapped_area: list[float],
+) -> list[RequestChunk]:
+    """Build chunks for one (year, month, variable) slice of the missing-cells DF."""
+    # Build a (lat, lon) presence grid covering the snapped bbox.
+    n, w, s, e = snapped_area
+    lats = _grid_axis(s, n, resolution)
+    lons = _grid_axis(w, e, resolution)
+    if lats.size == 0 or lons.size == 0:
+        return []
+
+    # Map an arbitrary lat/lon back to its nearest grid-cell index.
+    # CoverageIndex stores Float32 so values come back as e.g. -49.950001;
+    # rounding to a key would miss. Instead, compute the offset from the
+    # bbox south/west edge and round to the nearest cell.
+    def _lat_idx(v: float) -> int:
+        idx = int(round((v - s - resolution / 2.0) / resolution))
+        return idx if 0 <= idx < lats.size else -1
+
+    def _lon_idx(v: float) -> int:
+        idx = int(round((v - w - resolution / 2.0) / resolution))
+        return idx if 0 <= idx < lons.size else -1
+
+    # Mark every (lat, lon) that has at least one missing cell in this group.
+    presence = np.zeros((lats.size, lons.size), dtype=bool)
+    cell_lats = group["latitude"].to_numpy()
+    cell_lons = group["longitude"].to_numpy()
+    for la, lo in zip(cell_lats, cell_lons):
+        i = _lat_idx(float(la))
+        j = _lon_idx(float(lo))
+        if i >= 0 and j >= 0:
+            presence[i, j] = True
+
+    components = _connected_components(presence)
+    if not components:
+        return []
+
+    # Pre-compute index columns on the group for fast filtering by component.
+    group_with_idx = group.with_columns(
+        pl.col("latitude").map_elements(
+            lambda v: _lat_idx(float(v)),
+            return_dtype=pl.Int64,
+        ).alias("_lat_idx"),
+        pl.col("longitude").map_elements(
+            lambda v: _lon_idx(float(v)),
+            return_dtype=pl.Int64,
+        ).alias("_lon_idx"),
+    )
+
+    out: list[RequestChunk] = []
+    for comp in components:
+        comp_lat_idx, comp_lon_idx = np.where(comp)
+        comp_lats = lats[comp_lat_idx]
+        comp_lons = lons[comp_lon_idx]
+        bbox = _bbox_from_cells(comp_lats, comp_lons, resolution)
+
+        # Cells in this component.
+        idx_pairs = set(zip(comp_lat_idx.tolist(), comp_lon_idx.tolist()))
+        # Filter group rows to this component.
+        mask = [
+            (int(li), int(lj)) in idx_pairs
+            for li, lj in zip(
+                group_with_idx["_lat_idx"].to_list(),
+                group_with_idx["_lon_idx"].to_list(),
+            )
+        ]
+        sub = group_with_idx.filter(pl.Series(mask))
+        if sub.is_empty():
+            continue
+
+        # Days = unique dates' day component within this (year, month).
+        days = sorted({d.day for d in sub["date"].to_list()})
+        # Hours = OR of missing_mask across the component, AND-ed with
+        # requested_mask (defensive: missing_mask is already a subset).
+        union_mask = 0
+        for m in sub["missing_mask"].to_list():
+            union_mask |= int(m)
+        requested_mask = int(sub["requested_mask"][0])
+        eff_mask = union_mask & requested_mask
+        hours = _mask_to_hours(eff_mask)
+        if not hours or not days:
+            continue
+
+        seed = _Slice(
+            year=year,
+            month=month,
+            days=list(days),
+            variables=[variable],
+            area=list(bbox),
+            hours=list(hours),
+            var_label=variable,
+        )
+        for sub_slice in _split_to_fit(seed, config):
+            out.append(_finalise(sub_slice, config.dataset))
+
+    return out

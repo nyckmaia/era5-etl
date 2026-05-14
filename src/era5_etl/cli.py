@@ -267,11 +267,19 @@ def pipeline(
             sys.exit(1)
 
 
-def _print_plan(config: PipelineConfig) -> None:
-    from era5_etl.download.request_planner import plan_requests
+def _print_plan(
+    config: PipelineConfig,
+    *,
+    apply_diff: bool = False,
+    data_dir: Path | None = None,
+) -> None:
+    from era5_etl.download.request_planner import plan_requests, plan_with_diff
     from era5_etl.download.size_estimator import estimate_request_size
 
-    chunks = plan_requests(config.download)
+    if apply_diff and data_dir is not None:
+        chunks = plan_with_diff(config.download, data_dir)
+    else:
+        chunks = plan_requests(config.download)
     total_mb = 0.0
     for c in chunks:
         est = estimate_request_size(
@@ -367,6 +375,14 @@ def download(
         None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, do not download"),
+    apply_diff: bool = typer.Option(
+        True,
+        "--apply-diff/--no-apply-diff",
+        help=(
+            "Subtract cells already present in the coverage index before "
+            "downloading (smart diff). Default: enabled."
+        ),
+    ),
 ) -> None:
     """Download ERA5/ERA5-Land data from Copernicus CDS."""
     area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
@@ -384,14 +400,14 @@ def download(
         )
 
         if dry_run:
-            _print_plan(config)
+            _print_plan(config, apply_diff=apply_diff, data_dir=data_dir)
             continue
 
         try:
             from era5_etl.download.cds_downloader import CDSDownloader
 
             downloader = CDSDownloader(config.download)
-            files = downloader.download()
+            files = downloader.download(apply_diff=apply_diff, base_dir=data_dir)
             console.print(f"\n[green]Downloaded {len(files)} files for {ds_name}[/green]")
         except Exception as exc:
             console.print(f"\n[bold red]Download failed for {ds_name}:[/bold red] {exc}")

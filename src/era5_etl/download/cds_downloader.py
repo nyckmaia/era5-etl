@@ -23,7 +23,11 @@ from tqdm import tqdm
 
 from era5_etl.config import DownloadConfig
 from era5_etl.download.cds_log_capture import CDSEventCapture
-from era5_etl.download.request_planner import RequestChunk, plan_requests
+from era5_etl.download.request_planner import (
+    RequestChunk,
+    plan_requests,
+    plan_with_diff,
+)
 from era5_etl.exceptions import CDSAPIError, DownloadError
 from era5_etl.storage.manifest import ChunkRecord, Manifest
 
@@ -69,15 +73,63 @@ class CDSDownloader:
 
     # ---- public API --------------------------------------------------------
 
-    def download(self) -> list[Path]:
-        """Download every chunk planned for the current configuration."""
-        chunks = plan_requests(self.config)
-        self.logger.info(
-            "Starting CDS download: %d chunk(s), dataset=%s",
-            len(chunks),
-            self.config.dataset,
-        )
+    def download(
+        self,
+        apply_diff: bool = False,
+        base_dir: "Path | str | None" = None,
+    ) -> list[Path]:
+        """Download every chunk planned for the current configuration.
+
+        Parameters
+        ----------
+        apply_diff:
+            When ``True``, route through :func:`plan_with_diff` to subtract
+            cells already present in the per-dataset coverage index before
+            issuing CDS requests. Defaults to ``False`` for backward
+            compatibility -- existing callers (and tests) keep today's
+            behaviour.
+        base_dir:
+            Required when ``apply_diff=True``. The base data directory used
+            to locate the ``_coverage.duckdb`` file. Inferred from
+            ``self.config.output_dir`` when omitted (assumes the standard
+            ``<base>/_tmp_netcdf/<dataset>`` layout).
+        """
+        if apply_diff:
+            resolved_base = (
+                Path(base_dir)
+                if base_dir is not None
+                else self._infer_base_dir()
+            )
+            chunks = plan_with_diff(self.config, resolved_base)
+            self.logger.info(
+                "Starting CDS download (smart diff): %d chunk(s), dataset=%s",
+                len(chunks),
+                self.config.dataset,
+            )
+        else:
+            chunks = plan_requests(self.config)
+            self.logger.info(
+                "Starting CDS download: %d chunk(s), dataset=%s",
+                len(chunks),
+                self.config.dataset,
+            )
         return self._download_all(chunks)
+
+    def _infer_base_dir(self) -> Path:
+        """Best-effort recovery of the user-supplied base_dir from output_dir.
+
+        The standard layout is ``<base>/_tmp_netcdf/<dataset>``; we walk up
+        two parents. Falls back to ``output_dir`` if the layout doesn't
+        match (callers using a custom ``output_dir`` should pass
+        ``base_dir`` explicitly).
+        """
+        out = self.config.output_dir
+        try:
+            if out.parent.name == "_tmp_netcdf":
+                return out.parent.parent
+        except (AttributeError, OSError):
+            pass
+        return out
 
     def download_chunks(self, chunks: list[RequestChunk]) -> list[Path]:
         """Download a pre-built list of chunks (used by the ``update`` command)."""
