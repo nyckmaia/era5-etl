@@ -77,6 +77,25 @@ def resolve_duckdb_path(base_dir: str | Path, dataset: str) -> Path:
     return resolve_dataset_dir(base_dir, dataset) / f"{dataset}.duckdb"
 
 
+def base_dir_from_dataset_dir(parquet_dir: str | Path) -> Path:
+    """Inverse of :func:`resolve_dataset_dir`.
+
+    Given a path of the form ``<base>/climate_data_store_db/<dataset>/``,
+    return ``<base>``. Asserts the second-to-last segment matches the
+    canonical storage root name (``climate_data_store_db``); raises
+    :class:`ValueError` otherwise. Used by write paths that need to update
+    derived per-base artifacts (e.g., the coverage index) and only have a
+    parquet directory in hand.
+    """
+    p = Path(parquet_dir).resolve()
+    if p.parent.name.lower() != STORAGE_ROOT_DIRNAME.lower():
+        raise ValueError(
+            f"{parquet_dir!s} is not a per-dataset directory under "
+            f"{STORAGE_ROOT_DIRNAME!r}; cannot recover base_dir."
+        )
+    return p.parent.parent
+
+
 def resolve_netcdf_temp_dir(base_dir: str | Path, dataset: str) -> Path:
     """Return the per-dataset temporary NetCDF directory."""
     _validate_dataset_name(dataset)

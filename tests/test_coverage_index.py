@@ -535,7 +535,14 @@ def test_ensure_coverage_index_rebuilds(
     )
     merge_into_partitioned_parquet(df, parquet_dir)
 
+    # ``merge_into_partitioned_parquet`` now auto-creates the coverage index
+    # (v0.6.0 phase 2). To exercise the rebuild path of ``ensure_coverage_index``
+    # we delete the index here, simulating the "parquet exists, coverage missing"
+    # state that the helper is designed to recover from (e.g. a user upgrading
+    # from a pre-v0.6.0 layout, or having manually deleted ``_coverage.duckdb``).
     db_path = parquet_dir / "_coverage.duckdb"
+    if db_path.exists():
+        db_path.unlink()
     assert not db_path.exists()
 
     caplog.set_level(logging.INFO)

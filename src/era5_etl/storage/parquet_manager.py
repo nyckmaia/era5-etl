@@ -24,18 +24,25 @@ import duckdb
 import polars as pl
 
 from era5_etl.storage.manifest import ChunkRecord, Manifest
-from era5_etl.storage.paths import resolve_dataset_dir
+from era5_etl.storage.paths import base_dir_from_dataset_dir, resolve_dataset_dir
 
 # Within a date partition, every (latitude, longitude, hour_utc) tuple is unique.
 # Two downloads covering the same grid cell at the same date+hour collapse into
 # one row -- new values win for conflicts, old values fill column gaps.
 PARTITION_KEY_COLS = ("latitude", "longitude", "hour_utc")
 
-# Sort order applied inside each parquet file. ``date`` is the partition column
-# (lives in the directory name, not inside the file), so it's not part of the
-# sort. Sorting by ``(latitude, longitude)`` first makes row-group min/max
-# stats tight on those columns -> DuckDB prunes row-groups aggressively for
-# spatial filters even though there is no spatial Hive partition.
+# Tile size in degrees for the transient sort-key columns. Picked so a typical
+# row group (~10k-100k rows) stays roughly inside one tile, giving DuckDB tight
+# 2D min/max stats per row group on BOTH latitude and longitude. The tile
+# columns themselves are dropped before write -- they never reach the parquet
+# file -- so this is purely a row-ordering trick.
+PARQUET_TILE_DEG = 5
+
+# Final sort order applied inside each parquet file. ``date`` is the partition
+# column (lives in the directory name, not inside the file), so it's not part
+# of the sort. Kept as a public constant for back-compat re-export and
+# introspection; the actual sort runs through :func:`_compute_sort_keys`,
+# which prepends the transient ``_lat_tile`` / ``_lon_tile`` columns.
 PARQUET_SORT_COLS = ("latitude", "longitude", "hour_utc")
 
 
@@ -92,15 +99,58 @@ def merge_into_partitioned_parquet(
             row_group_size,
         )
 
+    # Update the per-dataset coverage index. Coverage is *derived state* --
+    # the parquet on disk is the source of truth -- so a failure here must
+    # NOT prevent the parquet commit. We log a warning and move on; the user
+    # can rebuild the index via `era5 coverage rebuild`.
+    try:
+        # Late import to avoid a circular dependency: coverage.py imports
+        # from paths.py, which is fine, but importing it at module load
+        # would couple parquet_manager <-> coverage at import time.
+        from era5_etl.storage.coverage import CoverageIndex
+
+        dataset_name = parquet_dir.name
+        base_dir = base_dir_from_dataset_dir(parquet_dir)
+        with CoverageIndex(dataset=dataset_name, base_dir=base_dir) as cov:
+            cov.upsert_from_dataframe(df)
+    except Exception as exc:  # noqa: BLE001 -- coverage failures are non-fatal by design
+        log.warning("Coverage index upsert failed (non-fatal): %s", exc)
+
+
+def _compute_sort_keys(df: pl.DataFrame) -> pl.DataFrame:
+    """Add transient tile columns, sort, then drop them.
+
+    Sort key is ``(_lat_tile, _lon_tile, latitude, longitude, hour_utc)``,
+    where the two tile columns are ``floor(coord / PARQUET_TILE_DEG)`` cast
+    to ``Int16``. The tile columns are dropped before this returns -- they
+    are NOT written to parquet. Their only purpose is to make row groups
+    spatially contiguous in BOTH dimensions, so DuckDB row-group min/max
+    statistics become tight on latitude AND longitude (not just latitude as
+    in the v0.5.0 single-axis sort). This enables row-group pruning for
+    queries like ``WHERE lat BETWEEN ... AND lon BETWEEN ...``.
+    """
+    return (
+        df.with_columns(
+            [
+                (pl.col("latitude") // PARQUET_TILE_DEG).cast(pl.Int16).alias("_lat_tile"),
+                (pl.col("longitude") // PARQUET_TILE_DEG).cast(pl.Int16).alias("_lon_tile"),
+            ]
+        )
+        .sort(["_lat_tile", "_lon_tile", "latitude", "longitude", "hour_utc"])
+        .drop(["_lat_tile", "_lon_tile"])
+    )
+
 
 def _sort_for_storage(df: pl.DataFrame) -> pl.DataFrame:
     """Apply the canonical intra-file sort, skipping columns that aren't present.
 
-    Sorting by ``(latitude, longitude, hour_utc)`` keeps row-group min/max
-    stats tight on those columns, so DuckDB can prune row-groups for spatial
-    and hour filters. The ``if c in df.columns`` guard tolerates legacy /
-    test DataFrames that omit the partition-key columns.
+    When latitude+longitude are both present, delegates to
+    :func:`_compute_sort_keys` for the tile-aware 2D sort. Otherwise falls
+    back to a plain sort on whichever of ``PARQUET_SORT_COLS`` are present
+    (legacy / test DataFrames that omit the spatial keys).
     """
+    if "latitude" in df.columns and "longitude" in df.columns:
+        return _compute_sort_keys(df)
     sort_cols = [c for c in PARQUET_SORT_COLS if c in df.columns]
     if not sort_cols:
         return df
