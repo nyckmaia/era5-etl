@@ -25,6 +25,9 @@ from era5_etl.web.routes import (
     export as export_routes,
 )
 from era5_etl.web.routes import (
+    inventory as inventory_routes,
+)
+from era5_etl.web.routes import (
     pipeline as pipeline_routes,
 )
 from era5_etl.web.routes import (
@@ -73,6 +76,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(pipeline_routes.router)
     app.include_router(query_routes.router)
     app.include_router(export_routes.router)
+    app.include_router(inventory_routes.router)
 
     @app.exception_handler(404)
     async def _not_found(_request: Request, _exc):

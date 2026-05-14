@@ -24,10 +24,12 @@ class DownloadStage(Stage):
         self,
         config: PipelineConfig,
         progress_callback: ProgressCallback | None = None,
+        apply_diff: bool = False,
     ) -> None:
         super().__init__("Download ERA5 Data")
         self.config = config
         self.progress_callback = progress_callback
+        self.apply_diff = apply_diff
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Execute download stage."""
@@ -37,7 +39,12 @@ class DownloadStage(Stage):
             manifest=manifest,
             on_event=self.progress_callback,
         )
-        files = downloader.download()
+        if self.apply_diff:
+            files = downloader.download(
+                apply_diff=True, base_dir=self.config.storage.database_dir
+            )
+        else:
+            files = downloader.download()
         context.set("downloaded_files", files)
         context.set_metadata("download_count", len(files))
         self.logger.info(f"Downloaded {len(files)} files")
@@ -121,13 +128,21 @@ class ERA5Pipeline(Pipeline[PipelineConfig]):
         self,
         config: PipelineConfig,
         progress_callback: ProgressCallback | None = None,
+        apply_diff: bool = False,
     ) -> None:
         self.progress_callback = progress_callback
+        self.apply_diff = apply_diff
         super().__init__(config)
 
     def setup_stages(self) -> None:
         """Set up all pipeline stages."""
-        self.add_stage(DownloadStage(self.config, progress_callback=self.progress_callback))
+        self.add_stage(
+            DownloadStage(
+                self.config,
+                progress_callback=self.progress_callback,
+                apply_diff=self.apply_diff,
+            )
+        )
         self.add_stage(ConvertToParquetStage(self.config))
         self.add_stage(CreateViewStage(self.config))
         self.logger.info(f"Pipeline configured with {len(self._stages)} stages")

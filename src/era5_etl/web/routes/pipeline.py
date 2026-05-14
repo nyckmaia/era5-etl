@@ -14,6 +14,9 @@ from era5_etl.datasets import DatasetRegistry
 from era5_etl.download.request_planner import plan_requests
 from era5_etl.download.size_estimator import estimate_request_size
 from era5_etl.web.models import (
+    DiffPreviewIn,
+    DiffPreviewOut,
+    DiffPreviewSampleRow,
     EstimateChunkOut,
     EstimateIn,
     EstimateOut,
@@ -105,7 +108,11 @@ def start_run(body: PipelineRunIn, request: Request) -> PipelineRunOut:
         try:
             from era5_etl.pipeline.era5_pipeline import ERA5Pipeline
 
-            pipe = ERA5Pipeline(config, progress_callback=run.emit_chunk_event)
+            pipe = ERA5Pipeline(
+                config,
+                progress_callback=run.emit_chunk_event,
+                apply_diff=body.apply_diff,
+            )
             ctx = pipe.run()
             # Hook into context's progress callback if available.
             ctx.set_progress_callback(
@@ -130,6 +137,102 @@ def stream_progress(run_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail=f"Unknown run id: {run_id}")
     return EventSourceResponse(run.stream())
+
+
+@router.post("/diff-preview", response_model=DiffPreviewOut)
+def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
+    """Compute how many of the requested cells are still missing locally.
+
+    Wraps :func:`CoverageIndex.diff` with the same per-cell expansion
+    that ``plan_with_diff`` uses, so the returned counts match what an
+    actual download with ``apply_diff=True`` would issue.
+    """
+    if body.dataset not in DatasetRegistry.names():
+        raise HTTPException(status_code=400, detail=f"Unknown dataset: {body.dataset}")
+
+    from era5_etl.config import DownloadConfig
+    from era5_etl.datasets import DatasetRegistry as _DR
+    from era5_etl.download.grid import snap_area_to_grid
+    from era5_etl.download.request_planner import _build_request_cells
+    from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
+    from era5_etl.storage.paths import resolve_dataset_dir
+
+    # Normalise hours from int -> "HH:00" (matches DownloadConfig contract).
+    hours_str = [f"{int(h):02d}:00" for h in body.hours]
+
+    cfg = DownloadConfig(
+        output_dir=Path("./_unused"),
+        dataset=body.dataset,
+        variables=body.variables,
+        start_date=body.date_from,
+        end_date=body.date_to,
+        area=body.area,
+        hours=hours_str,
+    )
+
+    resolution = _DR.get(cfg.dataset).GRID_RESOLUTION_DEG
+    snapped = snap_area_to_grid(list(cfg.area), resolution)
+    cells_df = _build_request_cells(cfg, resolution, snapped)
+    requested = cells_df.height
+
+    base_dir: Path = request.app.state.data_dir
+    db_path = resolve_dataset_dir(base_dir, cfg.dataset) / COVERAGE_DB_FILENAME
+
+    if requested == 0:
+        return DiffPreviewOut(
+            requested_cells=0,
+            missing_cells=0,
+            savings_pct=0.0,
+            sample_missing=[],
+        )
+
+    if not db_path.exists():
+        # No coverage yet -> nothing covered -> all requested cells are "missing".
+        sample = []
+        for row in cells_df.head(100).iter_rows(named=True):
+            d = row["date"]
+            d_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            sample.append(
+                DiffPreviewSampleRow(
+                    lat=float(row["latitude"]),
+                    lon=float(row["longitude"]),
+                    date=d_str,
+                    variable=str(row["variable"]),
+                    missing_mask=int(row["requested_mask"]),
+                )
+            )
+        return DiffPreviewOut(
+            requested_cells=requested,
+            missing_cells=requested,
+            savings_pct=0.0,
+            sample_missing=sample,
+        )
+
+    with CoverageIndex(cfg.dataset, base_dir) as cov:
+        diff_df = cov.diff(cells_df)
+
+    missing = diff_df.height
+    savings = round((1 - missing / requested) * 100, 2) if requested > 0 else 0.0
+    sample_rows: list[DiffPreviewSampleRow] = []
+    for row in diff_df.head(100).iter_rows(named=True):
+        d = row["date"]
+        d_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        sample_rows.append(
+            DiffPreviewSampleRow(
+                lat=float(row["latitude"]),
+                lon=float(row["longitude"]),
+                date=d_str,
+                variable=str(row["variable"]),
+                missing_mask=int(row["missing_mask"]),
+            )
+        )
+
+    return DiffPreviewOut(
+        requested_cells=requested,
+        missing_cells=missing,
+        savings_pct=savings,
+        sample_missing=sample_rows,
+    )
 
 
 @router.get("/runs", response_model=list[PipelineRunOut])

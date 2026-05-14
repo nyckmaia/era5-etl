@@ -87,12 +87,37 @@ class PipelineRunIn(BaseModel):
     end_date: str | None = None
     area: list[float] = Field(min_length=4, max_length=4)
     hours: list[str]
+    apply_diff: bool = True
 
 
 class PipelineRunOut(BaseModel):
     run_id: str
     dataset: str
     status: str
+
+
+class DiffPreviewIn(BaseModel):
+    dataset: str
+    area: list[float] = Field(min_length=4, max_length=4)
+    date_from: str
+    date_to: str
+    hours: list[int] = Field(default_factory=list)
+    variables: list[str]
+
+
+class DiffPreviewSampleRow(BaseModel):
+    lat: float
+    lon: float
+    date: str
+    variable: str
+    missing_mask: int
+
+
+class DiffPreviewOut(BaseModel):
+    requested_cells: int
+    missing_cells: int
+    savings_pct: float
+    sample_missing: list[DiffPreviewSampleRow]
 
 
 class QueryIn(BaseModel):
@@ -149,6 +174,9 @@ __all__ = [
     "EstimateOut",
     "PipelineRunIn",
     "PipelineRunOut",
+    "DiffPreviewIn",
+    "DiffPreviewSampleRow",
+    "DiffPreviewOut",
     "QueryIn",
     "QueryOut",
     "VersionOut",
