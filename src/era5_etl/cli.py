@@ -327,6 +327,24 @@ def _print_summary(context, dataset: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _auto_rebuild_coverage(data_dir: Path, dataset_name: str) -> None:
+    """Trigger ``ensure_coverage_index`` once and surface a single info line.
+
+    Called from ``download`` and ``update`` before the actual run starts, so
+    the coverage index is in sync with on-disk parquet even when the user
+    has been running pre-v0.6.0 versions or has manually removed
+    ``_coverage.duckdb``.
+    """
+    from era5_etl.storage.coverage import ensure_coverage_index
+
+    rebuilt = ensure_coverage_index(dataset_name, data_dir)
+    if rebuilt:
+        console.print(
+            f"[cyan]Coverage index for {dataset_name} was missing; rebuilt from "
+            f"existing parquet partitions.[/cyan]"
+        )
+
+
 @app.command()
 def download(
     data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
@@ -354,6 +372,7 @@ def download(
     area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Downloading {ds_name}[/bold blue]\n")
+        _auto_rebuild_coverage(data_dir, ds_name)
         config = PipelineConfig.create(
             base_dir=data_dir,
             dataset=ds_name,
@@ -465,6 +484,7 @@ def update(
 
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Update -- {ds_name}[/bold blue]\n")
+        _auto_rebuild_coverage(data_dir, ds_name)
         config = PipelineConfig.create(
             base_dir=data_dir,
             dataset=ds_name,
@@ -722,6 +742,71 @@ def ui(
     app_instance = create_app(data_dir)
     console.print(f"[green]Starting ERA5-ETL UI on http://127.0.0.1:{port}/[/green]")
     uvicorn.run(app_instance, host="127.0.0.1", port=port, log_level="info")
+
+
+# ---------------------------------------------------------------------------
+# coverage (per-dataset cell-level inventory index)
+# ---------------------------------------------------------------------------
+
+
+coverage_app = typer.Typer(
+    name="coverage",
+    help="Manage the per-dataset coverage index (_coverage.duckdb).",
+    add_completion=False,
+)
+app.add_typer(coverage_app, name="coverage")
+
+
+@coverage_app.command("rebuild")
+def coverage_rebuild(
+    data_dir: Path = typer.Option(Path("./data"), "--data-dir", "-d", help="Base data directory"),
+    dataset: str = typer.Option(
+        "all", "--dataset", help="Dataset to rebuild (era5, era5-land, or 'all')"
+    ),
+) -> None:
+    """Rebuild the cell-level coverage index from the on-disk parquet files.
+
+    The coverage index is derived state -- it lives in
+    ``<base>/climate_data_store_db/<dataset>/_coverage.duckdb`` and tracks
+    which (latitude, longitude, date, variable) cells have data, with a
+    24-bit hours bitmap for hour-level precision.
+
+    Idempotent: running twice produces the same end state. Use after a bulk
+    backfill or whenever the index is suspected to be stale.
+    """
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    from era5_etl.storage.coverage import rebuild_from_parquet
+
+    for ds_name in _expand_datasets(dataset):
+        console.print(f"\n[bold blue]Rebuilding coverage index -- {ds_name}[/bold blue]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            stats = rebuild_from_parquet(ds_name, data_dir, progress=progress)
+
+        table = Table(box=None)
+        table.add_column("metric", style="cyan")
+        table.add_column("value", style="green")
+        table.add_row("Files processed", str(stats.get("files_processed", 0)))
+        table.add_row("Total rows in index", f"{stats['total_rows']:,}")
+        table.add_row("Distinct cells", f"{stats['n_cells']:,}")
+        table.add_row("Distinct dates", f"{stats['n_dates']:,}")
+        table.add_row("Distinct variables", str(stats["n_variables"]))
+        table.add_row("DuckDB file size", f"{stats['db_size_bytes'] / (1024 * 1024):,.2f} MB")
+        console.print(table)
 
 
 # Hide unused datetime import (used only by web in some flows). Keeping it here is harmless,
