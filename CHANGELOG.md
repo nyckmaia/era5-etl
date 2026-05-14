@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.5.0] - 2026-05-14
+
+### Changed
+
+- **Semantic Parquet filenames.** Files are now named
+  `<dataset>_<YYYY-MM-DD>_part-NNN.parquet` (e.g.,
+  `era5-land_2024-01-15_part-001.parquet`) instead of the opaque
+  `part-<32-hex-uuid>.parquet`. Built by `_compute_part_name` from the
+  parquet directory name; merge-on-write always produces `_part-001` in
+  normal flow. `dedup_existing_partitions` rewrites legacy uuid files
+  to the new naming.
+- **Intra-file sort by `(latitude, longitude, hour_utc)`** applied
+  before every Parquet write. Centralised in `_sort_for_storage` in
+  `parquet_manager`. Row-group min/max statistics become tight on
+  spatial columns → DuckDB prunes row-groups for `WHERE latitude
+  BETWEEN ...` queries even though there is no spatial Hive partition.
+  Two-camera pruning (directory `date=` + intra-file row-groups) gives
+  query performance equivalent to a four-level Hive layout without
+  exposing helper columns like `lat_bucket`/`lon_bucket` to consumers.
+
+### Fixed
+
+- **`StorageConfig.row_group_size` was being ignored.** The parquet
+  writer now plumbs the value through to `df.write_parquet(...,
+  row_group_size=...)`. Default stays at 100 000 (matches the existing
+  config default); callers can override via
+  `ParquetManager.write_dataframe(..., row_group_size=...)`.
+
+### Test status
+
+- 259 tests passing (was 253). New cases: filename pattern for both
+  datasets, intra-file sort verification, row-group statistics
+  tightness, dedup converts legacy uuid filenames, natural date query
+  via DuckDB.
+
+---
+
 ## [0.4.0] - 2026-05-13
 
 ### Added

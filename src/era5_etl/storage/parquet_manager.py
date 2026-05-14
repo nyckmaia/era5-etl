@@ -16,7 +16,6 @@ adjacent regions (e.g., two neighboring UFs whose bboxes overlap).
 from __future__ import annotations
 
 import logging
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -32,12 +31,20 @@ from era5_etl.storage.paths import resolve_dataset_dir
 # one row -- new values win for conflicts, old values fill column gaps.
 PARTITION_KEY_COLS = ("latitude", "longitude", "hour_utc")
 
+# Sort order applied inside each parquet file. ``date`` is the partition column
+# (lives in the directory name, not inside the file), so it's not part of the
+# sort. Sorting by ``(latitude, longitude)`` first makes row-group min/max
+# stats tight on those columns -> DuckDB prunes row-groups aggressively for
+# spatial filters even though there is no spatial Hive partition.
+PARQUET_SORT_COLS = ("latitude", "longitude", "hour_utc")
+
 
 def merge_into_partitioned_parquet(
     df: pl.DataFrame,
     parquet_dir: Path,
     compression: Literal["snappy", "zstd", "gzip"] = "zstd",
     logger: logging.Logger | None = None,
+    row_group_size: int = 100_000,
 ) -> None:
     """Write ``df`` into ``<parquet_dir>/date=YYYY-MM-DD/`` with merge-on-key dedup.
 
@@ -60,7 +67,8 @@ def merge_into_partitioned_parquet(
 
     parquet_dir.mkdir(parents=True, exist_ok=True)
 
-    for (date_str,), df_part in df.group_by(["date"], maintain_order=True):
+    for (date_value,), df_part in df.group_by(["date"], maintain_order=True):
+        date_str = str(date_value)
         partition_dir = parquet_dir / f"date={date_str}"
         existing_files = (
             sorted(partition_dir.glob("*.parquet")) if partition_dir.exists() else []
@@ -73,7 +81,30 @@ def merge_into_partitioned_parquet(
         else:
             merged = new_payload
 
-        _replace_partition_files(partition_dir, merged, existing_files, compression, log)
+        merged = _sort_for_storage(merged)
+        _replace_partition_files(
+            parquet_dir,
+            date_str,
+            merged,
+            existing_files,
+            compression,
+            log,
+            row_group_size,
+        )
+
+
+def _sort_for_storage(df: pl.DataFrame) -> pl.DataFrame:
+    """Apply the canonical intra-file sort, skipping columns that aren't present.
+
+    Sorting by ``(latitude, longitude, hour_utc)`` keeps row-group min/max
+    stats tight on those columns, so DuckDB can prune row-groups for spatial
+    and hour filters. The ``if c in df.columns`` guard tolerates legacy /
+    test DataFrames that omit the partition-key columns.
+    """
+    sort_cols = [c for c in PARQUET_SORT_COLS if c in df.columns]
+    if not sort_cols:
+        return df
+    return df.sort(sort_cols)
 
 
 def _read_partition_payload(files: list[Path]) -> pl.DataFrame:
@@ -111,28 +142,52 @@ def _merge_by_key(old: pl.DataFrame, new: pl.DataFrame) -> pl.DataFrame:
 
 
 def _replace_partition_files(
-    partition_dir: Path,
+    parquet_dir: Path,
+    date_str: str,
     df: pl.DataFrame,
     old_files: list[Path],
     compression: Literal["snappy", "zstd", "gzip"],
     logger: logging.Logger,
+    row_group_size: int = 100_000,
 ) -> None:
-    """Write ``df`` as the sole content of ``partition_dir``.
+    """Write ``df`` as the sole content of the partition ``date=<date_str>/``.
 
     Sequence: write-new -> delete-old. A crash between the two leaves
     partial duplication, which the next ``merge_into_partitioned_parquet``
     call cleans up (the merge is idempotent on duplicate keys).
+
+    The new file is named ``<dataset>_<YYYY-MM-DD>_part-NNN.parquet`` where
+    NNN is zero-padded to 3 digits. In normal merge-on-write flow only
+    ``_part-001`` exists; higher numbers exist only transiently if a prior
+    write left stragglers that haven't been cleaned up yet.
     """
+    partition_dir = parquet_dir / f"date={date_str}"
     partition_dir.mkdir(parents=True, exist_ok=True)
-    new_file = partition_dir / f"part-{uuid.uuid4().hex}.parquet"
-    df.write_parquet(new_file, compression=compression)
+    new_file = partition_dir / _compute_part_name(parquet_dir, date_str)
+    df.write_parquet(new_file, compression=compression, row_group_size=row_group_size)
     for old in old_files:
+        if old == new_file:
+            # Edge case: an old file already had the canonical name; we just
+            # overwrote it in place via the same Path.
+            continue
         try:
             old.unlink()
         except FileNotFoundError:
             pass
         except OSError as exc:
             logger.warning("Could not delete old partition file %s: %s", old, exc)
+
+
+def _compute_part_name(parquet_dir: Path, date_str: str) -> str:
+    """Build ``<dataset>_<YYYY-MM-DD>_part-001.parquet``.
+
+    ``dataset`` is derived from ``parquet_dir.name`` -- by the canonical
+    layout in :func:`era5_etl.storage.paths.resolve_dataset_dir`, the
+    parquet directory of a dataset is named after the dataset itself
+    (e.g., ``era5-land``).
+    """
+    dataset = parquet_dir.name
+    return f"{dataset}_{date_str}_part-001.parquet"
 
 
 @dataclass
@@ -293,12 +348,15 @@ class ParquetManager:
         self,
         df: pl.DataFrame,
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
+        row_group_size: int = 100_000,
     ) -> None:
         """Write ``df`` into the dataset's date-partitioned layout, deduping.
 
         See :func:`merge_into_partitioned_parquet` for the full contract.
         """
-        merge_into_partitioned_parquet(df, self.parquet_dir, compression, self.logger)
+        merge_into_partitioned_parquet(
+            df, self.parquet_dir, compression, self.logger, row_group_size
+        )
 
     def dedup_existing_partitions(
         self,
@@ -329,7 +387,18 @@ class ParquetManager:
             stats["rows_before"] += len(df)
             deduped = _merge_by_key(df.head(0), df)
             stats["rows_after"] += len(deduped)
-            _replace_partition_files(partition_dir, deduped, files, compression, self.logger)
+            deduped = _sort_for_storage(deduped)
+            # Recover the date string from "date=YYYY-MM-DD/"
+            date_str = partition_dir.name.removeprefix("date=")
+            _replace_partition_files(
+                self.parquet_dir,
+                date_str,
+                deduped,
+                files,
+                compression,
+                self.logger,
+                100_000,
+            )
             stats["partitions_processed"] += 1
             self.logger.info(
                 "Deduped %s: %d -> %d rows",

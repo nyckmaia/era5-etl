@@ -34,7 +34,7 @@ uma **SPA local** (FastAPI + React + Vite).
         └────────┬────────────────┘
                  │
    climate_data_store_db/<dataset>/
-     date=YYYY-MM-DD/*.parquet
+     date=YYYY-MM-DD/<dataset>_<YYYY-MM-DD>_part-001.parquet
      _manifest.json
      <dataset>.duckdb
                  │
@@ -225,6 +225,28 @@ era5 query \
 A view DuckDB (`<dataset>_view`) é criada sob demanda apontando para o
 diretório Parquet do dataset.
 
+**Pruning automático em duas camadas:**
+
+1. **Diretório Hive** — `WHERE date BETWEEN ...` poda partições antes
+   de abrir qualquer arquivo (a coluna `date` está no nome da pasta).
+2. **Row-group statistics** — `WHERE latitude BETWEEN ...` aproveita o
+   sort interno `(latitude, longitude, hour_utc)` aplicado na escrita.
+   Min/max de cada row-group ficam apertados → DuckDB pula
+   row-groups inteiros que não intersectam o filtro espacial. **Não há
+   necessidade de colunas Hive auxiliares** como `lat_bucket` ou
+   `lon_bucket`; a query é natural sobre `latitude`/`longitude` reais.
+
+Exemplo de query natural que aproveita as duas camadas:
+
+```sql
+SELECT *
+FROM era5_land_view
+WHERE date BETWEEN '2024-06-01' AND '2024-08-31'   -- partition pruning
+  AND latitude  BETWEEN -25.0 AND -22.0            -- row-group pruning
+  AND longitude BETWEEN -48.0 AND -45.0            -- row-group pruning
+  AND hour_utc IN (12, 13, 14);                    -- row-group pruning
+```
+
 ### Web UI
 
 ```bash
@@ -251,13 +273,13 @@ era5 ibge     -o ./data/ibge_locais.parquet  # gera o Parquet IBGE
 <data_dir>/
 ├── climate_data_store_db/
 │   ├── era5/
-│   │   ├── date=2024-01-01/part-0.parquet
-│   │   ├── date=2024-01-02/part-0.parquet
+│   │   ├── date=2024-01-01/era5_2024-01-01_part-001.parquet
+│   │   ├── date=2024-01-02/era5_2024-01-02_part-001.parquet
 │   │   ├── ...
 │   │   ├── _manifest.json
 │   │   └── era5.duckdb
 │   └── era5-land/
-│       ├── date=YYYY-MM-DD/...
+│       ├── date=YYYY-MM-DD/era5-land_YYYY-MM-DD_part-001.parquet
 │       ├── _manifest.json
 │       └── era5-land.duckdb
 └── _tmp_netcdf/

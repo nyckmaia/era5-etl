@@ -292,6 +292,132 @@ def test_merge_into_partitioned_parquet_module_function(tmp_path: Path):
     assert (parquet_dir / "date=2024-01-01").exists()
 
 
+# -- semantic filename + sort (plan v0.5.0) ---------------------------------
+
+
+def test_filename_pattern_dataset_date_part(tmp_path: Path):
+    """The written file must follow ``<dataset>_<YYYY-MM-DD>_part-001.parquet``."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9))
+    manager.write_dataframe(df)
+
+    files = list((manager.parquet_dir / "date=2024-01-01").glob("*.parquet"))
+    assert len(files) == 1
+    assert files[0].name == "era5-land_2024-01-01_part-001.parquet"
+
+
+def test_filename_pattern_for_era5(tmp_path: Path):
+    """Dataset prefix must reflect the parquet dir name -- era5 (no hyphen)."""
+    manager = ParquetManager(tmp_path, "era5")
+    df = _sample_grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9))
+    manager.write_dataframe(df)
+    files = list((manager.parquet_dir / "date=2024-01-01").glob("*.parquet"))
+    assert files[0].name == "era5_2024-01-01_part-001.parquet"
+
+
+def test_sort_inside_file(tmp_path: Path):
+    """Rows inside the file must be sorted by (latitude, longitude, hour_utc)."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(
+        lat_range=(-22.0, -21.5), lon_range=(-44.0, -43.5), hour=0
+    )
+    # Inject a second hour to verify hour_utc sort kicks in at the tie-break level.
+    df2 = _sample_grid_df(
+        lat_range=(-22.0, -21.5), lon_range=(-44.0, -43.5), hour=12
+    )
+    manager.write_dataframe(pl.concat([df2, df]))  # write deliberately out of order
+
+    read = pl.read_parquet(
+        next((manager.parquet_dir / "date=2024-01-01").glob("*.parquet"))
+    )
+    # Polars' is_sorted on a struct of the 3 columns: build a key column.
+    key = read.select(
+        (pl.col("latitude") * 1e6 + pl.col("longitude") * 1e3 + pl.col("hour_utc"))
+        .alias("k")
+    )["k"].to_list()
+    assert key == sorted(key)
+
+
+def test_row_group_stats_are_tight_for_latitude(tmp_path: Path):
+    """Sort by latitude → row-group min/max should partition the lat range."""
+    import pyarrow.parquet as pq
+
+    manager = ParquetManager(tmp_path, "era5-land")
+    df = _sample_grid_df(
+        lat_range=(-30.0, -10.0),  # 200 lat steps at 0.1°
+        lon_range=(-60.0, -40.0),  # 200 lon steps at 0.1°
+        step=0.1,
+    )
+    # Use a small row_group_size to force >= 2 row-groups for the assertion.
+    manager.write_dataframe(df, row_group_size=10_000)
+
+    file = next((manager.parquet_dir / "date=2024-01-01").glob("*.parquet"))
+    meta = pq.ParquetFile(file).metadata
+    assert meta.num_row_groups >= 2  # otherwise the test is uninformative
+
+    # Find the index of the "latitude" column in the schema.
+    schema_names = [meta.schema.column(i).name for i in range(meta.num_columns)]
+    lat_idx = schema_names.index("latitude")
+
+    mins, maxes = [], []
+    for i in range(meta.num_row_groups):
+        stats = meta.row_group(i).column(lat_idx).statistics
+        assert stats is not None and stats.has_min_max
+        mins.append(stats.min)
+        maxes.append(stats.max)
+
+    # Each row-group's lat range should be tighter than the full bbox.
+    full_range = 20.0  # -30..-10
+    avg_rg_range = sum(mx - mn for mn, mx in zip(mins, maxes, strict=False)) / len(mins)
+    assert avg_rg_range < full_range / 2, (
+        f"row-group lat ranges average {avg_rg_range}, expected << {full_range}"
+    )
+
+
+def test_dedup_preserves_filename_pattern(tmp_path: Path):
+    """Legacy ``part-<uuid>.parquet`` should be replaced by the new naming."""
+    manager = ParquetManager(tmp_path, "era5-land")
+    partition_dir = manager.parquet_dir / "date=2024-01-01"
+    partition_dir.mkdir(parents=True)
+
+    base = _sample_grid_df(
+        lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=300.0
+    ).drop("date")
+    # Simulate the legacy uuid filename.
+    base.write_parquet(partition_dir / "part-abc123def456.parquet")
+    base.write_parquet(partition_dir / "part-789xyz000111.parquet")
+
+    manager.dedup_existing_partitions()
+
+    files = list(partition_dir.glob("*.parquet"))
+    assert len(files) == 1
+    assert files[0].name == "era5-land_2024-01-01_part-001.parquet"
+
+
+def test_natural_date_query_via_duckdb(tmp_path: Path):
+    """End-to-end: write 3 days, query a 2-day range, get only those days."""
+    import duckdb
+
+    manager = ParquetManager(tmp_path, "era5-land")
+    for d in ("2024-01-15", "2024-01-16", "2024-01-17"):
+        df = _sample_grid_df(
+            lat_range=(-22.0, -21.9),
+            lon_range=(-44.0, -43.9),
+            date_str=d,
+        )
+        manager.write_dataframe(df)
+
+    conn = duckdb.connect(":memory:")
+    manager.create_duckdb_view(conn, "era5_land_view")
+    result = conn.execute(
+        "SELECT DISTINCT CAST(date AS VARCHAR) AS d FROM era5_land_view "
+        "WHERE date BETWEEN '2024-01-15' AND '2024-01-16' "
+        "ORDER BY d"
+    ).fetchall()
+    assert [r[0] for r in result] == ["2024-01-15", "2024-01-16"]
+    conn.close()
+
+
 # -- DuckDBManager tests --
 
 

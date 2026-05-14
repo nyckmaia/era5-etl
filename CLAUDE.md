@@ -30,6 +30,17 @@ exposes it via DuckDB views, a Typer CLI, and a FastAPI + React/Vite web UI.
 - **Manifest is the source of truth for "done".** `storage/manifest.py`
   stores chunk_id -> ChunkRecord. The `update` command and the download
   stage both consult it via `Manifest.has(chunk_id)`.
+- **Parquet sort `(latitude, longitude, hour_utc)` is part of the writer
+  contract.** Applied in `_sort_for_storage` before every write. Removing
+  it would silently regress spatial query performance: DuckDB relies on
+  row-group min/max stats to prune for `WHERE latitude/longitude BETWEEN
+  ...` queries (there is no spatial Hive partition; only `date=` is
+  partitioned).
+- **Parquet filenames are semantic.** Pattern:
+  `<dataset>_<YYYY-MM-DD>_part-NNN.parquet`. `NNN` is virtually always
+  `001` because `merge_into_partitioned_parquet` collapses each partition
+  to one file. Built by `_compute_part_name` from `parquet_dir.name`
+  (which equals the dataset name by `resolve_dataset_dir` convention).
 
 ## Common pitfalls
 
