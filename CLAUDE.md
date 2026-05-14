@@ -27,20 +27,35 @@ exposes it via DuckDB views, a Typer CLI, and a FastAPI + React/Vite web UI.
 - **Request size is bounded by `request_planner.py`.** It applies a fixed
   cascade: area 2x2 -> day blocks -> per-variable. Never bypass it -- raise
   `DownloadSizeError` instead of issuing an unsplit request.
-- **Manifest is the source of truth for "done".** `storage/manifest.py`
+- **Manifest is the source of truth for "chunk done".** `storage/manifest.py`
   stores chunk_id -> ChunkRecord. The `update` command and the download
-  stage both consult it via `Manifest.has(chunk_id)`.
-- **Parquet sort `(latitude, longitude, hour_utc)` is part of the writer
-  contract.** Applied in `_sort_for_storage` before every write. Removing
-  it would silently regress spatial query performance: DuckDB relies on
-  row-group min/max stats to prune for `WHERE latitude/longitude BETWEEN
-  ...` queries (there is no spatial Hive partition; only `date=` is
-  partitioned).
+  stage both consult it via `Manifest.has(chunk_id)`. Manifest tracks
+  rectangles, not cells.
+- **Coverage index is the source of truth for "cell done".** `storage/coverage.py`
+  exposes `CoverageIndex` over per-dataset `_coverage.duckdb`. One row per
+  `(latitude, longitude, date, variable)` with a 24-bit `hours_mask`.
+  `merge_into_partitioned_parquet` upserts on every successful write
+  (failure non-fatal — the parquet on disk is canonical, coverage is
+  derived). Read by `plan_with_diff`, `/api/inventory/*`, and the
+  `/inventory` web page.
+- **Tile-based parquet sort is part of the writer contract.** `_sort_for_storage`
+  computes transient `_lat_tile = floor(lat/PARQUET_TILE_DEG)` /
+  `_lon_tile = floor(lon/PARQUET_TILE_DEG)` (`PARQUET_TILE_DEG = 5`),
+  sorts by `(lat_tile, lon_tile, latitude, longitude, hour_utc)`, then
+  drops the tile columns before writing. Row groups end up spatially
+  contiguous so DuckDB's row-group min/max stats prune for
+  `WHERE latitude BETWEEN ... AND longitude BETWEEN ...` queries.
+  Removing it would silently regress spatial query performance.
 - **Parquet filenames are semantic.** Pattern:
   `<dataset>_<YYYY-MM-DD>_part-NNN.parquet`. `NNN` is virtually always
   `001` because `merge_into_partitioned_parquet` collapses each partition
   to one file. Built by `_compute_part_name` from `parquet_dir.name`
   (which equals the dataset name by `resolve_dataset_dir` convention).
+- **`build_request_cells` is public planner contract.** Both
+  `plan_with_diff` and `POST /api/pipeline/diff-preview` call it.
+  Output schema must stay stable: `latitude (Float32), longitude (Float32),
+  date (Date), variable (str), requested_mask (UInt32)` — the
+  `CoverageIndex.diff()` JOIN relies on dtype match exactly.
 
 ## Common pitfalls
 

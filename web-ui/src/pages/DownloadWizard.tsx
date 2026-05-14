@@ -1,12 +1,20 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Loader2, MapPin, Play } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  MapPin,
+  Play,
+  Sparkles,
+  TrendingDown,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { RunProgress } from "@/components/RunProgress";
-import { api, DatasetInfo } from "@/lib/api";
+import { api, DatasetInfo, DiffPreview } from "@/lib/api";
 import { cn, formatBytes } from "@/lib/format";
 
-type Step = 0 | 1 | 2 | 3 | 4;
+type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 const HOURS_ALL = Array.from({ length: 24 }, (_, h) => `${h.toString().padStart(2, "0")}:00`);
 const HOURS_SYNOPTIC = ["00:00", "06:00", "12:00", "18:00"];
@@ -26,6 +34,7 @@ export function DownloadWizardPage() {
   const [hours, setHours] = useState<string[]>(HOURS_SYNOPTIC);
   const [startDate, setStartDate] = useState("2024-01-01");
   const [endDate, setEndDate] = useState("2024-01-31");
+  const [applyDiff, setApplyDiff] = useState(true);
 
   const { data: datasets } = useQuery({ queryKey: ["datasets"], queryFn: api.datasets });
   const activeDataset = useMemo(
@@ -46,13 +55,26 @@ export function DownloadWizardPage() {
   });
   const runMutation = useMutation({
     mutationFn: () =>
-      api.startRun({
+      api.startRunWithDiff({
         dataset,
         variables,
         start_date: startDate,
         end_date: endDate,
         area,
         hours,
+        apply_diff: applyDiff,
+      }),
+  });
+
+  const diffMutation = useMutation({
+    mutationFn: () =>
+      api.diffPreview({
+        dataset,
+        area,
+        date_from: startDate,
+        date_to: endDate,
+        hours: hours.map((h) => parseInt(h.slice(0, 2), 10)),
+        variables,
       }),
   });
 
@@ -66,6 +88,8 @@ export function DownloadWizardPage() {
         return area.length === 4;
       case 3:
         return Boolean(startDate && endDate && hours.length > 0);
+      case 4:
+        return true;
       default:
         return true;
     }
@@ -110,6 +134,14 @@ export function DownloadWizardPage() {
           />
         )}
         {step === 4 && (
+          <StepDiff
+            diff={diffMutation}
+            applyDiff={applyDiff}
+            onApplyDiffChange={setApplyDiff}
+            onCompute={() => diffMutation.mutate()}
+          />
+        )}
+        {step === 5 && (
           <StepConfirm
             dataset={dataset}
             variables={variables}
@@ -117,6 +149,7 @@ export function DownloadWizardPage() {
             hours={hours}
             startDate={startDate}
             endDate={endDate}
+            applyDiff={applyDiff}
             estimate={estimateMutation}
             run={runMutation}
             onEstimate={() => estimateMutation.mutate()}
@@ -133,11 +166,18 @@ export function DownloadWizardPage() {
         >
           <ChevronLeft className="h-4 w-4" /> Back
         </button>
-        {step < 4 ? (
+        {step < 5 ? (
           <button
             className="btn-primary"
             disabled={!canAdvance}
-            onClick={() => setStep((s) => Math.min(4, s + 1) as Step)}
+            onClick={() => {
+              const next = Math.min(5, step + 1) as Step;
+              setStep(next);
+              // Auto-fetch the diff when entering the diff step.
+              if (next === 4 && !diffMutation.data && !diffMutation.isPending) {
+                diffMutation.mutate();
+              }
+            }}
           >
             Next <ChevronRight className="h-4 w-4" />
           </button>
@@ -148,7 +188,7 @@ export function DownloadWizardPage() {
 }
 
 function Stepper({ step }: { step: Step }) {
-  const labels = ["Dataset", "Variables", "Area", "Period", "Confirm"];
+  const labels = ["Dataset", "Variables", "Area", "Period", "Smart Diff", "Confirm"];
   return (
     <ol className="flex items-center gap-2 text-xs">
       {labels.map((label, i) => (
@@ -428,6 +468,162 @@ function StepPeriod({
   );
 }
 
+function StepDiff({
+  diff,
+  applyDiff,
+  onApplyDiffChange,
+  onCompute,
+}: {
+  diff: ReturnType<typeof useMutation<DiffPreview, Error, void, unknown>>;
+  applyDiff: boolean;
+  onApplyDiffChange: (v: boolean) => void;
+  onCompute: () => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-5 w-5 text-ocean-600" />
+        <h2 className="text-lg font-medium">Smart Diff</h2>
+      </div>
+      <p className="text-sm text-ink-500">
+        Comparamos sua requisição com o que já está no banco para baixar
+        apenas os pontos × datas × horas × variáveis faltantes.
+      </p>
+
+      {diff.isPending ? (
+        <div className="flex items-center gap-2 rounded-xl border border-ink-200 bg-ink-50/50 p-6 text-sm text-ink-500">
+          <Loader2 className="h-5 w-5 animate-spin text-ocean-500" />
+          Calculando o que já está no banco...
+        </div>
+      ) : diff.error ? (
+        <div className="space-y-3">
+          <p className="text-sm text-red-600">{(diff.error as Error).message}</p>
+          <button onClick={onCompute} className="btn-outline">
+            Tentar novamente
+          </button>
+        </div>
+      ) : diff.data ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <DiffStat
+            label="Já no banco"
+            value={(diff.data.requested_cells - diff.data.missing_cells).toLocaleString()}
+            sub={`${diff.data.savings_pct.toFixed(1)}%`}
+            tone="success"
+          />
+          <DiffStat
+            label="Faltando"
+            value={diff.data.missing_cells.toLocaleString()}
+            sub={`${(100 - diff.data.savings_pct).toFixed(1)}%`}
+            tone={diff.data.missing_cells === 0 ? "success" : "warn"}
+          />
+          <DiffStat
+            label="Total requisitado"
+            value={diff.data.requested_cells.toLocaleString()}
+            sub="células"
+            tone="neutral"
+          />
+        </div>
+      ) : (
+        <button onClick={onCompute} className="btn-primary">
+          Calcular diff
+        </button>
+      )}
+
+      {diff.data && diff.data.missing_cells > 0 && (
+        <div className="rounded-xl border border-ink-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-semibold text-ink-700">
+            Modo de download
+          </h3>
+          <div className="space-y-2">
+            <Toggle
+              checked={applyDiff}
+              onChange={() => onApplyDiffChange(true)}
+              icon={<TrendingDown className="h-4 w-4" />}
+              title="Baixar apenas o que falta (recomendado)"
+              subtitle={`Economiza ~${diff.data.savings_pct.toFixed(0)}% das requisições ao CDS.`}
+            />
+            <Toggle
+              checked={!applyDiff}
+              onChange={() => onApplyDiffChange(false)}
+              icon={<Play className="h-4 w-4" />}
+              title="Baixar tudo (sobrescrever)"
+              subtitle="Re-baixa também os dados já presentes."
+            />
+          </div>
+        </div>
+      )}
+
+      {diff.data && diff.data.missing_cells === 0 && (
+        <div className="rounded-xl border border-moss-400 bg-moss-400/10 p-4 text-sm text-moss-600">
+          ✓ Tudo que você pediu já está no banco. Nada a baixar.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiffStat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: "success" | "warn" | "neutral";
+}) {
+  const toneCls = {
+    success: "border-moss-400 bg-moss-400/5 text-moss-600",
+    warn: "border-amber-400 bg-amber-50 text-amber-600",
+    neutral: "border-ink-200 bg-ink-50 text-ink-700",
+  }[tone];
+  return (
+    <div className={cn("rounded-xl border p-4", toneCls)}>
+      <div className="text-[10px] uppercase tracking-wide opacity-70">{label}</div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
+      <div className="mt-1 text-xs opacity-70">{sub}</div>
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  icon,
+  title,
+  subtitle,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition",
+        checked ? "border-ocean-400 bg-ocean-50/50" : "border-ink-200 bg-white hover:border-ocean-300",
+      )}
+    >
+      <input
+        type="radio"
+        checked={checked}
+        onChange={onChange}
+        className="mt-1"
+      />
+      <div className="flex-1">
+        <div className="flex items-center gap-2 text-sm font-medium text-ink-800">
+          {icon}
+          {title}
+        </div>
+        <div className="mt-0.5 text-xs text-ink-500">{subtitle}</div>
+      </div>
+    </label>
+  );
+}
+
 function StepConfirm({
   dataset,
   variables,
@@ -435,6 +631,7 @@ function StepConfirm({
   hours,
   startDate,
   endDate,
+  applyDiff,
   estimate,
   run,
   onEstimate,
@@ -446,6 +643,7 @@ function StepConfirm({
   hours: string[];
   startDate: string;
   endDate: string;
+  applyDiff: boolean;
   estimate: ReturnType<typeof useMutation<any, any, any, any>>;
   run: ReturnType<typeof useMutation<any, any, any, any>>;
   onEstimate: () => void;
@@ -461,6 +659,10 @@ function StepConfirm({
         <Row label="Variables" value={`${variables.length} selected`} />
         <Row label="Hours" value={`${hours.length} of 24`} />
         <Row label="Area" value={`N ${area[0]} · W ${area[1]} · S ${area[2]} · E ${area[3]}`} />
+        <Row
+          label="Smart diff"
+          value={applyDiff ? "Enabled (skip cached)" : "Disabled (full request)"}
+        />
       </dl>
 
       <div className="flex flex-wrap gap-3">

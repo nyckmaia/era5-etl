@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { CloudDownload, BarChart3, Database, Settings as SettingsIcon, Globe2 } from "lucide-react";
+import {
+  CloudDownload,
+  BarChart3,
+  Database,
+  Settings as SettingsIcon,
+  Globe2,
+  MapPin,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { OnboardingGate } from "@/components/OnboardingGate";
@@ -7,6 +14,7 @@ import { cn } from "@/lib/format";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { to: "/inventory", label: "Inventory", icon: MapPin },
   { to: "/download", label: "Download", icon: CloudDownload },
   { to: "/query", label: "Query", icon: Database },
   { to: "/settings", label: "Settings", icon: SettingsIcon },

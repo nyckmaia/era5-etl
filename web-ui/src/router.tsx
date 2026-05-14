@@ -9,6 +9,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { Layout } from "./components/Layout";
 import { DashboardPage } from "./pages/Dashboard";
 import { DownloadWizardPage } from "./pages/DownloadWizard";
+import { InventoryPage } from "./pages/Inventory";
 import { QueryPage } from "./pages/Query";
 import { SettingsPage } from "./pages/Settings";
 
@@ -38,6 +39,12 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 });
 
+const inventoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/inventory",
+  component: InventoryPage,
+});
+
 const downloadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/download",
@@ -59,6 +66,7 @@ const settingsRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   dashboardRoute,
+  inventoryRoute,
   downloadRoute,
   queryRoute,
   settingsRoute,

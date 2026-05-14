@@ -1,0 +1,276 @@
+// Typed fetch wrappers for the FastAPI backend at /api/*.
+
+export interface DatasetVariable {
+  api_name: string;
+  short_name: string;
+  friendly_name: string;
+  full_name: string;
+  description: string;
+  unit: string;
+}
+
+export interface DatasetInfo {
+  name: string;
+  cds_dataset_id: string;
+  grid_resolution_deg: number;
+  default_variables: string[];
+  variables: DatasetVariable[];
+}
+
+export interface StorageStats {
+  dataset: string;
+  parquet_files: number;
+  total_size_bytes: number;
+  partitions: string[];
+  manifest_chunks: number;
+  parquet_dir: string;
+}
+
+export interface UserSettings {
+  data_dir: string;
+  default_dataset: string;
+}
+
+export interface EstimateChunk {
+  chunk_id: string;
+  year: number;
+  month: number;
+  days: number[];
+  variables: string[];
+  area: [number, number, number, number];
+  estimated_bytes: number;
+  estimated_mb: number;
+}
+
+export interface EstimateResult {
+  dataset: string;
+  total_chunks: number;
+  total_estimated_bytes: number;
+  total_estimated_mb: number;
+  chunks: EstimateChunk[];
+}
+
+export interface PathValidation {
+  path: string;
+  exists: boolean;
+  is_dir: boolean;
+  is_writable: boolean;
+  is_empty: boolean | null;
+}
+
+export interface CredentialStatus {
+  has_credentials: boolean;
+  source: "env" | "file" | "none";
+  url: string | null;
+  file_path: string;
+}
+
+export interface CredentialTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms: number | null;
+  status_code: number | null;
+}
+
+// --- Inventory (v0.6.0) ---------------------------------------------------
+
+export interface GridPoint {
+  lat: number;
+  lon: number;
+  days: number;
+  vars: number;
+}
+
+export interface CellDetailVariable {
+  name: string;
+  hours: number[];
+}
+
+export interface CellDetailDate {
+  date: string;
+  variables: CellDetailVariable[];
+}
+
+export interface CellDetail {
+  latitude: number;
+  longitude: number;
+  dates: CellDetailDate[];
+}
+
+export interface RegionGap {
+  date: string;
+  missing_pct: number;
+}
+
+export interface RegionSummary {
+  n_points: number;
+  date_range: [string, string] | null;
+  vars_per_cell_avg: number;
+  gaps: RegionGap[];
+}
+
+export interface DiffPreviewSampleRow {
+  lat: number;
+  lon: number;
+  date: string;
+  variable: string;
+  missing_mask: number;
+}
+
+export interface DiffPreview {
+  requested_cells: number;
+  missing_cells: number;
+  savings_pct: number;
+  sample_missing: DiffPreviewSampleRow[];
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const j = await r.json();
+      if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return (await r.json()) as T;
+}
+
+async function requestArrowOrJson<T>(url: string): Promise<T[]> {
+  const r = await fetch(url, { headers: { Accept: "application/vnd.apache.arrow.stream, application/json" } });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const j = await r.json();
+      if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  const ct = r.headers.get("content-type") ?? "";
+  if (ct.includes("arrow")) {
+    const { tableFromIPC } = await import("apache-arrow");
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const table = tableFromIPC(buf);
+    return table.toArray().map((row: { toJSON: () => unknown }) => row.toJSON()) as T[];
+  }
+  return (await r.json()) as T[];
+}
+
+export const api = {
+  version: () => request<{ version: string }>("/api/version"),
+  datasets: () => request<DatasetInfo[]>("/api/datasets"),
+  dataset: (name: string) => request<DatasetInfo>(`/api/datasets/${encodeURIComponent(name)}`),
+  stats: (name: string) => request<StorageStats>(`/api/stats/${encodeURIComponent(name)}`),
+  settings: () => request<UserSettings>("/api/settings"),
+  saveSettings: (body: Partial<UserSettings>) =>
+    request<UserSettings>("/api/settings", { method: "POST", body: JSON.stringify(body) }),
+  validatePath: (path: string) =>
+    request<PathValidation>(
+      `/api/settings/validate-path?path=${encodeURIComponent(path)}`,
+    ),
+  pickDirectory: () => request<PathValidation>("/api/settings/pick-directory", { method: "POST" }),
+  estimate: (body: {
+    dataset: string;
+    variables: string[];
+    start_date: string;
+    end_date?: string | null;
+    area: [number, number, number, number];
+    hours: string[];
+    max_request_bytes?: number;
+  }) => request<EstimateResult>("/api/pipeline/estimate", { method: "POST", body: JSON.stringify(body) }),
+  startRun: (body: {
+    dataset: string;
+    variables: string[];
+    start_date: string;
+    end_date?: string | null;
+    area: [number, number, number, number];
+    hours: string[];
+  }) =>
+    request<{ run_id: string; dataset: string; status: string }>(
+      "/api/pipeline/run",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  query: (body: { dataset: string; sql: string; limit?: number }) =>
+    request<{
+      columns: string[];
+      rows: (string | number | null)[][];
+      row_count: number;
+      truncated: boolean;
+    }>("/api/query", { method: "POST", body: JSON.stringify(body) }),
+  credentialStatus: () => request<CredentialStatus>("/api/credentials/status"),
+  saveCredentials: (body: { url: string; key: string }) =>
+    request<CredentialStatus>("/api/credentials", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  testCredentials: () =>
+    request<CredentialTestResult>("/api/credentials/test", { method: "POST" }),
+
+  inventory: {
+    gridPoints: (params: {
+      dataset: string;
+      date_from?: string;
+      date_to?: string;
+      variable?: string;
+      format?: "json" | "arrow" | "auto";
+    }) => {
+      const q = new URLSearchParams({ dataset: params.dataset });
+      if (params.date_from) q.set("date_from", params.date_from);
+      if (params.date_to) q.set("date_to", params.date_to);
+      if (params.variable) q.set("variable", params.variable);
+      if (params.format) q.set("format", params.format);
+      return requestArrowOrJson<GridPoint>(`/api/inventory/grid-points?${q}`);
+    },
+    cellDetail: (params: { dataset: string; lat: number; lon: number }) => {
+      const q = new URLSearchParams({
+        dataset: params.dataset,
+        lat: String(params.lat),
+        lon: String(params.lon),
+      });
+      return request<CellDetail>(`/api/inventory/cell-detail?${q}`);
+    },
+    regionSummary: (body: { dataset: string; polygon: [number, number][] }) =>
+      request<RegionSummary>("/api/inventory/region-summary", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
+  diffPreview: (body: {
+    dataset: string;
+    area: [number, number, number, number];
+    date_from: string;
+    date_to: string;
+    hours: number[];
+    variables: string[];
+  }) =>
+    request<DiffPreview>("/api/pipeline/diff-preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  startRunWithDiff: (body: {
+    dataset: string;
+    variables: string[];
+    start_date: string;
+    end_date?: string | null;
+    area: [number, number, number, number];
+    hours: string[];
+    apply_diff: boolean;
+  }) =>
+    request<{ run_id: string; dataset: string; status: string }>(
+      "/api/pipeline/run",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+};

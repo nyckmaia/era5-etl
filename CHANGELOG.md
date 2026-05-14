@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.6.0] - 2026-05-14
+
+### Added
+
+- **Cell-level coverage index** (`<base>/climate_data_store_db/<dataset>/_coverage.duckdb`).
+  One row per `(latitude, longitude, date, variable)` with a 24-bit
+  `hours_mask`. Backed by `CoverageIndex` in `storage/coverage.py`. New
+  CLI `era5 coverage rebuild --dataset {era5,era5-land,all}` populates
+  it from existing parquet; `download` and `update` auto-rebuild on
+  first use if the file is missing.
+- **Smart-diff downloads.** `request_planner.plan_with_diff` expands a
+  request into cells, joins the coverage index, regroups missing cells
+  (4-connected components for non-contiguous holes), and runs the
+  existing area→days→variable cascade only on the leftovers.
+  Default ON: `era5 download --apply-diff/--no-apply-diff` (defaults
+  true). Same behavior surfaced on `POST /api/pipeline/run` via the new
+  `apply_diff` field.
+- **Inventory web API** (`src/era5_etl/web/routes/inventory.py`):
+  - `GET /api/inventory/grid-points?dataset=&date_from=&date_to=&variable=&format=auto|json|arrow`
+    returns one row per cell with `days` and `vars` counts. Decimates
+    to Apache Arrow IPC for >5000 points.
+  - `GET /api/inventory/cell-detail?dataset=&lat=&lon=` returns nested
+    `dates -> variables -> hours[]`.
+  - `POST /api/inventory/region-summary` aggregates a polygon to
+    `n_points`, `date_range`, `vars_per_cell_avg`, `gaps[]`.
+  - `POST /api/pipeline/diff-preview` returns
+    `{requested_cells, missing_cells, savings_pct, sample_missing[≤100]}`
+    so the wizard can show "87% already cached".
+- **Inventory page (Web UI)** at `/inventory` — Deck.gl + MapLibre map
+  focused on Brazil with grid-point overlay, hover popups, click
+  detail, rectangle/lasso/click selection, region summary panel,
+  binary/intensity colormap toggle, "Baixar dados faltantes para esta
+  região" CTA that hands off to the Download Wizard.
+- **Smart Diff step in Download Wizard.** New step between Period and
+  Confirm shows total/missing/savings cards plus a toggle between
+  "Baixar apenas o que falta (recomendado)" and "Baixar tudo
+  (sobrescrever)".
+
+### Changed
+
+- **Tile-based parquet sort.** `_sort_for_storage` now uses transient
+  `_lat_tile = floor(lat/5)` / `_lon_tile = floor(lon/5)` columns for
+  ordering, then drops them before writing. Row-group min/max
+  statistics become tight on **both** lat and lon → DuckDB prunes
+  row-groups for `WHERE lat BETWEEN ... AND lon BETWEEN ...` queries.
+  No change to the parquet schema (latitude/longitude column names
+  preserved); no change to the Hive partition layout (`date=` only).
+- **`merge_into_partitioned_parquet` upserts the coverage index** at
+  the end of every successful write. Failures are logged and
+  non-fatal: the parquet on disk is canonical, coverage is derived
+  state and can be rebuilt from it.
+- **`paths.py` gains `base_dir_from_dataset_dir` and
+  `base_dir_from_netcdf_dir`** so writers and downloaders never have
+  to walk parents inline.
+
+### Test status
+
+- 306 tests passing (was 259). 47 new tests covering coverage index,
+  tile-sort, smart-diff planner, inventory routes, diff preview, and
+  the apply_diff wiring.
+
+---
+
 ## [0.5.0] - 2026-05-14
 
 ### Changed
