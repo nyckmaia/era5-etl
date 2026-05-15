@@ -263,3 +263,48 @@ def test_concurrent_writes_to_same_partition_serialise(tmp_path: Path) -> None:
         f"Expected {2 * len(df_a)} rows, got {len(readback)}"
     )
     assert set(readback["hour_utc"].to_list()) == {0, 12}
+
+
+# ----------------------------------------------------------------------
+# Corrupt-file resilience: a half-written parquet left by a crashed prior
+# run must not block a fresh merge. The partition self-heals.
+# ----------------------------------------------------------------------
+
+
+def test_corrupt_existing_partition_file_is_skipped_and_replaced(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A corrupt parquet in an existing partition must be skipped (with a
+    WARNING) and replaced by the clean merge output -- not crash the
+    conversion with "Invalid thrift" / "must end with PAR1".
+    """
+    parquet_dir = resolve_dataset_dir(tmp_path, "era5-land")
+
+    # First, lay down a valid partition.
+    df1 = _grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=280.0)
+    merge_into_partitioned_parquet(df1, parquet_dir)
+
+    # Corrupt the on-disk file the way a killed worker would (truncated /
+    # garbage instead of a valid parquet footer).
+    partition_dir = parquet_dir / "date=2024-01-01"
+    existing = sorted(partition_dir.glob("*.parquet"))
+    assert len(existing) == 1
+    existing[0].write_bytes(b"PAR1\x00\x00not-a-real-parquet-footer")
+
+    # A new merge into the same partition must succeed and heal the file.
+    df2 = _grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=290.0)
+    with caplog.at_level("WARNING", logger=pm_module.__name__):
+        merge_into_partitioned_parquet(df2, parquet_dir)
+
+    assert any(
+        "Skipping unreadable partition file" in rec.getMessage()
+        for rec in caplog.records
+    ), f"Expected a skip-warning; got {[r.getMessage() for r in caplog.records]}"
+
+    files = sorted(partition_dir.glob("*.parquet"))
+    assert len(files) == 1
+    readback = pl.read_parquet(files[0])
+    # The corrupt file's data is gone (reproducible from CDS); the new
+    # write's data is present and readable.
+    assert len(readback) == len(df2)
+    assert (readback["t2m"] == 290.0).all()

@@ -95,7 +95,7 @@ def merge_into_partitioned_parquet(
             new_payload = df_part.drop("date")
 
             if existing_files:
-                existing = _read_partition_payload(existing_files)
+                existing = _read_partition_payload(existing_files, log)
                 merged = _merge_by_key(existing, new_payload)
             else:
                 merged = new_payload
@@ -160,14 +160,38 @@ def _sort_for_storage(df: pl.DataFrame) -> pl.DataFrame:
     return df.sort(sort_cols)
 
 
-def _read_partition_payload(files: list[Path]) -> pl.DataFrame:
+def _read_partition_payload(
+    files: list[Path], logger: logging.Logger | None = None
+) -> pl.DataFrame:
     """Read all parquet files in a partition into a single DataFrame.
 
     The date column is excluded -- partition files don't carry it (it lives
     in the directory name). Schemas across files may differ (variable-split
     chunks), so we use ``diagonal_relaxed`` concat to align them with nulls.
+
+    **Corrupt-file resilience.** A parquet file left half-written by a
+    crashed/killed prior run reads as "Invalid thrift" / "must end with
+    PAR1". Because ERA5/ERA5-LAND data is immutable and the merge that
+    follows rewrites the whole partition, a corrupt existing file is
+    treated as *absent*: we log a warning and skip it. The caller passes
+    every existing file (including the corrupt one) to
+    ``_replace_partition_files``, which deletes them after the clean
+    rewrite -- so the partition self-heals on the next write.
     """
-    parts = [pl.read_parquet(p) for p in files]
+    log = logger or logging.getLogger(__name__)
+    parts: list[pl.DataFrame] = []
+    for p in files:
+        try:
+            parts.append(pl.read_parquet(p))
+        except Exception as exc:  # noqa: BLE001 -- any unreadable file is quarantined
+            log.warning(
+                "Skipping unreadable partition file %s (will be replaced on "
+                "merge): %s",
+                p,
+                exc,
+            )
+    if not parts:
+        return pl.DataFrame()
     if len(parts) == 1:
         return parts[0]
     return pl.concat(parts, how="diagonal_relaxed")
