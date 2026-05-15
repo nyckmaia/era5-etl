@@ -8,18 +8,22 @@ Layout (a user-configurable ``base_dir`` is the root)::
 
     <base_dir>/
     +-- climate_data_store_db/
-    |   +-- era5/
-    |   |   +-- date=YYYY-MM-DD/
-    |   |   |   +-- part-N.parquet
-    |   |   +-- _manifest.json
-    |   |   +-- era5.duckdb
-    |   +-- era5-land/
-    |       +-- date=YYYY-MM-DD/
-    |       +-- _manifest.json
-    |       +-- era5-land.duckdb
-    +-- _tmp_netcdf/
         +-- era5/
+        |   +-- date=YYYY-MM-DD/
+        |   |   +-- part-N.parquet
+        |   +-- _manifest.json
+        |   +-- era5.duckdb
         +-- era5-land/
+        |   +-- date=YYYY-MM-DD/
+        |   +-- _manifest.json
+        |   +-- era5-land.duckdb
+        +-- _tmp_netcdf/        (temporary; removed after conversion)
+            +-- era5/
+            +-- era5-land/
+
+``_tmp_netcdf`` lives *inside* ``climate_data_store_db`` so everything the
+tool manages is contained in the single user-chosen storage root, and so it
+can be wiped wholesale once conversion finishes.
 """
 
 from __future__ import annotations
@@ -97,17 +101,26 @@ def base_dir_from_dataset_dir(parquet_dir: str | Path) -> Path:
 
 
 def resolve_netcdf_temp_dir(base_dir: str | Path, dataset: str) -> Path:
-    """Return the per-dataset temporary NetCDF directory."""
+    """Return the per-dataset temporary NetCDF directory.
+
+    Lives *inside* the storage root (``<root>/climate_data_store_db/
+    _tmp_netcdf/<dataset>``) so all tool-managed files are contained in the
+    single user-chosen folder and the temp tree can be removed wholesale
+    after conversion.
+    """
     _validate_dataset_name(dataset)
-    return resolve_base_dir(base_dir) / NETCDF_TMP_DIRNAME / dataset
+    return resolve_storage_root(base_dir) / NETCDF_TMP_DIRNAME / dataset
 
 
 def base_dir_from_netcdf_dir(netcdf_dir: str | Path) -> Path | None:
     """Inverse of :func:`resolve_netcdf_temp_dir`.
 
-    Given a path of the form ``<base>/_tmp_netcdf/<dataset>/``, return
-    ``<base>``. Returns ``None`` if the layout doesn't match (caller
-    supplied a custom ``output_dir`` and should pass ``base_dir`` explicitly).
+    Given ``<root>/climate_data_store_db/_tmp_netcdf/<dataset>/`` return the
+    storage root (``<root>/climate_data_store_db``). That value is accepted
+    everywhere a ``base_dir`` is expected because :func:`resolve_storage_root`
+    is idempotent on the storage root. Returns ``None`` if the layout doesn't
+    match (caller supplied a custom ``output_dir`` and should pass
+    ``base_dir`` explicitly).
     """
     p = Path(netcdf_dir).resolve()
     if p.parent.name != NETCDF_TMP_DIRNAME:

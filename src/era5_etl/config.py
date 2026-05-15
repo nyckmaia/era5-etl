@@ -229,8 +229,9 @@ class PipelineConfig(BaseModel):
             <base_dir>/
               climate_data_store_db/
                 <dataset>/                    -> Parquet partitions + manifest + DuckDB
-              _tmp_netcdf/
-                <dataset>/                    -> raw NetCDF downloads (temporary)
+                _tmp_netcdf/
+                  <dataset>/                  -> raw NetCDF (temporary; removed
+                                                 after a successful conversion)
         """
         base = resolve_base_dir(base_dir)
         netcdf_dir = resolve_netcdf_temp_dir(base, dataset)

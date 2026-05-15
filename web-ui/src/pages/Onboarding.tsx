@@ -257,34 +257,39 @@ function LayoutPreview({ rootPath }: { rootPath: string }) {
         {sep}
         {"\n"}
         <span className="text-ocean-700">
-          ├── {STORAGE_ROOT_DIRNAME}/
+          └── {STORAGE_ROOT_DIRNAME}/
         </span>
         <span className="text-ink-400">
-          {"           ← Parquet + DuckDB per dataset (persistent)"}
-        </span>
-        {"\n"}
-        <span className="text-ink-500">
-          {"│       ├── era5/\n"}
-          {"│       └── era5-land/\n"}
-        </span>
-        <span className="text-ocean-700">
-          └── {NETCDF_TMP_DIRNAME}/
-        </span>
-        <span className="text-ink-400">
-          {"                    ← Raw NetCDF downloads (temporary)"}
+          {"           ← tudo que a ferramenta gerencia fica aqui"}
         </span>
         {"\n"}
         <span className="text-ink-500">
           {"        ├── era5/\n"}
-          {"        └── era5-land/"}
+          {"        ├── era5-land/    "}
+        </span>
+        <span className="text-ink-400">
+          {"← Parquet + DuckDB + manifest (persistente)"}
+        </span>
+        {"\n"}
+        <span className="text-ocean-700">
+          {"        └── "}
+          {NETCDF_TMP_DIRNAME}/
+        </span>
+        <span className="text-ink-400">
+          {"      ← NetCDF temporário (apagado após conversão)"}
+        </span>
+        {"\n"}
+        <span className="text-ink-500">
+          {"            ├── era5/\n"}
+          {"            └── era5-land/"}
         </span>
       </pre>
       <p className="mt-2 text-ink-500">
         Parquet partitions, the DuckDB file, and the per-dataset manifest
         all live under <code className="rounded bg-white px-1">{STORAGE_ROOT_DIRNAME}/</code>.
         The <code className="rounded bg-white px-1">{NETCDF_TMP_DIRNAME}/</code>{" "}
-        folder is safe to delete between runs (it's only the raw CDS
-        download buffer).
+        folder now lives <em>inside</em> it and is removed automatically
+        after a successful NetCDF → Parquet conversion.
       </p>
     </div>
   );

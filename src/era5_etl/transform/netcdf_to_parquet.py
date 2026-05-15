@@ -222,7 +222,36 @@ class NetCDFToParquetConverter:
             f"Conversion complete: {stats['converted']} converted, "
             f"{stats['skipped']} skipped, {stats['failed']} failed"
         )
+
+        # After a fully successful run, remove the now-empty temp tree:
+        # the per-dataset dir and its `_tmp_netcdf` parent (only if empty,
+        # so a sibling dataset's temp dir is never clobbered). Skipped when
+        # any file failed -- those .nc were intentionally kept for retry.
+        if cleanup and stats["failed"] == 0:
+            self._remove_empty_temp_tree(input_dir)
+
         return stats
+
+    def _remove_empty_temp_tree(self, input_dir: Path) -> None:
+        """rmdir ``input_dir`` and its ``_tmp_netcdf`` parent if both empty.
+
+        Uses ``Path.rmdir`` (not ``rmtree``) so a non-empty directory --
+        e.g. one still holding a failed .nc -- is left untouched.
+        """
+        from era5_etl.storage.paths import NETCDF_TMP_DIRNAME
+
+        try:
+            input_dir.rmdir()
+            self.logger.info("Removed empty temp dir %s", input_dir)
+        except OSError:
+            return  # not empty (failed files) or already gone -- keep it
+        parent = input_dir.parent
+        if parent.name == NETCDF_TMP_DIRNAME:
+            try:
+                parent.rmdir()
+                self.logger.info("Removed empty temp dir %s", parent)
+            except OSError:
+                pass  # another dataset's temp dir still present
 
     def _process_dataset(self, ds: xr.Dataset) -> xr.Dataset:
         """Apply transforms: rename variables, convert units, calc wind speed."""

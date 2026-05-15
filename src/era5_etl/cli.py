@@ -784,7 +784,8 @@ def ui(
     console.print(f"[green]Starting ERA5-ETL UI on http://127.0.0.1:{port}/[/green]")
     console.print(
         f"[cyan]Storage root:[/cyan] {resolved_dir} "
-        f"[dim](from {source}; climate_data_store_db/ + _tmp_netcdf/ live here)[/dim]"
+        f"[dim](from {source}; climate_data_store_db/ lives here, "
+        f"with _tmp_netcdf/ inside it)[/dim]"
     )
     uvicorn.run(app_instance, host="127.0.0.1", port=port, log_level="info")
 

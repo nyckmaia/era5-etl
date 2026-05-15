@@ -7,6 +7,7 @@ import pytest
 from era5_etl.storage.paths import (
     NETCDF_TMP_DIRNAME,
     STORAGE_ROOT_DIRNAME,
+    base_dir_from_netcdf_dir,
     ensure_dataset_dirs,
     resolve_base_dir,
     resolve_dataset_dir,
@@ -59,8 +60,23 @@ def test_duckdb_path_uses_dataset_filename(tmp_path: Path):
 
 
 def test_netcdf_temp_dir(tmp_path: Path):
+    # _tmp_netcdf now lives INSIDE the storage root, not as a sibling.
     p = resolve_netcdf_temp_dir(tmp_path, "era5")
-    assert p == tmp_path.resolve() / NETCDF_TMP_DIRNAME / "era5"
+    assert (
+        p
+        == tmp_path.resolve() / STORAGE_ROOT_DIRNAME / NETCDF_TMP_DIRNAME / "era5"
+    )
+
+
+def test_base_dir_from_netcdf_dir_roundtrips_to_storage_root(tmp_path: Path):
+    nc = resolve_netcdf_temp_dir(tmp_path, "era5-land")
+    recovered = base_dir_from_netcdf_dir(nc)
+    # Recovered value is the storage root, which resolve_dataset_dir accepts
+    # idempotently -- so it round-trips back to the same dataset dir.
+    assert recovered == tmp_path.resolve() / STORAGE_ROOT_DIRNAME
+    assert resolve_dataset_dir(recovered, "era5-land") == resolve_dataset_dir(
+        tmp_path, "era5-land"
+    )
 
 
 def test_ensure_dataset_dirs_creates_both(tmp_path: Path):
