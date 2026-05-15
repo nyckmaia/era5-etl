@@ -95,11 +95,11 @@ export function InventoryMap(props: InventoryMapProps) {
         radiusMinPixels: 9,
         radiusMaxPixels: 44,
         getPosition: (d) => [d.lon, d.lat],
-        getRadius: (d) => 12 + Math.log10(Math.max(1, d.days)) * 7,
+        getRadius: (d) => 12 + Math.log10(Math.max(1, Number(d.days))) * 7,
         getFillColor: (d) =>
           colormap === "binary"
             ? [40, 100, 200, 220]
-            : intensityColor((d.vars ?? 0) / Math.max(1, totalVars)),
+            : intensityColor(Number(d.vars ?? 0) / Math.max(1, totalVars)),
         getLineColor: [255, 255, 255, 220],
         lineWidthMinPixels: 1.5,
         stroked: true,

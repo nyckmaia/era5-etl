@@ -123,7 +123,19 @@ def grid_points(
     # here -- otherwise the Arrow path (used for >5000 cells, e.g. a
     # Brazil-wide ERA5 download) ships latitude/longitude and the map's
     # getPosition reads undefined => points render off-world (invisible).
+    import polars as pl
+
     df = df.rename({"latitude": "lat", "longitude": "lon"})
+    # days/vars come back as int64. The Arrow IPC path then decodes them
+    # as JS BigInt, which blows up the map's getRadius (Math.max on a
+    # BigInt throws) and leaves the whole ScatterplotLayer unrendered.
+    # int32 round-trips as a plain JS number and also halves the bytes.
+    df = df.with_columns(
+        pl.col("lat").cast(pl.Float64),
+        pl.col("lon").cast(pl.Float64),
+        pl.col("days").cast(pl.Int32),
+        pl.col("vars").cast(pl.Int32),
+    )
 
     use_arrow = format == "arrow" or (format == "auto" and df.height > JSON_THRESHOLD)
     if use_arrow:
