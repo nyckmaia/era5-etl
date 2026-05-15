@@ -91,11 +91,17 @@ export function InventoryMap(props: InventoryMapProps) {
         data: points,
         visible: showPoints,
         pickable: true,
-        radiusUnits: "pixels",
-        radiusMinPixels: 9,
-        radiusMaxPixels: 44,
+        // World-space radius => points scale with zoom: tiny dots when
+        // zoomed out on all of Brazil, growing circles when zoomed in.
+        // ~11 km is below the 0.25deg (~27 km) ERA5 cell spacing so
+        // neighbours stay distinct. Pixel clamps keep them visible far
+        // out and capped when zoomed in very close.
+        radiusUnits: "meters",
+        radiusMinPixels: 1.5,
+        radiusMaxPixels: 60,
         getPosition: (d) => [d.lon, d.lat],
-        getRadius: (d) => 12 + Math.log10(Math.max(1, Number(d.days))) * 7,
+        getRadius: (d) =>
+          9000 + Math.log10(Math.max(1, Number(d.days))) * 4000,
         getFillColor: (d) =>
           colormap === "binary"
             ? [40, 100, 200, 220]
