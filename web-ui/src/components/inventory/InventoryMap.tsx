@@ -1,7 +1,7 @@
 import { DeckGL } from "@deck.gl/react";
 import { ScatterplotLayer, PolygonLayer } from "@deck.gl/layers";
 import type { PickingInfo } from "@deck.gl/core";
-import maplibregl from "maplibre-gl";
+import maplibregl, { type StyleSpecification } from "maplibre-gl";
 import { Map as MapLibreMap } from "react-map-gl/maplibre";
 import { useMemo, useState } from "react";
 
@@ -19,9 +19,32 @@ const INITIAL_VIEW = {
   bearing: 0,
 };
 
-// Free OSM-style basemap; no token needed.
-const BASEMAP_STYLE =
-  "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+// Self-contained raster basemap. A remote vector style.json (carto) pulls
+// style + glyphs + sprite + tiles from a CDN — several failure points, and
+// if any is blocked the user sees points floating on a blank canvas. A
+// single OSM raster source + a background layer guarantees the basemap
+// renders (and at minimum shows a land-coloured backdrop) so grid points
+// are always overlaid on a visible map.
+const BASEMAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    "osm-raster": {
+      type: "raster",
+      tiles: [
+        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+      maxzoom: 19,
+    },
+  },
+  layers: [
+    { id: "bg", type: "background", paint: { "background-color": "#e6eef3" } },
+    { id: "osm", type: "raster", source: "osm-raster" },
+  ],
+};
 
 export type SelectionMode = "none" | "click" | "rectangle" | "lasso";
 

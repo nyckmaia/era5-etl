@@ -118,13 +118,14 @@ export function QueryPage() {
   });
 
   const runQuery = useMutation({
-    mutationFn: async () => {
-      if (!activeTab) throw new Error("No active tab");
+    mutationFn: async (sqlArg?: string) => {
+      const sql = sqlArg ?? activeTab?.sql;
+      if (!sql) throw new Error("No active tab");
       const t0 = performance.now();
-      const res = await api.query({ sql: activeTab.sql, limit });
+      const res = await api.query({ sql, limit });
       const elapsed = Math.round(performance.now() - t0);
       await api.queryHistory.append(focusedView, {
-        sql: activeTab.sql,
+        sql,
         rows: res.row_count,
         elapsed_ms: elapsed,
       });
@@ -194,19 +195,31 @@ export function QueryPage() {
     );
   }
 
+  function tryFormat(sql: string): string {
+    try {
+      return formatSql(sql, {
+        language: "duckdb",
+        keywordCase: "upper",
+        indentStyle: "standard",
+      });
+    } catch {
+      return sql; // Leave SQL untouched if it cannot be parsed.
+    }
+  }
+
   function handleFormat() {
     if (!activeTab) return;
-    try {
-      updateActiveSql(
-        formatSql(activeTab.sql, {
-          language: "duckdb",
-          keywordCase: "upper",
-          indentStyle: "standard",
-        }),
-      );
-    } catch {
-      // Leave SQL untouched if it cannot be parsed.
-    }
+    updateActiveSql(tryFormat(activeTab.sql));
+  }
+
+  // "Run query" (button + Ctrl+Enter): auto-format the active tab, then
+  // execute the formatted text (state updates are async, so the formatted
+  // SQL is passed explicitly rather than read back from the tab).
+  function formatAndRun() {
+    if (!activeTab) return;
+    const fmt = tryFormat(activeTab.sql);
+    updateActiveSql(fmt);
+    runQuery.mutate(fmt);
   }
 
   const schemaColumns = schemaQuery.data?.columns ?? [];
@@ -278,10 +291,7 @@ export function QueryPage() {
                   path={`tab-${activeTab.id}.sql`}
                   value={activeTab.sql}
                   onChange={(v) => updateActiveSql(v)}
-                  onRun={() => {
-                    handleFormat();
-                    runQuery.mutate();
-                  }}
+                  onRun={formatAndRun}
                   schemaColumns={schemaColumns}
                   viewName={focusedView}
                 />
@@ -357,7 +367,7 @@ export function QueryPage() {
                 </button>
                 <button
                   className="btn-primary"
-                  onClick={() => runQuery.mutate()}
+                  onClick={formatAndRun}
                   disabled={runQuery.isPending || !activeTab}
                 >
                   {runQuery.isPending ? (
