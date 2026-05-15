@@ -146,6 +146,14 @@ export interface QueryHistoryEntry {
   favorite: boolean;
 }
 
+export interface UfBbox {
+  uf: string;
+  north: number;
+  west: number;
+  south: number;
+  east: number;
+}
+
 export interface TemplateItem {
   id: string;
   name: string;
@@ -279,6 +287,9 @@ export const api = {
     a.download = `query-export.${fmt}`;
     a.click();
     URL.revokeObjectURL(url);
+  },
+  regions: {
+    uf: () => request<UfBbox[]>("/api/regions/uf"),
   },
   queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
   queryHistory: {

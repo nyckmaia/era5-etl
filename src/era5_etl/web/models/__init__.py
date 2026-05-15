@@ -206,6 +206,16 @@ class TemplateItem(BaseModel):
     category: str | None = None
 
 
+class UfBboxOut(BaseModel):
+    """A Brazilian state (UF) and its bounding box [N, W, S, E]."""
+
+    uf: str
+    north: float
+    west: float
+    south: float
+    east: float
+
+
 class VersionOut(BaseModel):
     version: str
 
@@ -256,6 +266,7 @@ __all__ = [
     "QueryHistoryAppendIn",
     "QueryHistoryPatch",
     "TemplateItem",
+    "UfBboxOut",
     "VersionOut",
     "CredentialStatusOut",
     "CredentialsIn",

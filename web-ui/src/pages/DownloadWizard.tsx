@@ -359,6 +359,58 @@ function StepVariables({
   );
 }
 
+/**
+ * Coordinate input that tolerates intermediate text ("", "-", "-12.")
+ * while typing. A plain number input bound to NaN (what
+ * `parseFloat("-")` yields) made it impossible to type negatives.
+ */
+function CoordInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  const focused = useRef(false);
+
+  // Sync from props (preset / UF selection) only while not actively typing.
+  useEffect(() => {
+    if (!focused.current) setText(String(value));
+  }, [value]);
+
+  return (
+    <input
+      className="input mt-1 font-mono"
+      type="text"
+      inputMode="decimal"
+      value={text}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onBlur={() => {
+        focused.current = false;
+        setText(String(value));
+      }}
+      onChange={(e) => {
+        const t = e.target.value;
+        if (!/^-?\d*\.?\d*$/.test(t)) return; // reject non-numeric chars
+        setText(t);
+        const n = Number(t);
+        if (t !== "" && t !== "-" && t !== "." && Number.isFinite(n)) {
+          onCommit(n);
+        }
+      }}
+    />
+  );
+}
+
+const UF_LIST = [
+  "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO",
+  "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI",
+  "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
+];
+
 function StepArea({
   value,
   onChange,
@@ -366,6 +418,33 @@ function StepArea({
   value: [number, number, number, number];
   onChange: (v: [number, number, number, number]) => void;
 }) {
+  const [selectedUfs, setSelectedUfs] = useState<string[]>([]);
+  const { data: ufBboxes } = useQuery({
+    queryKey: ["regions-uf"],
+    queryFn: api.regions.uf,
+  });
+
+  function applyUfs(ufs: string[]) {
+    setSelectedUfs(ufs);
+    if (ufs.length === 0 || !ufBboxes) return;
+    const sel = ufBboxes.filter((b) => ufs.includes(b.uf));
+    if (sel.length === 0) return;
+    // Union covering every selected state: widest N/E, lowest W/S.
+    const north = Math.max(...sel.map((b) => b.north));
+    const west = Math.min(...sel.map((b) => b.west));
+    const south = Math.min(...sel.map((b) => b.south));
+    const east = Math.max(...sel.map((b) => b.east));
+    onChange([north, west, south, east]);
+  }
+
+  function toggleUf(uf: string) {
+    applyUfs(
+      selectedUfs.includes(uf)
+        ? selectedUfs.filter((x) => x !== uf)
+        : [...selectedUfs, uf],
+    );
+  }
+
   return (
     <div className="space-y-4">
       <h2 className="text-lg font-medium">Geographic area</h2>
@@ -374,13 +453,66 @@ function StepArea({
           <button
             key={name}
             className="btn-outline"
-            onClick={() => onChange(bbox)}
+            onClick={() => {
+              setSelectedUfs([]);
+              onChange(bbox);
+            }}
           >
             <MapPin className="h-3.5 w-3.5" />
             {name}
           </button>
         ))}
       </div>
+
+      <div className="rounded-xl border border-ink-200 p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+            Brasil — estados (UF)
+          </span>
+          <div className="flex gap-3 text-xs">
+            <button
+              type="button"
+              className="text-ocean-600 hover:underline"
+              onClick={() => applyUfs([...UF_LIST])}
+            >
+              Selecionar todos
+            </button>
+            <button
+              type="button"
+              className="text-ink-500 hover:underline"
+              onClick={() => setSelectedUfs([])}
+            >
+              Limpar
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {UF_LIST.map((uf) => {
+            const on = selectedUfs.includes(uf);
+            return (
+              <button
+                key={uf}
+                type="button"
+                onClick={() => toggleUf(uf)}
+                className={
+                  on
+                    ? "rounded-md bg-ocean-600 px-2.5 py-1 text-xs font-medium text-white"
+                    : "rounded-md bg-ink-100 px-2.5 py-1 text-xs font-medium text-ink-600 hover:bg-ink-200"
+                }
+              >
+                {uf}
+              </button>
+            );
+          })}
+        </div>
+        {selectedUfs.length > 0 ? (
+          <p className="mt-2 text-[11px] text-ink-400">
+            {selectedUfs.length} estado(s) — bounding box ajustado para
+            cobrir a seleção.
+          </p>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {[
           { label: "North", idx: 0 },
@@ -389,15 +521,19 @@ function StepArea({
           { label: "East", idx: 3 },
         ].map(({ label, idx }) => (
           <label key={label} className="block">
-            <span className="text-xs uppercase tracking-wide text-ink-500">{label}</span>
-            <input
-              className="input mt-1 font-mono"
-              type="number"
-              step="0.1"
+            <span className="text-xs uppercase tracking-wide text-ink-500">
+              {label}
+            </span>
+            <CoordInput
               value={value[idx]}
-              onChange={(e) => {
-                const next = [...value] as [number, number, number, number];
-                next[idx] = Number.parseFloat(e.target.value);
+              onCommit={(n) => {
+                const next = [...value] as [
+                  number,
+                  number,
+                  number,
+                  number,
+                ];
+                next[idx] = n;
                 onChange(next);
               }}
             />
