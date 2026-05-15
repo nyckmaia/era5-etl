@@ -14,8 +14,13 @@ import xarray as xr
 
 from era5_etl.config import StorageConfig, TransformConfig
 from era5_etl.constants import KELVIN_TO_CELSIUS
+from era5_etl.datasets import DatasetRegistry
 from era5_etl.exceptions import ProcessingError
 from era5_etl.utils.variables import get_var_name_map
+
+# CDS ERA5 NetCDF often carries these scalar coords (ensemble member /
+# ERA5-vs-ERA5T flag). They are never used downstream; drop before Parquet.
+_UNUSED_NETCDF_COLS = ("number", "expver")
 
 
 def _convert_single_file(
@@ -23,6 +28,7 @@ def _convert_single_file(
     transform_config: TransformConfig,
     storage_config: StorageConfig,
     output_dir: Path,
+    dataset: str | None = None,
 ) -> tuple[str, bool, str]:
     """Convert a single NetCDF file to Parquet (top-level function for multiprocessing).
 
@@ -31,6 +37,8 @@ def _convert_single_file(
         transform_config: Transformation settings.
         storage_config: Storage/compression settings.
         output_dir: Directory for Parquet output.
+        dataset: Dataset name (era5/era5-land); drives lat/lon decimal
+            rounding. ``None`` keeps the dataset-agnostic behavior.
 
     Returns:
         Tuple of (filename, success, error_message).
@@ -40,6 +48,7 @@ def _convert_single_file(
             transform_config=transform_config,
             storage_config=storage_config,
             output_dir=output_dir,
+            dataset=dataset,
         )
         converter.convert_file(nc_path)
         return (nc_path.name, True, "")
@@ -63,6 +72,7 @@ class NetCDFToParquetConverter:
         transform_config: TransformConfig,
         storage_config: StorageConfig,
         output_dir: Path,
+        dataset: str | None = None,
     ) -> None:
         """Initialize the converter.
 
@@ -70,10 +80,16 @@ class NetCDFToParquetConverter:
             transform_config: Transformation settings
             storage_config: Storage/compression settings
             output_dir: Directory for Parquet output
+            dataset: Dataset name (era5/era5-land). When set, latitude and
+                longitude are rounded to the dataset's grid precision
+                (ERA5=2dp, ERA5-LAND=1dp) and cast to Float32 before
+                writing. ``None`` keeps the legacy dataset-agnostic path
+                (used by unit tests that feed synthetic frames).
         """
         self.transform_config = transform_config
         self.storage_config = storage_config
         self.output_dir = output_dir
+        self.dataset = dataset
         self.logger = logging.getLogger(__name__)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -97,6 +113,8 @@ class NetCDFToParquetConverter:
             df = self._dataset_to_dataframe(ds)
             ds.close()
 
+            df = self._drop_unused_columns(df)
+            df = self._round_latlon(df)
             df = self._apply_float_precision(df)
 
             self._write_partitioned_parquet(df)
@@ -199,6 +217,7 @@ class NetCDFToParquetConverter:
                         self.transform_config,
                         self.storage_config,
                         self.output_dir,
+                        self.dataset,
                     )
                     futures[future] = nc_file
 
@@ -304,6 +323,39 @@ class NetCDFToParquetConverter:
                 ds[wind_var_name] = wind_speed
                 self.logger.debug(f"Calculated {wind_var_name} from {u_var} and {v_var}")
         return ds
+
+    def _drop_unused_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Drop the CDS ``number`` / ``expver`` coords if present (M03).
+
+        Defensive: older NetCDF without them is unaffected.
+        """
+        to_drop = [c for c in _UNUSED_NETCDF_COLS if c in df.columns]
+        if to_drop:
+            self.logger.debug("Dropping unused NetCDF columns: %s", to_drop)
+            df = df.drop(to_drop)
+        return df
+
+    def _round_latlon(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Round latitude/longitude to the dataset grid precision as Float32.
+
+        ERA5 (0.25 deg) -> 2 dp, ERA5-LAND (0.1 deg) -> 1 dp. No-op when the
+        converter was built without a ``dataset`` (legacy dataset-agnostic
+        path used by synthetic-frame unit tests). Runs before
+        ``_apply_float_precision``; since lat/lon are then already Float32,
+        that method (which only touches Float64) leaves them untouched --
+        no double rounding.
+        """
+        if self.dataset is None:
+            return df
+        if not ({"latitude", "longitude"} <= set(df.columns)):
+            return df
+        dec = DatasetRegistry.get(self.dataset).latlon_decimals
+        return df.with_columns(
+            [
+                pl.col("latitude").round(dec).cast(pl.Float32),
+                pl.col("longitude").round(dec).cast(pl.Float32),
+            ]
+        )
 
     def _apply_float_precision(self, df: pl.DataFrame) -> pl.DataFrame:
         """Cast Float64 columns to Float32 and round to configured decimal places.

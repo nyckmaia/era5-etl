@@ -218,11 +218,11 @@ manifesto.
 
 ```bash
 era5 query \
-  "SELECT date_trunc('day', valid_time) AS d, AVG(t2m) FROM era5_land_view GROUP BY 1 ORDER BY 1" \
+  "SELECT date_trunc('day', valid_time) AS d, AVG(t2m) FROM era5_land GROUP BY 1 ORDER BY 1" \
   --dataset era5-land --limit 50
 ```
 
-A view DuckDB (`<dataset>_view`) é criada sob demanda apontando para o
+A view DuckDB (`<dataset>` (hífens viram `_`: `era5-land` → view `era5_land`)) é criada sob demanda apontando para o
 diretório Parquet do dataset.
 
 **Pruning automático em duas camadas:**
@@ -240,7 +240,7 @@ Exemplo de query natural que aproveita as duas camadas:
 
 ```sql
 SELECT *
-FROM era5_land_view
+FROM era5_land
 WHERE date BETWEEN '2024-06-01' AND '2024-08-31'   -- partition pruning
   AND latitude  BETWEEN -25.0 AND -22.0            -- row-group pruning
   AND longitude BETWEEN -48.0 AND -45.0            -- row-group pruning
@@ -326,12 +326,12 @@ from era5_etl.storage.parquet_manager import ParquetManager
 
 mgr = ParquetManager(base_dir=Path("./data"), dataset="era5-land")
 conn = duckdb.connect(":memory:")
-mgr.create_duckdb_view(conn, "era5_land_view")
+mgr.create_duckdb_view(conn, "era5_land")
 
 df = conn.execute("""
     SELECT date_trunc('day', valid_time) AS day,
            AVG(t2m) AS avg_t2m
-    FROM era5_land_view
+    FROM era5_land
     WHERE valid_time BETWEEN '2024-01-01' AND '2024-01-31'
     GROUP BY 1 ORDER BY 1
 """).pl()

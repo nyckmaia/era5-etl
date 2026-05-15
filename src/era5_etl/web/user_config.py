@@ -31,8 +31,13 @@ class UserConfig:
     data_dir: str = ""
     default_dataset: str = "era5-land"
     last_pick_dir: str = ""
+    # Per-dataset display precision (Melhoria 02b). Render-only -- never
+    # mutates stored data. Shape:
+    #   {<dataset>: {"default_decimals": int, "default_method": "round"|"truncate",
+    #                "columns": {<col>: {"decimals": int, "method": str}}}}
+    display_precision: dict = field(default_factory=dict)
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict:
         return asdict(self)
 
 
@@ -62,10 +67,12 @@ def load_user_config() -> UserConfig:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         logger.warning("Failed to read %s: %s -- using defaults", path, exc)
         return UserConfig()
+    dp = data.get("display_precision", {})
     return UserConfig(
         data_dir=str(data.get("data_dir", "")),
         default_dataset=str(data.get("default_dataset", "era5-land")),
         last_pick_dir=str(data.get("last_pick_dir", "")),
+        display_precision=dp if isinstance(dp, dict) else {},
     )
 
 
@@ -80,12 +87,46 @@ def save_user_config(cfg: UserConfig) -> Path:
 
 
 def update_user_config(**changes: object) -> UserConfig:
-    """Read, apply ``changes``, persist, and return the new config."""
+    """Read, apply ``changes``, persist, and return the new config.
+
+    Scalar fields are str-coerced (back-compat); dict-valued fields such
+    as ``display_precision`` are stored as-is.
+    """
     current = load_user_config()
-    str_changes = {k: str(v) for k, v in changes.items() if hasattr(current, k)}
-    new = replace(current, **str_changes)  # type: ignore[arg-type]
+    applied = {
+        k: (v if isinstance(v, dict) else str(v))
+        for k, v in changes.items()
+        if hasattr(current, k)
+    }
+    new = replace(current, **applied)  # type: ignore[arg-type]
     save_user_config(new)
     return new
+
+
+def get_dataset_precision(dataset: str) -> dict:
+    """Return the display-precision config for ``dataset``.
+
+    Always returns a well-formed dict with sane defaults so callers never
+    need to handle missing keys.
+    """
+    cfg = load_user_config().display_precision.get(dataset, {})
+    return {
+        "default_decimals": int(cfg.get("default_decimals", 4)),
+        "default_method": cfg.get("default_method", "round"),
+        "columns": cfg.get("columns", {}),
+    }
+
+
+def set_dataset_precision(dataset: str, payload: dict) -> UserConfig:
+    """Persist the display-precision config for one dataset (merging)."""
+    cfg = load_user_config()
+    dp = dict(cfg.display_precision)
+    dp[dataset] = {
+        "default_decimals": int(payload.get("default_decimals", 4)),
+        "default_method": payload.get("default_method", "round"),
+        "columns": payload.get("columns", {}),
+    }
+    return update_user_config(display_precision=dp)
 
 
 __all__ = [

@@ -27,6 +27,7 @@ from rich.table import Table
 from era5_etl.__version__ import __version__
 from era5_etl.config import PipelineConfig
 from era5_etl.datasets import DatasetRegistry
+from era5_etl.storage.paths import view_name_for
 
 app = typer.Typer(
     name="era5-etl",
@@ -648,7 +649,7 @@ def query(
 
     try:
         conn = duckdb.connect(":memory:")
-        view_name = dataset.replace("-", "_") + "_view"
+        view_name = view_name_for(dataset)
         manager.create_duckdb_view(conn, view_name)
         result = conn.execute(sql).pl()
         console.print(f"[green]Query returned {len(result):,} rows[/green]\n")

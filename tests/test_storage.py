@@ -408,9 +408,9 @@ def test_natural_date_query_via_duckdb(tmp_path: Path):
         manager.write_dataframe(df)
 
     conn = duckdb.connect(":memory:")
-    manager.create_duckdb_view(conn, "era5_land_view")
+    manager.create_duckdb_view(conn, "era5_land")
     result = conn.execute(
-        "SELECT DISTINCT CAST(date AS VARCHAR) AS d FROM era5_land_view "
+        "SELECT DISTINCT CAST(date AS VARCHAR) AS d FROM era5_land "
         "WHERE date BETWEEN '2024-01-15' AND '2024-01-16' "
         "ORDER BY d"
     ).fetchall()

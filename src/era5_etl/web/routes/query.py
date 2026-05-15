@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.datasets import DatasetRegistry
 from era5_etl.storage.parquet_manager import ParquetManager
-from era5_etl.web.models import QueryIn, QueryOut
+from era5_etl.storage.paths import view_name_for
+from era5_etl.web.models import QueryIn, QueryOut, QuerySchemaOut, SchemaColumn
 
 router = APIRouter(prefix="/api/query", tags=["query"])
 
@@ -41,11 +42,12 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
     if not manager.exists():
         raise HTTPException(status_code=404, detail="No Parquet data for this dataset yet.")
 
-    view_name = body.dataset.replace("-", "_") + "_view"
+    view_name = view_name_for(body.dataset)
     conn = duckdb.connect(":memory:")
     try:
         manager.create_duckdb_view(conn, view_name)
         result = conn.execute(body.sql).fetch_arrow_table()
+        arrow_schema = result.schema
         df = result.to_pandas()
     except duckdb.Error as exc:
         raise HTTPException(status_code=400, detail=f"DuckDB error: {exc}") from exc
@@ -57,9 +59,50 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
         df = df.head(body.limit)
         truncated = True
 
+    from era5_etl.web._types import schema_python_types
+
     return QueryOut(
         columns=list(df.columns),
+        column_types=schema_python_types(arrow_schema),
         rows=df.astype(object).where(df.notnull(), None).values.tolist(),
         row_count=int(len(df)),
         truncated=truncated,
     )
+
+
+@router.get("/schema", response_model=QuerySchemaOut)
+def query_schema(dataset: str, request: Request) -> QuerySchemaOut:
+    """Return the dataset view's columns + short Python types.
+
+    Powers the SQL editor's autocomplete (Melhoria 01) and the
+    display-precision column list (Melhoria 02b). Returns an empty column
+    list (HTTP 200, not 404) when no parquet exists yet so the UI can
+    render gracefully before the first download.
+    """
+    import duckdb
+
+    if dataset not in DatasetRegistry.names():
+        raise HTTPException(status_code=400, detail=f"Unknown dataset: {dataset}")
+
+    view = view_name_for(dataset)
+    data_dir: Path = request.app.state.data_dir
+    manager = ParquetManager(data_dir, dataset)
+    if not manager.exists():
+        return QuerySchemaOut(view=view, columns=[])
+
+    from era5_etl.web._types import arrow_type_to_python
+
+    conn = duckdb.connect(":memory:")
+    try:
+        manager.create_duckdb_view(conn, view)
+        schema = conn.execute(f'SELECT * FROM "{view}" LIMIT 0').fetch_arrow_table().schema  # noqa: S608 -- view is a sanitized identifier
+    except duckdb.Error as exc:
+        raise HTTPException(status_code=400, detail=f"DuckDB error: {exc}") from exc
+    finally:
+        conn.close()
+
+    cols = [
+        SchemaColumn(name=schema.field(i).name, type=arrow_type_to_python(schema.field(i).type))
+        for i in range(len(schema))
+    ]
+    return QuerySchemaOut(view=view, columns=cols)

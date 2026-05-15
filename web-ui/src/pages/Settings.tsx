@@ -11,7 +11,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api, type CredentialTestResult } from "@/lib/api";
+import {
+  api,
+  type CredentialTestResult,
+  type PrecisionConfig,
+  type PrecisionMethod,
+} from "@/lib/api";
 import { cn } from "@/lib/format";
 
 // Mirror src/era5_etl/storage/paths.py:STORAGE_ROOT_DIRNAME.
@@ -44,7 +49,264 @@ export function SettingsPage() {
 
       <DataDirectorySection />
       <CredentialsSection />
+      <PrecisionSection />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Display precision
+// ---------------------------------------------------------------------------
+
+function PrecisionSection() {
+  const qc = useQueryClient();
+  const { data: datasets } = useQuery({
+    queryKey: ["datasets"],
+    queryFn: api.datasets,
+  });
+  const [dataset, setDataset] = useState<string>("era5-land");
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ["precision", dataset],
+    queryFn: () => api.precision.get(dataset),
+  });
+  const { data: schema } = useQuery({
+    queryKey: ["query-schema", dataset],
+    queryFn: () => api.querySchema(dataset),
+  });
+
+  const [draft, setDraft] = useState<PrecisionConfig | null>(null);
+
+  useEffect(() => {
+    if (config) setDraft(config);
+  }, [config]);
+
+  const save = useMutation({
+    mutationFn: (body: PrecisionConfig) => api.precision.save(body),
+    onSuccess: (saved) => {
+      setDraft(saved);
+      qc.invalidateQueries({ queryKey: ["precision", dataset] });
+    },
+  });
+
+  const datasetNames = datasets?.map((d) => d.name) ?? ["era5", "era5-land"];
+  const columns = schema?.columns ?? [];
+
+  const updateColumn = (
+    col: string,
+    patch: Partial<{ decimals: number; method: PrecisionMethod }>,
+  ) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const cols = { ...prev.columns };
+      const existing = cols[col] ?? {
+        decimals: prev.default_decimals,
+        method: prev.default_method,
+      };
+      cols[col] = { ...existing, ...patch };
+      return { ...prev, columns: cols };
+    });
+  };
+
+  const clearColumn = (col: string) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const cols = { ...prev.columns };
+      delete cols[col];
+      return { ...prev, columns: cols };
+    });
+  };
+
+  return (
+    <section className="card space-y-5 p-6">
+      <div>
+        <h2 className="text-lg font-medium text-ink-900">Precisão de exibição</h2>
+        <p className="mt-1 text-sm text-ink-500">
+          Define quantas casas decimais (e o método) são usadas ao exibir
+          colunas <code>float</code> nos resultados de consulta. Apenas
+          afeta a visualização — os dados em Parquet não são alterados.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-xs uppercase tracking-wide text-ink-500">
+          Dataset
+        </label>
+        <div className="flex gap-2">
+          {datasetNames.map((name) => (
+            <button
+              key={name}
+              onClick={() => setDataset(name)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium",
+                dataset === name
+                  ? "bg-ocean-600 text-white"
+                  : "bg-ink-100 text-ink-500 hover:bg-ink-200",
+              )}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading || !draft ? (
+        <div className="h-32 animate-pulse rounded-lg bg-ink-100" />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs uppercase tracking-wide text-ink-500">
+                Casas decimais (padrão)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={12}
+                value={draft.default_decimals}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v))
+                    setDraft({
+                      ...draft,
+                      default_decimals: Math.min(12, Math.max(0, v)),
+                    });
+                }}
+                className="input mt-1 w-32"
+              />
+            </div>
+            <div>
+              <label className="block text-xs uppercase tracking-wide text-ink-500">
+                Método (padrão)
+              </label>
+              <select
+                value={draft.default_method}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    default_method: e.target.value as PrecisionMethod,
+                  })
+                }
+                className="input mt-1 w-40"
+              >
+                <option value="round">round</option>
+                <option value="truncate">truncate</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-ink-100">
+            <table className="w-full text-xs">
+              <thead className="bg-ink-50">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Coluna</th>
+                  <th className="px-3 py-2 text-left font-medium">Tipo</th>
+                  <th className="px-3 py-2 text-left font-medium">Casas decimais</th>
+                  <th className="px-3 py-2 text-left font-medium">Método</th>
+                </tr>
+              </thead>
+              <tbody>
+                {columns.map((c) => {
+                  const isFloat = c.type === "float";
+                  const override = draft.columns[c.name];
+                  return (
+                    <tr key={c.name} className="border-t border-ink-100">
+                      <td className="px-3 py-1.5 font-mono">{c.name}</td>
+                      <td className="px-3 py-1.5 text-ink-500">{c.type}</td>
+                      {isFloat ? (
+                        <>
+                          <td className="px-3 py-1.5">
+                            <input
+                              type="number"
+                              min={0}
+                              max={12}
+                              placeholder="usa o padrão"
+                              value={override ? override.decimals : ""}
+                              onChange={(e) => {
+                                if (e.target.value === "") {
+                                  clearColumn(c.name);
+                                  return;
+                                }
+                                const v = Number(e.target.value);
+                                if (Number.isFinite(v))
+                                  updateColumn(c.name, {
+                                    decimals: Math.min(12, Math.max(0, v)),
+                                  });
+                              }}
+                              className="input w-28 text-xs"
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <select
+                              value={override ? override.method : ""}
+                              onChange={(e) => {
+                                if (e.target.value === "") {
+                                  clearColumn(c.name);
+                                  return;
+                                }
+                                updateColumn(c.name, {
+                                  method: e.target.value as PrecisionMethod,
+                                });
+                              }}
+                              className="input w-32 text-xs"
+                            >
+                              <option value="">usa o padrão</option>
+                              <option value="round">round</option>
+                              <option value="truncate">truncate</option>
+                            </select>
+                          </td>
+                        </>
+                      ) : (
+                        <td
+                          className="px-3 py-1.5 text-ink-300"
+                          colSpan={2}
+                          title="Arredondamento só se aplica a colunas float"
+                        >
+                          —
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {columns.length === 0 && (
+                  <tr>
+                    <td
+                      className="px-3 py-4 text-center text-ink-400"
+                      colSpan={4}
+                    >
+                      Sem colunas ainda (nenhum Parquet para este dataset).
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-end gap-3">
+            {save.isSuccess && !save.isPending && (
+              <Badge
+                tone="success"
+                icon={<CheckCircle2 className="h-4 w-4" />}
+              >
+                Precisão salva.
+              </Badge>
+            )}
+            <button
+              className="btn-primary"
+              onClick={() => draft && save.mutate(draft)}
+              disabled={save.isPending}
+            >
+              {save.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              Salvar precisão
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

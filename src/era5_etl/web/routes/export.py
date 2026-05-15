@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from era5_etl.datasets import DatasetRegistry
 from era5_etl.storage.parquet_manager import ParquetManager
+from era5_etl.storage.paths import view_name_for
 from era5_etl.web.models import QueryIn
 from era5_etl.web.routes.query import _validate_sql
 
@@ -25,7 +26,7 @@ def _run(sql: str, dataset: str, data_dir: Path):
     manager = ParquetManager(data_dir, dataset)
     if not manager.exists():
         raise HTTPException(status_code=404, detail="No Parquet data for this dataset yet.")
-    view_name = dataset.replace("-", "_") + "_view"
+    view_name = view_name_for(dataset)
     conn = duckdb.connect(":memory:")
     try:
         manager.create_duckdb_view(conn, view_name)

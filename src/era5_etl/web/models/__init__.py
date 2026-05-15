@@ -51,6 +51,25 @@ class UserConfigIn(BaseModel):
     default_dataset: str | None = None
 
 
+class ColumnPrecision(BaseModel):
+    decimals: Annotated[int, Field(ge=0, le=12)]
+    method: Literal["round", "truncate"] = "round"
+
+
+class DatasetPrecisionIn(BaseModel):
+    dataset: str
+    default_decimals: Annotated[int, Field(ge=0, le=12)] = 4
+    default_method: Literal["round", "truncate"] = "round"
+    columns: dict[str, ColumnPrecision] = Field(default_factory=dict)
+
+
+class DatasetPrecisionOut(BaseModel):
+    dataset: str
+    default_decimals: int
+    default_method: Literal["round", "truncate"]
+    columns: dict[str, ColumnPrecision]
+
+
 class EstimateIn(BaseModel):
     dataset: str
     variables: list[str]
@@ -134,9 +153,20 @@ class QueryIn(BaseModel):
 
 class QueryOut(BaseModel):
     columns: list[str]
+    column_types: list[str]  # short Python type per column (str/int/float/...)
     rows: list[list]
     row_count: int
     truncated: bool
+
+
+class SchemaColumn(BaseModel):
+    name: str
+    type: str  # short Python type (str/int/float/bool/datetime/date)
+
+
+class QuerySchemaOut(BaseModel):
+    view: str
+    columns: list[SchemaColumn]
 
 
 class VersionOut(BaseModel):

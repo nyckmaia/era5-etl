@@ -45,6 +45,22 @@ class DatasetConfig(ABC):
     GRID_RESOLUTION_DEG: float = 0.0
     VARIABLES_YAML: str = "variables.yaml"
 
+    @property
+    def latlon_decimals(self) -> int:
+        """Decimal places lat/lon should be rounded to for this dataset.
+
+        Derived from the native grid resolution: ERA5 ``0.25`` -> 2 dp,
+        ERA5-LAND ``0.1`` -> 1 dp. Counts the significant fractional digits
+        of ``GRID_RESOLUTION_DEG`` (``0.25`` -> ``"25"`` -> 2; ``0.1`` ->
+        ``"1"`` -> 1). Floor of 1 so a coordinate never collapses to an
+        integer grid.
+        """
+        s = repr(float(self.GRID_RESOLUTION_DEG))
+        if "." not in s:
+            return 1
+        frac = s.split(".", 1)[1].rstrip("0")
+        return len(frac) or 1
+
     @cached_property
     def _yaml_data(self) -> dict[str, Any]:
         return _load_variables_yaml(self._variables_yaml_path())

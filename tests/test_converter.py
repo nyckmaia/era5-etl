@@ -253,3 +253,96 @@ def test_convert_directory_cleanup_keeps_failed_nc(
 
     assert stats["failed"] == 1
     assert bad.exists(), "Failed .nc must be retained for inspection"
+
+
+# --- M03: drop number/expver -------------------------------------------------
+
+
+def test_drop_unused_columns_removes_number_expver(
+    converter: NetCDFToParquetConverter,
+):
+    """`number` and `expver` (CDS scalar coords) must be dropped if present."""
+    df = pl.DataFrame(
+        {
+            "latitude": [1.0, 2.0],
+            "longitude": [3.0, 4.0],
+            "number": [0, 0],
+            "expver": ["0001", "0001"],
+            "t2m": [290.0, 291.0],
+        }
+    )
+    out = converter._drop_unused_columns(df)
+    assert "number" not in out.columns
+    assert "expver" not in out.columns
+    assert set(out.columns) == {"latitude", "longitude", "t2m"}
+
+
+def test_drop_unused_columns_noop_when_absent(
+    converter: NetCDFToParquetConverter,
+):
+    """No `number`/`expver` -> dataframe unchanged."""
+    df = pl.DataFrame({"latitude": [1.0], "longitude": [2.0], "t2m": [290.0]})
+    out = converter._drop_unused_columns(df)
+    assert out.columns == df.columns
+
+
+# --- M02a: dataset-aware lat/lon rounding ------------------------------------
+
+
+def _latlon_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "latitude": [-23.456789, -10.114999],
+            "longitude": [-46.654321, -49.949001],
+            "t2m": [290.0, 291.0],
+        }
+    ).cast(
+        {"latitude": pl.Float64, "longitude": pl.Float64, "t2m": pl.Float64}
+    )
+
+
+def test_round_latlon_era5_two_decimals(tmp_path: Path):
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(),
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset="era5",
+    )
+    out = conv._round_latlon(_latlon_df())
+    assert out["latitude"].dtype == pl.Float32
+    assert out["longitude"].dtype == pl.Float32
+    # 2 decimals for ERA5 (0.25 deg grid)
+    assert out["latitude"].to_list()[0] == pytest.approx(-23.46, abs=1e-4)
+    assert out["longitude"].to_list()[1] == pytest.approx(-49.95, abs=1e-4)
+
+
+def test_round_latlon_era5land_one_decimal(tmp_path: Path):
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(),
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset="era5-land",
+    )
+    out = conv._round_latlon(_latlon_df())
+    assert out["latitude"].dtype == pl.Float32
+    # 1 decimal for ERA5-LAND (0.1 deg grid)
+    assert out["latitude"].to_list()[0] == pytest.approx(-23.5, abs=1e-4)
+    assert out["latitude"].to_list()[1] == pytest.approx(-10.1, abs=1e-4)
+
+
+def test_round_latlon_noop_without_dataset(
+    converter: NetCDFToParquetConverter,
+):
+    """Legacy dataset-agnostic path (dataset=None) must not touch lat/lon."""
+    df = _latlon_df()
+    out = converter._round_latlon(df)
+    # converter fixture is built without dataset -> unchanged dtype/values
+    assert out["latitude"].dtype == pl.Float64
+    assert out["latitude"].to_list() == df["latitude"].to_list()
+
+
+def test_latlon_decimals_property():
+    from era5_etl.datasets import DatasetRegistry
+
+    assert DatasetRegistry.get("era5").latlon_decimals == 2
+    assert DatasetRegistry.get("era5-land").latlon_decimals == 1

@@ -10,11 +10,18 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.web.models import (
+    DatasetPrecisionIn,
+    DatasetPrecisionOut,
     PathValidationOut,
     UserConfigIn,
     UserConfigOut,
 )
-from era5_etl.web.user_config import load_user_config, update_user_config
+from era5_etl.web.user_config import (
+    get_dataset_precision,
+    load_user_config,
+    set_dataset_precision,
+    update_user_config,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -111,3 +118,37 @@ def pick_directory() -> PathValidationOut:
     if not chosen:
         raise HTTPException(status_code=400, detail="No directory selected")
     return validate_path(chosen)
+
+
+@router.get("/precision", response_model=DatasetPrecisionOut)
+def get_precision(dataset: str) -> DatasetPrecisionOut:
+    """Return the display-precision config for a dataset (render-only)."""
+    p = get_dataset_precision(dataset)
+    return DatasetPrecisionOut(
+        dataset=dataset,
+        default_decimals=p["default_decimals"],
+        default_method=p["default_method"],
+        columns=p["columns"],
+    )
+
+
+@router.post("/precision", response_model=DatasetPrecisionOut)
+def save_precision(body: DatasetPrecisionIn) -> DatasetPrecisionOut:
+    """Persist the display-precision config for a dataset."""
+    set_dataset_precision(
+        body.dataset,
+        {
+            "default_decimals": body.default_decimals,
+            "default_method": body.default_method,
+            "columns": {
+                k: v.model_dump() for k, v in body.columns.items()
+            },
+        },
+    )
+    p = get_dataset_precision(body.dataset)
+    return DatasetPrecisionOut(
+        dataset=body.dataset,
+        default_decimals=p["default_decimals"],
+        default_method=p["default_method"],
+        columns=p["columns"],
+    )

@@ -11,6 +11,7 @@ from era5_etl.core.pipeline import Pipeline
 from era5_etl.core.stage import Stage
 from era5_etl.download.cds_downloader import CDSDownloader
 from era5_etl.storage.coverage import rebuild_from_parquet
+from era5_etl.storage.paths import view_name_for
 from era5_etl.storage.manifest import Manifest
 from era5_etl.storage.parquet_manager import ParquetManager
 from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
@@ -71,6 +72,7 @@ class ConvertToParquetStage(Stage):
             transform_config=self.config.transform,
             storage_config=self.config.storage,
             output_dir=output_dir,
+            dataset=self.config.dataset_name,
         )
 
         on_progress = None
@@ -145,7 +147,7 @@ class CreateViewStage(Stage):
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Create DuckDB VIEW from Parquet files."""
-        view_name = self.config.dataset_name.replace("-", "_") + "_view"
+        view_name = view_name_for(self.config.dataset_name)
         db_path = self.config.get_database_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
 

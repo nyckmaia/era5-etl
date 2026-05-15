@@ -140,6 +140,17 @@ def ensure_dataset_dirs(base_dir: str | Path, dataset: str) -> tuple[Path, Path]
     return dataset_dir, tmp_dir
 
 
+def view_name_for(dataset: str) -> str:
+    """Return the DuckDB view name for a dataset.
+
+    The view is the dataset name with hyphens turned into underscores and
+    **no** suffix: ``era5`` -> ``era5``, ``era5-land`` -> ``era5_land``.
+    Single source of truth so the CLI, web query/export routes, and the
+    pipeline never drift on the naming.
+    """
+    return dataset.replace("-", "_")
+
+
 def _validate_dataset_name(dataset: str) -> None:
     if not dataset or "/" in dataset or "\\" in dataset or dataset.startswith("."):
         raise ValueError(f"Invalid dataset name: {dataset!r}")

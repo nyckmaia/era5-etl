@@ -124,6 +124,32 @@ export interface DiffPreview {
   sample_missing: DiffPreviewSampleRow[];
 }
 
+// --- Query schema & display precision (v0.6.x) ----------------------------
+
+export interface QuerySchemaColumn {
+  name: string;
+  type: string;
+}
+
+export interface QuerySchema {
+  view: string;
+  columns: QuerySchemaColumn[];
+}
+
+export type PrecisionMethod = "round" | "truncate";
+
+export interface ColumnPrecision {
+  decimals: number;
+  method: PrecisionMethod;
+}
+
+export interface PrecisionConfig {
+  dataset: string;
+  default_decimals: number;
+  default_method: PrecisionMethod;
+  columns: Record<string, ColumnPrecision>;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, {
     ...init,
@@ -204,10 +230,26 @@ export const api = {
   query: (body: { dataset: string; sql: string; limit?: number }) =>
     request<{
       columns: string[];
+      column_types: string[];
       rows: (string | number | null)[][];
       row_count: number;
       truncated: boolean;
     }>("/api/query", { method: "POST", body: JSON.stringify(body) }),
+  querySchema: (dataset: string) =>
+    request<QuerySchema>(
+      `/api/query/schema?dataset=${encodeURIComponent(dataset)}`,
+    ),
+  precision: {
+    get: (dataset: string) =>
+      request<PrecisionConfig>(
+        `/api/settings/precision?dataset=${encodeURIComponent(dataset)}`,
+      ),
+    save: (body: PrecisionConfig) =>
+      request<PrecisionConfig>("/api/settings/precision", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
   credentialStatus: () => request<CredentialStatus>("/api/credentials/status"),
   saveCredentials: (body: { url: string; key: string }) =>
     request<CredentialStatus>("/api/credentials", {
