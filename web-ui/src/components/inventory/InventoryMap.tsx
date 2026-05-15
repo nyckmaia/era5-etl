@@ -56,6 +56,7 @@ export interface InventoryMapProps {
   onCellClick: (lat: number, lon: number) => void;
   colormap: "binary" | "intensity";
   totalVars: number;
+  showPoints: boolean;
 }
 
 function intensityColor(t: number): [number, number, number, number] {
@@ -76,6 +77,7 @@ export function InventoryMap(props: InventoryMapProps) {
     onCellClick,
     colormap,
     totalVars,
+    showPoints,
   } = props;
 
   const [dragStart, setDragStart] = useState<[number, number] | null>(null);
@@ -87,24 +89,25 @@ export function InventoryMap(props: InventoryMapProps) {
       new ScatterplotLayer<GridPoint>({
         id: "grid-points",
         data: points,
+        visible: showPoints,
         pickable: true,
         radiusUnits: "pixels",
-        radiusMinPixels: 2,
-        radiusMaxPixels: 8,
+        radiusMinPixels: 9,
+        radiusMaxPixels: 44,
         getPosition: (d) => [d.lon, d.lat],
-        getRadius: (d) => 2.5 + Math.log10(Math.max(1, d.days)) * 1.4,
+        getRadius: (d) => 12 + Math.log10(Math.max(1, d.days)) * 7,
         getFillColor: (d) =>
           colormap === "binary"
-            ? [40, 100, 200, 200]
+            ? [40, 100, 200, 220]
             : intensityColor((d.vars ?? 0) / Math.max(1, totalVars)),
-        getLineColor: [255, 255, 255, 100],
-        lineWidthMinPixels: 0.5,
+        getLineColor: [255, 255, 255, 220],
+        lineWidthMinPixels: 1.5,
         stroked: true,
         updateTriggers: {
           getFillColor: [colormap, totalVars],
         },
       }),
-    [points, colormap, totalVars],
+    [points, colormap, totalVars, showPoints],
   );
 
   const selectionLayer = useMemo(() => {

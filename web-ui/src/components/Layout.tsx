@@ -39,7 +39,28 @@ export function Layout({ children }: { children: ReactNode }) {
       >
         <div
           className={cn(
-            "flex items-center py-5",
+            "flex pt-3",
+            collapsed ? "justify-center px-2" : "justify-end px-3",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "Expandir menu" : "Recolher menu"}
+            aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
+            className="rounded-lg p-2 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+
+        <div
+          className={cn(
+            "flex items-center pb-5 pt-2",
             collapsed ? "justify-center px-2" : "gap-2 px-6",
           )}
         >
@@ -79,26 +100,6 @@ export function Layout({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? "Expandir menu" : "Recolher menu"}
-          aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
-          className={cn(
-            "mx-3 mb-2 flex items-center rounded-xl px-3 py-2 text-sm font-medium text-ink-400 transition hover:bg-ink-100 hover:text-ink-700",
-            collapsed ? "justify-center" : "gap-3",
-          )}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="h-4 w-4 shrink-0" />
-          ) : (
-            <>
-              <PanelLeftClose className="h-4 w-4 shrink-0" />
-              Recolher
-            </>
-          )}
-        </button>
 
         {!collapsed ? (
           <footer className="px-6 py-4 text-[11px] text-ink-400">

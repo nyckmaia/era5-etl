@@ -28,6 +28,7 @@ export function InventoryPage() {
   const [varMenuOpen, setVarMenuOpen] = useState(false);
   const varMenuRef = useRef<HTMLDivElement | null>(null);
   const [colormap, setColormap] = useState<"binary" | "intensity">("intensity");
+  const [showPoints, setShowPoints] = useState(true);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("none");
   const [selection, setSelection] = useState<[number, number][] | null>(null);
   const [activeCell, setActiveCell] = useState<{ lat: number; lon: number } | null>(
@@ -217,6 +218,20 @@ export function InventoryPage() {
             ) : null}
           </div>
         </Field>
+        <Field label="Pontos">
+          <button
+            type="button"
+            onClick={() => setShowPoints((s) => !s)}
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-xs font-medium",
+              showPoints
+                ? "bg-ocean-600 text-white"
+                : "bg-ink-100 text-ink-500 hover:bg-ink-200",
+            )}
+          >
+            {showPoints ? "Visível" : "Oculto"}
+          </button>
+        </Field>
         <Field label="Cor">
           <div className="flex gap-1 rounded-lg bg-ink-100 p-0.5">
             {(["intensity", "binary"] as const).map((m) => (
@@ -261,6 +276,7 @@ export function InventoryPage() {
             }}
             colormap={colormap}
             totalVars={totalVars}
+            showPoints={showPoints}
           />
           <SelectionToolbar
             mode={selectionMode}
