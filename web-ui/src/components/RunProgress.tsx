@@ -142,7 +142,13 @@ function phaseRank(phase: ChunkPhase): number {
   return idx < 0 ? 0 : idx;
 }
 
-export function RunProgress({ runId }: { runId: string }) {
+export function RunProgress({
+  runId,
+  dataset,
+}: {
+  runId: string;
+  dataset?: string;
+}) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const sourceRef = useRef<EventSource | null>(null);
 
@@ -303,6 +309,9 @@ export function RunProgress({ runId }: { runId: string }) {
             </div>
             <Link
               to="/query"
+              search={
+                dataset ? { view: dataset.replace(/-/g, "_") } : { view: undefined }
+              }
               className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
             >
               <Database className="h-4 w-4" />

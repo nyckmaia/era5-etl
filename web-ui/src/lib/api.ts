@@ -260,17 +260,23 @@ export const api = {
     request<CredentialTestResult>("/api/credentials/test", { method: "POST" }),
 
   inventory: {
+    dateRange: (dataset: string) =>
+      request<{ min: string | null; max: string | null }>(
+        `/api/inventory/date-range?dataset=${encodeURIComponent(dataset)}`,
+      ),
     gridPoints: (params: {
       dataset: string;
       date_from?: string;
       date_to?: string;
-      variable?: string;
+      variable?: string[];
       format?: "json" | "arrow" | "auto";
     }) => {
       const q = new URLSearchParams({ dataset: params.dataset });
       if (params.date_from) q.set("date_from", params.date_from);
       if (params.date_to) q.set("date_to", params.date_to);
-      if (params.variable) q.set("variable", params.variable);
+      if (params.variable) {
+        for (const v of params.variable) q.append("variable", v);
+      }
       if (params.format) q.set("format", params.format);
       return requestArrowOrJson<GridPoint>(`/api/inventory/grid-points?${q}`);
     },

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2, MapPin } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronDown, Loader2, MapPin } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CellDetailPanel } from "@/components/inventory/CellDetailPanel";
 import {
@@ -21,9 +21,12 @@ export function InventoryPage() {
   });
 
   const [dataset, setDataset] = useState<string>("");
-  const [variableFilter, setVariableFilter] = useState<string>("");
+  const [variableFilter, setVariableFilter] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const userEditedDates = useRef(false);
+  const [varMenuOpen, setVarMenuOpen] = useState(false);
+  const varMenuRef = useRef<HTMLDivElement | null>(null);
   const [colormap, setColormap] = useState<"binary" | "intensity">("intensity");
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("none");
   const [selection, setSelection] = useState<[number, number][] | null>(null);
@@ -43,6 +46,43 @@ export function InventoryPage() {
     [datasets, dataset],
   );
 
+  const dateRangeQ = useQuery({
+    queryKey: ["inventory-date-range", dataset],
+    queryFn: () => api.inventory.dateRange(dataset),
+    enabled: Boolean(dataset),
+  });
+
+  // Prefill the date inputs with the dataset's min/max once the range
+  // resolves, unless the user has manually edited the inputs.
+  useEffect(() => {
+    if (userEditedDates.current) return;
+    const r = dateRangeQ.data;
+    if (!r) return;
+    setDateFrom(r.min ?? "");
+    setDateTo(r.max ?? "");
+  }, [dateRangeQ.data]);
+
+  // Close the variable popover when clicking outside of it.
+  useEffect(() => {
+    if (!varMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (varMenuRef.current && !varMenuRef.current.contains(e.target as Node)) {
+        setVarMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [varMenuOpen]);
+
+  function changeDataset(next: string) {
+    setDataset(next);
+    // New dataset → reset filters and re-prefill from its own range.
+    userEditedDates.current = false;
+    setDateFrom("");
+    setDateTo("");
+    setVariableFilter([]);
+  }
+
   const pointsQ = useQuery({
     queryKey: ["inventory-grid-points", dataset, dateFrom, dateTo, variableFilter],
     queryFn: () =>
@@ -50,7 +90,7 @@ export function InventoryPage() {
         dataset,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        variable: variableFilter || undefined,
+        variable: variableFilter.length > 0 ? variableFilter : undefined,
         format: "auto",
       }),
     enabled: Boolean(dataset),
@@ -65,14 +105,10 @@ export function InventoryPage() {
   const points: GridPoint[] = pointsQ.data ?? [];
   const totalVars = activeDataset?.variables.length ?? 1;
 
-  function fillGaps(bbox: [number, number, number, number]) {
-    // Hand off to the download wizard with the bbox pre-filled via URL state.
-    // The wizard reads `area` from query params; if absent it uses defaults.
-    const params = new URLSearchParams({
-      dataset,
-      area: bbox.join(","),
-    });
-    navigate({ to: "/download", search: { prefill: params.toString() } as never });
+  function fillGaps(_bbox: [number, number, number, number]) {
+    // Hand off to the download wizard with the dataset preselected. The
+    // wizard jumps to the Variables step when a dataset is passed.
+    navigate({ to: "/download", search: { dataset, step: 1 } });
   }
 
   return (
@@ -89,7 +125,7 @@ export function InventoryPage() {
         </div>
         <select
           value={dataset}
-          onChange={(e) => setDataset(e.target.value)}
+          onChange={(e) => changeDataset(e.target.value)}
           className="input"
         >
           {datasets?.map((d) => (
@@ -106,7 +142,10 @@ export function InventoryPage() {
             type="date"
             className="input"
             value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
+            onChange={(e) => {
+              userEditedDates.current = true;
+              setDateFrom(e.target.value);
+            }}
           />
         </Field>
         <Field label="Até">
@@ -114,22 +153,69 @@ export function InventoryPage() {
             type="date"
             className="input"
             value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
+            onChange={(e) => {
+              userEditedDates.current = true;
+              setDateTo(e.target.value);
+            }}
           />
         </Field>
-        <Field label="Variável">
-          <select
-            className="input"
-            value={variableFilter}
-            onChange={(e) => setVariableFilter(e.target.value)}
-          >
-            <option value="">Todas</option>
-            {activeDataset?.variables.map((v) => (
-              <option key={v.api_name} value={v.api_name}>
-                {v.full_name}
-              </option>
-            ))}
-          </select>
+        <Field label="Variáveis">
+          <div className="relative" ref={varMenuRef}>
+            <button
+              type="button"
+              onClick={() => setVarMenuOpen((o) => !o)}
+              className="input flex min-w-[12rem] items-center justify-between gap-2 text-left"
+            >
+              <span className="truncate">
+                {variableFilter.length === 0
+                  ? "Todas"
+                  : `${variableFilter.length} selecionada(s)`}
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
+            </button>
+            {varMenuOpen ? (
+              <div className="absolute left-0 z-20 mt-1 max-h-72 w-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-2 shadow-elevated">
+                <button
+                  type="button"
+                  onClick={() => setVariableFilter([])}
+                  className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-ocean-600 hover:bg-ink-50"
+                >
+                  Todas (limpar seleção)
+                </button>
+                {activeDataset?.variables.map((v) => {
+                  const checked = variableFilter.includes(v.api_name);
+                  return (
+                    <label
+                      key={v.api_name}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-ink-50",
+                        checked && "bg-ocean-50/60",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={checked}
+                        onChange={() =>
+                          setVariableFilter((prev) =>
+                            prev.includes(v.api_name)
+                              ? prev.filter((x) => x !== v.api_name)
+                              : [...prev, v.api_name],
+                          )
+                        }
+                      />
+                      <span className="flex-1">
+                        <span className="block text-ink-800">{v.full_name}</span>
+                        <span className="block text-[11px] text-ink-400">
+                          {v.api_name}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </Field>
         <Field label="Cor">
           <div className="flex gap-1 rounded-lg bg-ink-100 p-0.5">
@@ -147,12 +233,13 @@ export function InventoryPage() {
             ))}
           </div>
         </Field>
-        {(dateFrom || dateTo || variableFilter) && (
+        {(dateFrom || dateTo || variableFilter.length > 0) && (
           <button
             onClick={() => {
+              userEditedDates.current = true;
               setDateFrom("");
               setDateTo("");
-              setVariableFilter("");
+              setVariableFilter([]);
             }}
             className="text-xs text-ocean-600 hover:underline"
           >

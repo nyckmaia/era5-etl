@@ -8,7 +8,8 @@ import {
   Sparkles,
   TrendingDown,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { getRouteApi } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RunProgress } from "@/components/RunProgress";
 import { api, DatasetInfo, DiffPreview } from "@/lib/api";
@@ -26,7 +27,10 @@ const AREA_PRESETS: Record<string, [number, number, number, number]> = {
   "South America": [13, -82, -56, -34],
 };
 
+const downloadRouteApi = getRouteApi("/download");
+
 export function DownloadWizardPage() {
+  const search = downloadRouteApi.useSearch();
   const [step, setStep] = useState<Step>(0);
   const [dataset, setDataset] = useState<string>("");
   const [variables, setVariables] = useState<string[]>([]);
@@ -41,6 +45,26 @@ export function DownloadWizardPage() {
     () => datasets?.find((d) => d.name === dataset),
     [datasets, dataset],
   );
+
+  // Deep-link entry: when the dashboard/inventory hands us a dataset via
+  // search params, preselect it (+ its default variables) and jump to the
+  // requested step (Variables by default). Runs once, after datasets load.
+  const deepLinkApplied = useRef(false);
+  useEffect(() => {
+    if (deepLinkApplied.current) return;
+    if (!search.dataset || !datasets) return;
+    const info = datasets.find((d) => d.name === search.dataset);
+    if (!info) return;
+    deepLinkApplied.current = true;
+    setDataset(info.name);
+    setVariables(info.default_variables);
+    const requested = search.step;
+    const target =
+      typeof requested === "number" && requested >= 0 && requested <= 5
+        ? (requested as Step)
+        : 1;
+    setStep(target);
+  }, [search.dataset, search.step, datasets]);
 
   const estimateMutation = useMutation({
     mutationFn: () =>
@@ -720,7 +744,7 @@ function StepConfirm({
           <p className="text-sm text-moss-600">
             Run started: <span className="font-mono">{run.data.run_id}</span>
           </p>
-          <RunProgress runId={run.data.run_id} />
+          <RunProgress runId={run.data.run_id} dataset={dataset} />
         </div>
       ) : null}
     </div>

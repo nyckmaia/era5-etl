@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Database, HardDrive, Layers } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { CloudDownload, Database, HardDrive, Layers } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
@@ -55,6 +56,24 @@ export function DatasetCard({ dataset, label, description }: Props) {
       ) : (
         <p className="text-xs italic text-ink-400">No data downloaded yet.</p>
       )}
+      <div className="flex gap-3 border-t border-ink-100 pt-4">
+        <Link
+          to="/download"
+          search={{ dataset, step: 1 }}
+          className="btn-outline flex-1 justify-center"
+        >
+          <CloudDownload className="h-4 w-4" />
+          UPDATE
+        </Link>
+        <Link
+          to="/query"
+          search={{ view: dataset.replace(/-/g, "_") }}
+          className="btn-primary flex-1 justify-center"
+        >
+          <Database className="h-4 w-4" />
+          QUERY
+        </Link>
+      </div>
     </div>
   );
 }

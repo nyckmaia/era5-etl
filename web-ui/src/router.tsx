@@ -48,12 +48,26 @@ const inventoryRoute = createRoute({
 const downloadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/download",
+  validateSearch: (
+    s: Record<string, unknown>,
+  ): { dataset?: string; step?: number } => ({
+    dataset: typeof s.dataset === "string" ? s.dataset : undefined,
+    step:
+      typeof s.step === "number"
+        ? s.step
+        : s.step
+          ? Number(s.step)
+          : undefined,
+  }),
   component: DownloadWizardPage,
 });
 
 const queryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/query",
+  validateSearch: (s: Record<string, unknown>): { view?: string } => ({
+    view: typeof s.view === "string" ? s.view : undefined,
+  }),
   component: QueryPage,
 });
 
