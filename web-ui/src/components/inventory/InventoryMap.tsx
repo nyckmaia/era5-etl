@@ -97,11 +97,11 @@ export function InventoryMap(props: InventoryMapProps) {
         // neighbours stay distinct. Pixel clamps keep them visible far
         // out and capped when zoomed in very close.
         radiusUnits: "meters",
-        radiusMinPixels: 1.5,
-        radiusMaxPixels: 60,
+        radiusMinPixels: 0.5,
+        radiusMaxPixels: 18,
         getPosition: (d) => [d.lon, d.lat],
         getRadius: (d) =>
-          9000 + Math.log10(Math.max(1, Number(d.days))) * 4000,
+          2500 + Math.log10(Math.max(1, Number(d.days))) * 1200,
         getFillColor: (d) =>
           colormap === "binary"
             ? [40, 100, 200, 220]
