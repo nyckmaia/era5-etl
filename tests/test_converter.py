@@ -213,3 +213,43 @@ def test_converter_convert_directory_with_files(
     assert stats["total"] >= 1
     assert stats["converted"] >= 1
     assert stats["failed"] == 0
+
+
+def test_convert_directory_cleanup_removes_nc_on_success(
+    converter: NetCDFToParquetConverter, sample_netcdf_file: Path
+):
+    """With cleanup=True, a successfully-converted .nc must be deleted."""
+    nc_dir = sample_netcdf_file.parent
+    assert sample_netcdf_file.exists()
+
+    stats = converter.convert_directory(nc_dir, cleanup=True)
+
+    assert stats["converted"] >= 1
+    assert stats["failed"] == 0
+    assert not sample_netcdf_file.exists(), (
+        "Successfully converted .nc should have been deleted with cleanup=True"
+    )
+
+
+def test_convert_directory_cleanup_false_keeps_nc(
+    converter: NetCDFToParquetConverter, sample_netcdf_file: Path
+):
+    """Default (cleanup=False) must leave the .nc on disk."""
+    converter.convert_directory(sample_netcdf_file.parent, cleanup=False)
+    assert sample_netcdf_file.exists()
+
+
+def test_convert_directory_cleanup_keeps_failed_nc(
+    converter: NetCDFToParquetConverter, tmp_path: Path
+):
+    """A .nc that FAILS to convert must be kept even when cleanup=True so
+    the user can inspect/retry it."""
+    bad_dir = tmp_path / "bad_nc"
+    bad_dir.mkdir()
+    bad = bad_dir / "corrupt.nc"
+    bad.write_bytes(b"not a real netcdf file")
+
+    stats = converter.convert_directory(bad_dir, cleanup=True)
+
+    assert stats["failed"] == 1
+    assert bad.exists(), "Failed .nc must be retained for inspection"

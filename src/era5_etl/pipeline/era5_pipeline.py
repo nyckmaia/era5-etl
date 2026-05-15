@@ -91,6 +91,7 @@ class ConvertToParquetStage(Stage):
             self.config.download.output_dir,
             max_workers=self.config.transform.max_workers,
             on_progress=on_progress,
+            cleanup=not self.config.keep_temp_files,
         )
         context.set("conversion_stats", stats)
         context.set_metadata("converted_count", stats["converted"])

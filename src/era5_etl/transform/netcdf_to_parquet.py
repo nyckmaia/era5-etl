@@ -114,6 +114,7 @@ class NetCDFToParquetConverter:
         input_dir: Path,
         max_workers: int | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
+        cleanup: bool = False,
     ) -> dict[str, int]:
         """Convert all NetCDF files in a directory.
 
@@ -126,6 +127,10 @@ class NetCDFToParquetConverter:
                 invoked from the main process after each file completes (both
                 sequential and parallel paths). Used by the web UI to drive a
                 conversion progress bar.
+            cleanup: When True, delete each ``.nc`` file immediately after it
+                converts **successfully**. Files that FAILED to convert are
+                kept on disk so the user can inspect/retry them. Deletion
+                happens in the main process (safe under the parallel path).
 
         Returns:
             Statistics dict with counts
@@ -143,6 +148,17 @@ class NetCDFToParquetConverter:
         stats = {"total": total, "converted": 0, "skipped": 0, "failed": 0}
         done = 0
 
+        def _cleanup(nc_file: Path) -> None:
+            if not cleanup:
+                return
+            try:
+                nc_file.unlink()
+                self.logger.debug("Removed temp NetCDF %s", nc_file.name)
+            except OSError as exc:
+                self.logger.warning(
+                    "Could not delete temp NetCDF %s: %s", nc_file.name, exc
+                )
+
         def _tick(name: str) -> None:
             nonlocal done
             done += 1
@@ -158,6 +174,7 @@ class NetCDFToParquetConverter:
                 try:
                     self.convert_file(nc_file)
                     stats["converted"] += 1
+                    _cleanup(nc_file)
                 except Exception as e:
                     stats["failed"] += 1
                     self.logger.error(f"Failed: {nc_file.name}: {e}")
@@ -192,6 +209,7 @@ class NetCDFToParquetConverter:
                         if success:
                             stats["converted"] += 1
                             self.logger.info(f"Converted: {filename}")
+                            _cleanup(nc_file)
                         else:
                             stats["failed"] += 1
                             self.logger.error(f"Failed: {filename}: {error_msg}")
