@@ -29,23 +29,38 @@ def _validate_sql(sql: str) -> None:
             raise HTTPException(status_code=400, detail="SQL contains disallowed statement.")
 
 
+def register_all_views(conn, data_dir: Path) -> list[str]:
+    """Register every dataset's DuckDB view that has parquet on disk.
+
+    Lets a single query reference any dataset by its view name
+    (``era5``, ``era5_land``) or JOIN across them (M02a). Returns the
+    list of view names registered (empty if no dataset has data yet).
+    """
+    registered: list[str] = []
+    for name in DatasetRegistry.names():
+        mgr = ParquetManager(data_dir, name)
+        if not mgr.exists():
+            continue
+        mgr.create_duckdb_view(conn, view_name_for(name))
+        registered.append(view_name_for(name))
+    return registered
+
+
 @router.post("", response_model=QueryOut)
 def run_query(body: QueryIn, request: Request) -> QueryOut:
     import duckdb
 
-    if body.dataset not in DatasetRegistry.names():
-        raise HTTPException(status_code=400, detail=f"Unknown dataset: {body.dataset}")
     _validate_sql(body.sql)
 
     data_dir: Path = request.app.state.data_dir
-    manager = ParquetManager(data_dir, body.dataset)
-    if not manager.exists():
-        raise HTTPException(status_code=404, detail="No Parquet data for this dataset yet.")
-
-    view_name = view_name_for(body.dataset)
     conn = duckdb.connect(":memory:")
     try:
-        manager.create_duckdb_view(conn, view_name)
+        registered = register_all_views(conn, data_dir)
+        if not registered:
+            raise HTTPException(
+                status_code=404,
+                detail="No Parquet data for any dataset yet.",
+            )
         result = conn.execute(body.sql).fetch_arrow_table()
         arrow_schema = result.schema
         df = result.to_pandas()

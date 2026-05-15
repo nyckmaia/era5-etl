@@ -107,7 +107,20 @@ def test_creates_db_and_schema(tmp_path: Path) -> None:
         version = conn.execute(
             "SELECT value FROM coverage_meta WHERE key = 'schema_version'"
         ).fetchone()
-        assert version == ("1",)
+        assert version == ("2",)
+        # v2 schema: no ingested_at column, no cov_spatial index.
+        cols = [
+            r[1]
+            for r in conn.execute("PRAGMA table_info('coverage')").fetchall()
+        ]
+        assert "ingested_at" not in cols
+        assert set(cols) == {
+            "latitude",
+            "longitude",
+            "date",
+            "variable",
+            "hours_mask",
+        }
 
 
 # ----------------------------------------------------------------------
@@ -555,3 +568,92 @@ def test_ensure_coverage_index_rebuilds(
     # Second call is a no-op (file already exists, has rows).
     rebuilt_again = ensure_coverage_index(dataset, tmp_path)
     assert rebuilt_again is False
+
+
+# ----------------------------------------------------------------------
+# 18. M04 — fresh-file rebuild keeps the DB small + stable
+# ----------------------------------------------------------------------
+
+
+def test_rebuild_writes_fresh_small_file_and_is_stable(tmp_path: Path) -> None:
+    """rebuild_from_parquet must NOT grow the file across runs (fresh-file
+    swap, not in-place DELETE which DuckDB never shrinks).
+    """
+    from era5_etl.storage.coverage import rebuild_from_parquet
+
+    dataset = "era5-land"
+    parquet_dir = resolve_dataset_dir(tmp_path, dataset)
+    df = _grid_df(
+        lats=[-22.5, -22.4, -22.3],
+        lons=[-43.5, -43.4],
+        hours=[0, 6, 12, 18],
+        date_str="2024-01-01",
+        variables={"t2m": 273.0, "tp": 1.0},
+    )
+    merge_into_partitioned_parquet(df, parquet_dir)
+    db_path = parquet_dir / "_coverage.duckdb"
+
+    rebuild_from_parquet(dataset, tmp_path)
+    assert db_path.exists()
+    size1 = db_path.stat().st_size
+    # No leftover tmp.
+    assert not (parquet_dir / "_coverage.duckdb.tmp").exists()
+
+    # Re-running several times must not grow the file (fresh file each time).
+    for _ in range(4):
+        rebuild_from_parquet(dataset, tmp_path)
+    size_n = db_path.stat().st_size
+    assert size_n <= size1 * 1.05, (
+        f"coverage DB grew across rebuilds: {size1} -> {size_n}"
+    )
+
+    with CoverageIndex(dataset, tmp_path) as cov:
+        s = cov.stats()
+        assert s["n_cells"] == 6  # 3 lats x 2 lons
+        assert s["n_variables"] == 2
+        assert s["total_rows"] == 12  # 6 cells x 2 vars (1 date)
+
+
+def test_old_schema_db_is_rebuilt(tmp_path: Path) -> None:
+    """An on-disk DB with the old schema_version triggers a full rebuild
+    (ensure_coverage_index), so /inventory never reads a stale/bloated DB.
+    """
+    import duckdb
+
+    dataset = "era5-land"
+    parquet_dir = resolve_dataset_dir(tmp_path, dataset)
+    df = _grid_df(
+        lats=[-22.5],
+        lons=[-43.5],
+        hours=[0, 12],
+        date_str="2024-01-01",
+        variables={"t2m": 273.0},
+    )
+    merge_into_partitioned_parquet(df, parquet_dir)
+
+    # Fabricate a pre-v2 DB: a coverage table + meta row schema_version='1'.
+    db_path = parquet_dir / "_coverage.duckdb"
+    with duckdb.connect(str(db_path)) as conn:
+        conn.execute(
+            "CREATE TABLE coverage (latitude FLOAT, longitude FLOAT, "
+            "date DATE, variable VARCHAR, hours_mask UINTEGER, "
+            "ingested_at TIMESTAMP)"
+        )
+        conn.execute(
+            "CREATE TABLE coverage_meta (key VARCHAR PRIMARY KEY, value VARCHAR)"
+        )
+        conn.execute("INSERT INTO coverage_meta VALUES ('schema_version', '1')")
+        conn.execute(
+            "INSERT INTO coverage VALUES (1.0, 2.0, DATE '2024-01-01', "
+            "'stale', 1, now())"
+        )
+
+    rebuilt = ensure_coverage_index(dataset, tmp_path)
+    assert rebuilt is True  # stale schema -> rebuilt
+
+    with CoverageIndex(dataset, tmp_path) as cov:
+        assert cov.schema_version_on_disk() == "2"
+        # The fabricated 'stale' row is gone; real parquet cell present.
+        s = cov.stats()
+        assert s["n_cells"] == 1
+        assert s["n_variables"] == 1  # t2m only, not 'stale'

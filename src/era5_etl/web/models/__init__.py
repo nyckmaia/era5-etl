@@ -145,8 +145,17 @@ class DiffPreviewOut(BaseModel):
     sample_missing: list[DiffPreviewSampleRow]
 
 
+class DateRangeOut(BaseModel):
+    # M06: drives the inventory date-input prefill. Both null = no coverage.
+    min: str | None = None
+    max: str | None = None
+
+
 class QueryIn(BaseModel):
-    dataset: str
+    # Optional (M02a): every dataset view is registered, so the SQL itself
+    # picks the view (`FROM era5_land` / `FROM era5`, or a JOIN). Kept only
+    # as a hint for schema/autocomplete context.
+    dataset: str | None = None
     sql: str
     limit: int = 100
 

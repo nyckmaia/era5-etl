@@ -4,7 +4,15 @@
       "Bash(python:*)",
       "Bash(pip install:*)",
       "Bash(era5:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(sed -n '500,525p' src/era5_etl/storage/coverage.py)",
+      "Bash(sed -n '574,665p' src/era5_etl/storage/coverage.py)",
+      "Bash(py -3.12 -m pytest -q)",
+      "Bash(sed -n '1,16p' src/era5_etl/web/routes/export.py)",
+      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('src/era5_etl/web/routes/export.py'\\).read\\(\\)\\); ast.parse\\(open\\('src/era5_etl/web/routes/query.py'\\).read\\(\\)\\); print\\('ok'\\)\")",
+      "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('src/era5_etl/web/routes/inventory.py'\\).read\\(\\)\\); print\\('ok'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

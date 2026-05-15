@@ -21,8 +21,7 @@ single SQL statement per variable. Concretely::
     INSERT INTO coverage (...)
     SELECT ... FROM staging
     ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
-    SET hours_mask = coverage.hours_mask | EXCLUDED.hours_mask,
-        ingested_at = now();
+    SET hours_mask = coverage.hours_mask | EXCLUDED.hours_mask;
 
 The index is **derived state**: nothing depends on it beyond performance
 and UI features. ``ensure_coverage_index`` rebuilds it from the parquet
@@ -32,6 +31,7 @@ files on disk if it's missing or empty -- safe to delete and regenerate.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -48,7 +48,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 COVERAGE_DB_FILENAME = "_coverage.duckdb"
-COVERAGE_SCHEMA_VERSION = "1"
+# v2: dropped ingested_at + cov_spatial (M04). A DB written by an older
+# schema is detected on open and rebuilt from parquet from scratch.
+COVERAGE_SCHEMA_VERSION = "2"
 
 # Columns we never count as "variables" in upsert_from_dataframe.
 _RESERVED_COLS: frozenset[str] = frozenset({"latitude", "longitude", "hour_utc", "date"})
@@ -63,7 +65,14 @@ _PARTITION_RE = re.compile(r"^date=(\d{4}-\d{2}-\d{2})$")
 
 
 def _ddl() -> str:
-    """Return the CREATE statements for the coverage schema."""
+    """Return the CREATE statements for the coverage schema.
+
+    Schema v2 (M04): dropped ``ingested_at`` (8-byte ts/row + churn, no
+    consumer) and the ``cov_spatial`` index (the PRIMARY KEY already
+    leads with ``(latitude, longitude)`` so a separate index on the same
+    prefix is pure bloat). This roughly halves the on-disk size for
+    large grids.
+    """
     return """
     CREATE TABLE IF NOT EXISTS coverage (
         latitude    FLOAT     NOT NULL,
@@ -71,11 +80,9 @@ def _ddl() -> str:
         date        DATE      NOT NULL,
         variable    VARCHAR   NOT NULL,
         hours_mask  UINTEGER  NOT NULL,
-        ingested_at TIMESTAMP NOT NULL DEFAULT now(),
         PRIMARY KEY (latitude, longitude, date, variable)
     );
-    CREATE INDEX IF NOT EXISTS cov_spatial ON coverage(latitude, longitude);
-    CREATE INDEX IF NOT EXISTS cov_date    ON coverage(date);
+    CREATE INDEX IF NOT EXISTS cov_date ON coverage(date);
 
     CREATE TABLE IF NOT EXISTS coverage_meta (
         key   VARCHAR PRIMARY KEY,
@@ -130,11 +137,23 @@ class CoverageIndex:
     write mode -- that's a user error.
     """
 
-    def __init__(self, dataset: str, base_dir: str | Path) -> None:
+    def __init__(
+        self,
+        dataset: str,
+        base_dir: str | Path,
+        *,
+        db_path_override: Path | None = None,
+    ) -> None:
         self.dataset = dataset
         self.base_dir = Path(base_dir)
         self._dataset_dir = resolve_dataset_dir(base_dir, dataset)
-        self._db_path = self._dataset_dir / COVERAGE_DB_FILENAME
+        # ``db_path_override`` lets ``rebuild_from_parquet`` target a fresh
+        # ``*.tmp`` file (built then atomically swapped) so the on-disk DB
+        # is never grown in place -- DuckDB DELETE/CHECKPOINT do NOT shrink
+        # an existing file.
+        self._db_path = db_path_override or (
+            self._dataset_dir / COVERAGE_DB_FILENAME
+        )
         self._conn: duckdb.DuckDBPyConnection | None = None
 
     # ---- lifecycle ---------------------------------------------------
@@ -259,8 +278,7 @@ class CoverageIndex:
                         WHERE hour_utc BETWEEN 0 AND 23
                         GROUP BY latitude, longitude, date
                         ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
-                        SET hours_mask  = coverage.hours_mask | EXCLUDED.hours_mask,
-                            ingested_at = now();
+                        SET hours_mask = coverage.hours_mask | EXCLUDED.hours_mask;
                         """,
                         [var],
                     )
@@ -280,14 +298,15 @@ class CoverageIndex:
         self,
         date_from: date | None = None,
         date_to: date | None = None,
-        variable: str | None = None,
+        variable: str | list[str] | None = None,
     ) -> pl.DataFrame:
         """Return ``(latitude, longitude, days, vars)`` for every distinct cell.
 
         Optional filters:
 
         - ``date_from`` / ``date_to`` (inclusive on both ends)
-        - ``variable`` (exact match)
+        - ``variable``: a single name, OR a list of names (``IN (...)``).
+          ``None`` / empty list = all variables (M07 multi-select).
         """
         conn = self._connect()
         clauses: list[str] = []
@@ -298,9 +317,13 @@ class CoverageIndex:
         if date_to is not None:
             clauses.append("date <= ?")
             params.append(date_to)
-        if variable is not None:
+        if isinstance(variable, str):
             clauses.append("variable = ?")
             params.append(variable)
+        elif variable:  # non-empty list
+            placeholders = ", ".join("?" for _ in variable)
+            clauses.append(f"variable IN ({placeholders})")
+            params.extend(variable)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
             SELECT
@@ -499,18 +522,6 @@ class CoverageIndex:
         finally:
             conn.unregister("diff_request")
 
-    def truncate(self) -> None:
-        """Empty the coverage table (schema kept).
-
-        Used by :func:`rebuild_from_parquet`: a rebuild re-reads every
-        parquet partition, so accumulating rows across runs via ON CONFLICT
-        is pointless and leaves dead MVCC row versions that bloat the
-        ``.duckdb`` file. Starting from empty means every insert is a clean
-        append with zero conflicts.
-        """
-        conn = self._connect()
-        conn.execute("DELETE FROM coverage")
-
     def checkpoint(self) -> None:
         """Flush the WAL and compact the database file.
 
@@ -520,6 +531,36 @@ class CoverageIndex:
         """
         conn = self._connect()
         conn.execute("CHECKPOINT")
+
+    def query_date_range(self) -> tuple[date | None, date | None]:
+        """Return ``(min_date, max_date)`` across all coverage rows.
+
+        ``(None, None)`` when the index is empty. Powers the inventory
+        date-input prefill (M06).
+        """
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT MIN(date), MAX(date) FROM coverage"
+        ).fetchone()
+        if not row or row[0] is None:
+            return (None, None)
+        return (row[0], row[1])
+
+    def schema_version_on_disk(self) -> str | None:
+        """Return the persisted schema version, or ``None`` if absent.
+
+        An older-schema DB (pre-v2: had ``ingested_at``/``cov_spatial``)
+        either lacks the row or carries an older value, so callers can
+        detect it and trigger a fresh rebuild.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT value FROM coverage_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except duckdb.Error:
+            return None
+        return str(row[0]) if row and row[0] is not None else None
 
     def stats(self) -> dict[str, Any]:
         """Return small summary stats for status reports + the auto-rebuild hook."""
@@ -580,8 +621,11 @@ def rebuild_from_parquet(
 ) -> dict[str, Any]:
     """Rebuild ``_coverage.duckdb`` from every parquet file under the dataset.
 
-    Idempotent: the OR-merge upsert means re-running yields the same end
-    state (modulo ``ingested_at`` timestamps).
+    Idempotent. Writes into a fresh ``_coverage.duckdb.tmp`` and atomically
+    swaps it into place: DuckDB never shrinks a file via DELETE/CHECKPOINT,
+    so rebuilding in place would let the file grow without bound across
+    runs. A pristine file is the only reliable way to keep it minimal
+    (and it transparently replaces any older-schema DB).
 
     ``progress`` is an optional ``rich.progress.Progress`` instance. If
     provided, the function adds a per-file task and updates it. The function
@@ -595,14 +639,16 @@ def rebuild_from_parquet(
     if progress is not None and files:
         task_id = progress.add_task(f"Rebuilding {dataset}", total=len(files))
 
+    db_path = parquet_dir / COVERAGE_DB_FILENAME
+    tmp_path = parquet_dir / (COVERAGE_DB_FILENAME + ".tmp")
+    # Clear any stale tmp (+ its WAL) from a previously interrupted rebuild.
+    for p in (tmp_path, Path(str(tmp_path) + ".wal")):
+        if p.exists():
+            p.unlink()
+
     total_rows = 0
     n_files = 0
-    with CoverageIndex(dataset, base_dir) as cov:
-        # Full rebuild from the canonical parquet set: start empty so there
-        # are zero ON CONFLICT updates (no MVCC version churn), then
-        # CHECKPOINT at the end so the file is compacted instead of growing
-        # unboundedly across pipeline runs.
-        cov.truncate()
+    with CoverageIndex(dataset, base_dir, db_path_override=tmp_path) as cov:
         for date_str, fpath in files:
             try:
                 df = pl.read_parquet(fpath)
@@ -626,6 +672,24 @@ def rebuild_from_parquet(
 
         cov.checkpoint()
         final_stats = cov.stats()
+
+    # Atomic swap. On Windows os.replace fails if a reader still holds the
+    # destination; retry once, then fall back to a non-atomic replace so a
+    # rebuild is never silently lost.
+    try:
+        os.replace(tmp_path, db_path)
+    except OSError:
+        try:
+            if db_path.exists():
+                db_path.unlink()
+            os.replace(tmp_path, db_path)
+        except OSError as exc:
+            log.warning(
+                "Could not swap rebuilt coverage DB into place "
+                "(%s); leaving %s for next run.",
+                exc,
+                tmp_path,
+            )
     final_stats["files_processed"] = n_files
     final_stats["rows_upserted"] = total_rows
     return final_stats
@@ -655,11 +719,21 @@ def ensure_coverage_index(
     db_path = parquet_dir / COVERAGE_DB_FILENAME
     if db_path.exists():
         with CoverageIndex(dataset, base_dir) as cov:
-            if cov.stats()["total_rows"] > 0:
-                return False  # Already populated.
+            on_disk = cov.schema_version_on_disk()
+            populated = cov.stats()["total_rows"] > 0
+        if populated and on_disk == COVERAGE_SCHEMA_VERSION:
+            return False  # Already populated and current schema.
+        if on_disk != COVERAGE_SCHEMA_VERSION:
+            log.info(
+                "Coverage index for %s is schema %s (want %s); rebuilding.",
+                dataset,
+                on_disk,
+                COVERAGE_SCHEMA_VERSION,
+            )
 
     log.info(
-        "Coverage index for %s missing or empty; rebuilding from %d parquet file(s)...",
+        "Coverage index for %s missing/empty/stale; rebuilding from %d "
+        "parquet file(s)...",
         dataset,
         len(files),
     )

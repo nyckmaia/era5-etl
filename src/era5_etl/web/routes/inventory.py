@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from era5_etl.datasets import DatasetRegistry
 from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
 from era5_etl.storage.paths import resolve_dataset_dir
+from era5_etl.web.models import DateRangeOut
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -91,7 +92,11 @@ def grid_points(
     dataset: str = Query(..., description="Dataset name (era5 or era5-land)"),
     date_from: str | None = Query(None, description="ISO date YYYY-MM-DD"),
     date_to: str | None = Query(None, description="ISO date YYYY-MM-DD"),
-    variable: str | None = Query(None, description="CDS variable name to filter on"),
+    variable: list[str] | None = Query(  # noqa: B008 - FastAPI Query default
+        None,
+        description="CDS variable name(s) to filter on. Repeat for multiple; "
+        "omit for all (M07 multi-select).",
+    ),
     format: Literal["json", "arrow", "auto"] = Query(  # noqa: A002 - matches public API
         "auto", description="Response format. 'auto' = arrow if rows > 5000."
     ),
@@ -109,7 +114,9 @@ def grid_points(
         return []
 
     with CoverageIndex(dataset, base_dir) as cov:
-        df = cov.query_grid_points(date_from=df_from, date_to=df_to, variable=variable)
+        df = cov.query_grid_points(
+            date_from=df_from, date_to=df_to, variable=variable or None
+        )
 
     use_arrow = format == "arrow" or (format == "auto" and df.height > JSON_THRESHOLD)
     if use_arrow:
@@ -209,3 +216,30 @@ def region_summary(body: RegionSummaryRequest, request: Request):
         if d is not None and hasattr(d, "isoformat"):
             gap["date"] = d.isoformat()
     return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/inventory/date-range  (M06 — prefill the inventory date inputs)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/date-range", response_model=DateRangeOut)
+def date_range(
+    request: Request,
+    dataset: str = Query(..., description="Dataset name (era5 or era5-land)"),
+) -> DateRangeOut:
+    """Min/max date present in the dataset's coverage index.
+
+    Both ``null`` when there's no coverage yet (HTTP 200 — a valid state
+    the UI handles by leaving the date inputs empty).
+    """
+    _validate_dataset(dataset)
+    base_dir = request.app.state.data_dir
+    if not _coverage_db_exists(base_dir, dataset):
+        return DateRangeOut(min=None, max=None)
+    with CoverageIndex(dataset, base_dir) as cov:
+        lo, hi = cov.query_date_range()
+    return DateRangeOut(
+        min=lo.isoformat() if lo is not None else None,
+        max=hi.isoformat() if hi is not None else None,
+    )

@@ -117,23 +117,45 @@ class RefreshCoverageStage(Stage):
         self.config = config
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
+        from era5_etl.storage.paths import resolve_dataset_dir
+
+        base_dir = self.config.storage.database_dir
+        dataset = self.config.dataset_name
+        parquet_dir = resolve_dataset_dir(base_dir, dataset)
+        self.logger.info(
+            "Refreshing coverage index for %s from %s", dataset, parquet_dir
+        )
         try:
-            stats = rebuild_from_parquet(
-                self.config.dataset_name,
-                self.config.storage.database_dir,
-                logger=self.logger,
-            )
+            stats = rebuild_from_parquet(dataset, base_dir, logger=self.logger)
             context.set_metadata("coverage_stats", stats)
             self.logger.info(
-                "Coverage index refreshed: %s rows / %s files",
+                "Coverage index refreshed: %s rows from %s parquet file(s) "
+                "(%s cells, %s dates, %s vars)",
                 stats.get("total_rows", "?"),
-                stats.get("n_files", "?"),
+                stats.get("files_processed", "?"),
+                stats.get("n_cells", "?"),
+                stats.get("n_dates", "?"),
+                stats.get("n_variables", "?"),
             )
+            if stats.get("total_rows", 0) == 0 and stats.get(
+                "files_processed", 0
+            ):
+                # Parquet existed but nothing was indexed -> /inventory
+                # would wrongly show "no data". Make this loud.
+                self.logger.error(
+                    "Coverage refresh produced 0 rows despite %s parquet "
+                    "file(s) in %s -- inventory will appear empty. Check "
+                    "the parquet schema (latitude/longitude/hour_utc/date "
+                    "+ variable columns).",
+                    stats.get("files_processed"),
+                    parquet_dir,
+                )
         except Exception as exc:  # noqa: BLE001 -- coverage is derived; never fail the pipeline
             self.logger.warning(
                 "Coverage index refresh failed (non-fatal); run "
                 "`era5 coverage rebuild` manually to recover: %s",
                 exc,
+                exc_info=True,
             )
         return context
 
