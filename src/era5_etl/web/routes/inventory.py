@@ -118,6 +118,13 @@ def grid_points(
             date_from=df_from, date_to=df_to, variable=variable or None
         )
 
+    # The frontend GridPoint contract is {lat, lon, days, vars} for BOTH
+    # formats. query_grid_points yields latitude/longitude, so rename
+    # here -- otherwise the Arrow path (used for >5000 cells, e.g. a
+    # Brazil-wide ERA5 download) ships latitude/longitude and the map's
+    # getPosition reads undefined => points render off-world (invisible).
+    df = df.rename({"latitude": "lat", "longitude": "lon"})
+
     use_arrow = format == "arrow" or (format == "auto" and df.height > JSON_THRESHOLD)
     if use_arrow:
         # Use the Arrow IPC *stream* format (vs file format) so the client
@@ -128,8 +135,8 @@ def grid_points(
     # JSON path -- short keys to save bytes over the wire.
     return [
         {
-            "lat": float(row["latitude"]),
-            "lon": float(row["longitude"]),
+            "lat": float(row["lat"]),
+            "lon": float(row["lon"]),
             "days": int(row["days"]),
             "vars": int(row["vars"]),
         }

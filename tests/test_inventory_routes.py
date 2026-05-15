@@ -138,7 +138,9 @@ def test_grid_points_returns_arrow_when_large(client: TestClient, data_dir: Path
     # Decode the Arrow IPC stream and confirm the row count.
     table = pa_ipc.open_stream(io.BytesIO(r.content)).read_all()
     assert table.num_rows == len(lats) * len(lons)
-    assert set(table.column_names) == {"latitude", "longitude", "days", "vars"}
+    # Schema must match the JSON path / frontend GridPoint contract
+    # (lat/lon) so the map can plot points regardless of response format.
+    assert set(table.column_names) == {"lat", "lon", "days", "vars"}
 
 
 def test_grid_points_filters_by_date_range(client: TestClient, data_dir: Path):
