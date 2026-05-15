@@ -104,7 +104,22 @@ def plan_requests(config: DownloadConfig) -> list[RequestChunk]:
 
     chunks: list[RequestChunk] = []
     for year, month in months:
-        days = list(range(1, calendar.monthrange(year, month)[1] + 1))
+        # Clip days to the requested [start_date, end_date] window. Only the
+        # first/last month of a multi-month span is partial; interior months
+        # use all their days. Previously this always seeded the FULL month,
+        # so asking for 2 days downloaded the whole 31-day month.
+        last_day = calendar.monthrange(year, month)[1]
+        first = (
+            start_date.day
+            if (year, month) == (start_date.year, start_date.month)
+            else 1
+        )
+        last = (
+            end_date.day
+            if (year, month) == (end_date.year, end_date.month)
+            else last_day
+        )
+        days = list(range(first, last + 1))
         seed = _Slice(
             year=year,
             month=month,
@@ -389,7 +404,20 @@ def plan_incremental_requests(
 
     chunks: list[RequestChunk] = []
     for year, month in months:
-        requested_days = list(range(1, calendar.monthrange(year, month)[1] + 1))
+        # Same day-clipping as plan_requests: only the first/last month of a
+        # multi-month span is partial; interior months use all their days.
+        last_day = calendar.monthrange(year, month)[1]
+        first = (
+            start_date.day
+            if (year, month) == (start_date.year, start_date.month)
+            else 1
+        )
+        last = (
+            end_date.day
+            if (year, month) == (end_date.year, end_date.month)
+            else last_day
+        )
+        requested_days = list(range(first, last + 1))
         for variable in requested_variables:
             missing = manifest.missing_rects_for(
                 target_area=list(config.area),

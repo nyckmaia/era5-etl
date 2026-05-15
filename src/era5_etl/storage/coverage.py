@@ -499,6 +499,28 @@ class CoverageIndex:
         finally:
             conn.unregister("diff_request")
 
+    def truncate(self) -> None:
+        """Empty the coverage table (schema kept).
+
+        Used by :func:`rebuild_from_parquet`: a rebuild re-reads every
+        parquet partition, so accumulating rows across runs via ON CONFLICT
+        is pointless and leaves dead MVCC row versions that bloat the
+        ``.duckdb`` file. Starting from empty means every insert is a clean
+        append with zero conflicts.
+        """
+        conn = self._connect()
+        conn.execute("DELETE FROM coverage")
+
+    def checkpoint(self) -> None:
+        """Flush the WAL and compact the database file.
+
+        DuckDB does not auto-compact: without an explicit CHECKPOINT the
+        on-disk file keeps growing as superseded row/index versions pile
+        up. Called once at the end of a rebuild.
+        """
+        conn = self._connect()
+        conn.execute("CHECKPOINT")
+
     def stats(self) -> dict[str, Any]:
         """Return small summary stats for status reports + the auto-rebuild hook."""
         conn = self._connect()
@@ -576,6 +598,11 @@ def rebuild_from_parquet(
     total_rows = 0
     n_files = 0
     with CoverageIndex(dataset, base_dir) as cov:
+        # Full rebuild from the canonical parquet set: start empty so there
+        # are zero ON CONFLICT updates (no MVCC version churn), then
+        # CHECKPOINT at the end so the file is compacted instead of growing
+        # unboundedly across pipeline runs.
+        cov.truncate()
         for date_str, fpath in files:
             try:
                 df = pl.read_parquet(fpath)
@@ -597,6 +624,7 @@ def rebuild_from_parquet(
             if progress is not None and task_id is not None:
                 progress.advance(task_id)
 
+        cov.checkpoint()
         final_stats = cov.stats()
     final_stats["files_processed"] = n_files
     final_stats["rows_upserted"] = total_rows

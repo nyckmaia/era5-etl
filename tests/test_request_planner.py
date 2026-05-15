@@ -254,3 +254,26 @@ def test_incremental_plan_skips_already_covered_variable(tmp_path):
     vars_in_plan = {v for c in chunks for v in c.variables}
     assert "total_precipitation" in vars_in_plan
     assert "2m_temperature" not in vars_in_plan
+
+
+def test_partial_month_only_requests_requested_days():
+    """Requesting 2 days inside a month must NOT seed the whole 31-day month."""
+    cfg = _make(start="2024-01-10", end="2024-01-11")
+    chunks = plan_requests(cfg)
+    seen: list[int] = []
+    for c in chunks:
+        seen.extend(c.days)
+    assert sorted(set(seen)) == [10, 11], f"expected only days 10,11; got {sorted(set(seen))}"
+    assert not chunks[0].is_full_month
+
+
+def test_multi_month_clips_first_and_last_only():
+    """Interior months keep all days; only the edge months are clipped."""
+    cfg = _make(start="2024-01-30", end="2024-03-02")
+    chunks = plan_requests(cfg)
+    by_month: dict[tuple[int, int], set[int]] = {}
+    for c in chunks:
+        by_month.setdefault((c.year, c.month), set()).update(c.days)
+    assert by_month[(2024, 1)] == {30, 31}          # clipped start
+    assert by_month[(2024, 2)] == set(range(1, 30))  # full Feb (leap year)
+    assert by_month[(2024, 3)] == {1, 2}            # clipped end
