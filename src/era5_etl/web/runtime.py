@@ -7,6 +7,7 @@ yields them to the client as they arrive.
 
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
@@ -54,6 +55,10 @@ class ProgressEvent:
     phase: ChunkPhase | None = None
     bytes_downloaded: int | None = None
     bytes_total: int | None = None
+    # Conversion-stage progress (NetCDF -> Parquet). Set only on
+    # ``stage == "convert"`` events; ``None`` on download/chunk events.
+    files_done: int | None = None
+    files_total: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,14 +120,29 @@ class PipelineRun:
         self._queue.put(event)
 
     def emit_chunk_event(self, payload: dict[str, Any]) -> None:
-        """Queue a chunk-lifecycle event from the downloader.
+        """Queue a progress event from the pipeline.
 
         ``payload`` is the dict produced by ``CDSDownloader.on_event`` /
-        ``CDSEventCapture`` -- keys: chunk_id, chunk_index, chunks_total,
-        phase, message, optional bytes_downloaded, bytes_total. Missing
-        keys default to ``None`` (we explicitly bridge to ``ProgressEvent``
-        rather than letting Pydantic strip unknown fields downstream).
+        ``CDSEventCapture`` (download/chunk lifecycle) OR by the conversion
+        stage (``stage="convert"``). Missing keys default to ``None``; we
+        explicitly bridge to ``ProgressEvent`` rather than letting Pydantic
+        strip unknown fields downstream.
         """
+        if payload.get("stage") == "convert":
+            done = int(payload.get("files_done", 0) or 0)
+            total = int(payload.get("files_total", 0) or 0)
+            frac = (done / total) if total else 0.0
+            self._queue.put(
+                ProgressEvent(
+                    stage="convert",
+                    stage_progress=frac,
+                    message=str(payload.get("message", "")),
+                    global_progress=frac,
+                    files_done=done,
+                    files_total=total,
+                )
+            )
+            return
         chunks_total = payload.get("chunks_total")
         chunk_index = payload.get("chunk_index")
         global_progress = 0.0
@@ -163,22 +183,31 @@ class PipelineRun:
     # ---- consumer (used by SSE handler) -----------------------------------
 
     def stream(self) -> "Iterator[dict[str, Any]]":
-        """Yield events as they arrive until the run completes."""
+        """Yield events as they arrive until the run completes.
+
+        ``data`` MUST be a JSON string: ``sse_starlette`` writes the SSE
+        ``data:`` line via ``str(data)``, so passing a raw ``dict`` would
+        emit a Python repr (single quotes, ``None``) that the browser's
+        ``JSON.parse`` rejects -- silently dropping every progress event
+        and turning a successful run into a frontend "Unknown error".
+        """
         while True:
             try:
                 item = self._queue.get(timeout=30.0)
             except queue.Empty:
                 # Heartbeat keeps the connection open through proxies.
-                yield {"event": "heartbeat", "data": {"ts": time.time()}}
+                yield {"event": "heartbeat", "data": json.dumps({"ts": time.time()})}
                 continue
             if item is self._SENTINEL:
                 yield {
                     "event": "end",
-                    "data": {"status": self.status, "error": self.error},
+                    "data": json.dumps(
+                        {"status": self.status, "error": self.error}
+                    ),
                 }
                 return
             assert isinstance(item, ProgressEvent)
-            yield {"event": "progress", "data": item.as_dict()}
+            yield {"event": "progress", "data": json.dumps(item.as_dict())}
 
 
 # A module-level singleton runtime is convenient for in-process use; tests can

@@ -1,4 +1,13 @@
-import { CheckCircle2, Clock, Cloud, Download, Loader2, Send, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  Cloud,
+  Download,
+  FileStack,
+  Loader2,
+  Send,
+  XCircle,
+} from "lucide-react";
 import { useEffect, useReducer, useRef } from "react";
 
 import { cn } from "@/lib/format";
@@ -24,6 +33,8 @@ export interface ProgressPayload {
   phase?: ChunkPhase;
   bytes_downloaded?: number;
   bytes_total?: number;
+  files_done?: number;
+  files_total?: number;
 }
 
 interface ChunkState {
@@ -32,10 +43,14 @@ interface ChunkState {
   chunks_total: number | null;
   phase: ChunkPhase;
   message: string;
-  bytes_downloaded: number | null;
   bytes_total: number | null;
   last_update: number;
-  started_at: number;
+}
+
+interface ConvertState {
+  done: number;
+  total: number;
+  message: string;
 }
 
 interface RunState {
@@ -44,6 +59,7 @@ interface RunState {
   status: "running" | "completed" | "failed";
   error: string | null;
   chunks_total: number | null;
+  convert: ConvertState | null;
 }
 
 const INITIAL_STATE: RunState = {
@@ -52,6 +68,7 @@ const INITIAL_STATE: RunState = {
   status: "running",
   error: null,
   chunks_total: null,
+  convert: null,
 };
 
 type Action =
@@ -63,6 +80,24 @@ function reducer(state: RunState, action: Action): RunState {
     return { ...state, status: action.status, error: action.error };
   }
   const p = action.payload;
+
+  // Conversion-stage events carry no chunk_id; they drive a separate bar.
+  if (p.stage === "convert") {
+    const now = p.timestamp ?? Date.now() / 1000;
+    return {
+      ...state,
+      convert: {
+        done: p.files_done ?? state.convert?.done ?? 0,
+        total: p.files_total ?? state.convert?.total ?? 0,
+        message: p.message ?? state.convert?.message ?? "",
+      },
+      events: [
+        { ts: now, chunk_id: null, phase: "convert", message: p.message ?? "" },
+        ...state.events,
+      ].slice(0, 50),
+    };
+  }
+
   if (!p.chunk_id || !p.phase) {
     return state;
   }
@@ -74,10 +109,8 @@ function reducer(state: RunState, action: Action): RunState {
     chunks_total: p.chunks_total ?? prev?.chunks_total ?? null,
     phase: p.phase,
     message: p.message ?? "",
-    bytes_downloaded: p.bytes_downloaded ?? prev?.bytes_downloaded ?? null,
     bytes_total: p.bytes_total ?? prev?.bytes_total ?? null,
     last_update: now,
-    started_at: prev?.started_at ?? now,
   };
   const events = [
     { ts: now, chunk_id: p.chunk_id, phase: p.phase, message: p.message ?? "" },
@@ -89,6 +122,20 @@ function reducer(state: RunState, action: Action): RunState {
     events,
     chunks_total: p.chunks_total ?? state.chunks_total,
   };
+}
+
+// Friendly, ordered phase labels for the "current CDS request" tracker.
+const PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
+  { phase: "submitting", label: "Enviando requisição ao CDS" },
+  { phase: "queued", label: "Na fila do CDS (aguardando aceitação)" },
+  { phase: "running", label: "Aceita — CDS processando" },
+  { phase: "downloading", label: "Baixando NetCDF" },
+  { phase: "completed", label: "Concluído" },
+];
+
+function phaseRank(phase: ChunkPhase): number {
+  const idx = PHASE_STEPS.findIndex((s) => s.phase === phase);
+  return idx < 0 ? 0 : idx;
 }
 
 export function RunProgress({ runId }: { runId: string }) {
@@ -109,7 +156,10 @@ export function RunProgress({ runId }: { runId: string }) {
     });
     src.addEventListener("end", (e: MessageEvent) => {
       try {
-        const payload = JSON.parse(e.data) as { status: "completed" | "failed"; error: string | null };
+        const payload = JSON.parse(e.data) as {
+          status: "completed" | "failed";
+          error: string | null;
+        };
         dispatch({ type: "end", status: payload.status, error: payload.error });
       } catch {
         dispatch({ type: "end", status: "failed", error: "Unknown error" });
@@ -132,7 +182,20 @@ export function RunProgress({ runId }: { runId: string }) {
   const active = chunkList.find(
     (c) => c.phase !== "completed" && c.phase !== "failed",
   );
-  const overall = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  // Bar A — download group (chunks completed / total)
+  const groupPct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  // Bar B — current CDS request lifecycle (stepped)
+  const curPhase: ChunkPhase | null = active?.phase ?? null;
+  const phasePct = curPhase
+    ? Math.round((phaseRank(curPhase) / (PHASE_STEPS.length - 1)) * 100)
+    : completed > 0 && completed === total
+      ? 100
+      : 0;
+  // Bar C — NetCDF -> Parquet conversion
+  const conv = state.convert;
+  const convPct =
+    conv && conv.total > 0 ? Math.round((conv.done / conv.total) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -141,44 +204,61 @@ export function RunProgress({ runId }: { runId: string }) {
           <div>
             <div className="text-xs font-medium uppercase tracking-wide text-ink-400">
               {state.status === "completed"
-                ? "Download finished"
+                ? "Pipeline finished"
                 : state.status === "failed"
-                  ? "Download failed"
-                  : "Download in progress"}
+                  ? "Pipeline failed"
+                  : "Pipeline running"}
             </div>
             <div className="mt-1 text-lg font-semibold text-ink-900">
-              {active
-                ? `Chunk ${active.chunk_index ?? "?"} of ${total}`
-                : state.status === "completed"
-                  ? `${completed} of ${total} chunks complete`
-                  : `${completed} of ${total} chunks done`}
+              {state.status === "completed"
+                ? `${completed} of ${total} chunk(s) downloaded · conversion done`
+                : active
+                  ? `Chunk ${active.chunk_index ?? "?"} of ${total}`
+                  : conv && conv.total > 0
+                    ? `Converting ${conv.done}/${conv.total}`
+                    : `${completed} of ${total} chunk(s)`}
             </div>
           </div>
           <StatusIndicator status={state.status} />
         </div>
-        <div className="mt-4 h-2 overflow-hidden rounded-full bg-ink-100">
-          <div
-            className={cn(
-              "h-full rounded-full transition-all duration-500",
-              state.status === "failed"
-                ? "bg-rose-500"
+
+        <div className="mt-5 space-y-4">
+          <Bar
+            icon={<FileStack className="h-4 w-4 text-ocean-600" />}
+            label="Download (grupo de chunks)"
+            pct={groupPct}
+            sub={`${completed}/${total} chunk(s)`}
+            tone={state.status === "failed" ? "fail" : "group"}
+          />
+          <Bar
+            icon={<Cloud className="h-4 w-4 text-amber-600" />}
+            label="Requisição CDS atual"
+            pct={phasePct}
+            sub={
+              curPhase
+                ? (PHASE_STEPS.find((s) => s.phase === curPhase)?.label ??
+                  curPhase)
                 : state.status === "completed"
-                  ? "bg-emerald-500"
-                  : "bg-ocean-500",
-            )}
-            style={{ width: `${overall}%` }}
+                  ? "Concluído"
+                  : "Aguardando primeira requisição…"
+            }
+            tone={state.status === "failed" ? "fail" : "phase"}
+          />
+          <Bar
+            icon={<Download className="h-4 w-4 text-moss-600" />}
+            label="Conversão NetCDF → Parquet"
+            pct={convPct}
+            sub={
+              conv
+                ? `${conv.done}/${conv.total} arquivo(s) — ${conv.message.slice(0, 60)}`
+                : "Aguardando downloads…"
+            }
+            tone={state.status === "failed" ? "fail" : "convert"}
           />
         </div>
-        <div className="mt-1 flex justify-between text-[11px] text-ink-400">
-          <span>{overall}% overall</span>
-          {active && (
-            <span>
-              {active.message ? active.message.slice(0, 80) : `${active.phase}…`}
-            </span>
-          )}
-        </div>
+
         {state.error && (
-          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+          <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
             {state.error}
           </div>
         )}
@@ -211,14 +291,51 @@ export function RunProgress({ runId }: { runId: string }) {
                 {new Date(e.ts * 1000).toLocaleTimeString()}
               </span>
               {e.chunk_id && <span className="text-ocean-700">{e.chunk_id}</span>}
-              {e.phase && (
-                <span className="text-ink-600">→ {e.phase}</span>
-              )}
+              {e.phase && <span className="text-ink-600">→ {e.phase}</span>}
               <span className="truncate text-ink-500">{e.message}</span>
             </li>
           ))}
         </ul>
       </section>
+    </div>
+  );
+}
+
+function Bar({
+  icon,
+  label,
+  pct,
+  sub,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  pct: number;
+  sub: string;
+  tone: "group" | "phase" | "convert" | "fail";
+}) {
+  const fill = {
+    group: "bg-ocean-500",
+    phase: "bg-amber-500",
+    convert: "bg-moss-500",
+    fail: "bg-rose-500",
+  }[tone];
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs">
+        <span className="flex items-center gap-2 font-medium text-ink-700">
+          {icon}
+          {label}
+        </span>
+        <span className="tabular-nums text-ink-500">{pct}%</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-ink-100">
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", fill)}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="mt-1 truncate text-[11px] text-ink-400">{sub}</div>
     </div>
   );
 }

@@ -55,9 +55,14 @@ class DownloadStage(Stage):
 class ConvertToParquetStage(Stage):
     """Stage for converting NetCDF directly to Parquet (no CSV intermediate)."""
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         super().__init__("Convert NetCDF to Parquet")
         self.config = config
+        self.progress_callback = progress_callback
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Execute conversion stage."""
@@ -67,9 +72,25 @@ class ConvertToParquetStage(Stage):
             storage_config=self.config.storage,
             output_dir=output_dir,
         )
+
+        on_progress = None
+        if self.progress_callback is not None:
+            cb = self.progress_callback
+
+            def on_progress(done: int, total: int, message: str) -> None:
+                cb(
+                    {
+                        "stage": "convert",
+                        "files_done": done,
+                        "files_total": total,
+                        "message": message,
+                    }
+                )
+
         stats = converter.convert_directory(
             self.config.download.output_dir,
             max_workers=self.config.transform.max_workers,
+            on_progress=on_progress,
         )
         context.set("conversion_stats", stats)
         context.set_metadata("converted_count", stats["converted"])
@@ -179,7 +200,11 @@ class ERA5Pipeline(Pipeline[PipelineConfig]):
                 apply_diff=self.apply_diff,
             )
         )
-        self.add_stage(ConvertToParquetStage(self.config))
+        self.add_stage(
+            ConvertToParquetStage(
+                self.config, progress_callback=self.progress_callback
+            )
+        )
         self.add_stage(RefreshCoverageStage(self.config))
         self.add_stage(CreateViewStage(self.config))
         self.logger.info(f"Pipeline configured with {len(self._stages)} stages")

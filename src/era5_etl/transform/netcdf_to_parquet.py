@@ -5,6 +5,7 @@ eliminating the intermediate CSV step.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -108,7 +109,12 @@ class NetCDFToParquetConverter:
                 f"NetCDF to Parquet conversion failed for {netcdf_file}: {e}"
             ) from e
 
-    def convert_directory(self, input_dir: Path, max_workers: int | None = None) -> dict[str, int]:
+    def convert_directory(
+        self,
+        input_dir: Path,
+        max_workers: int | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, int]:
         """Convert all NetCDF files in a directory.
 
         Uses ProcessPoolExecutor for parallel conversion when multiple files exist.
@@ -116,6 +122,10 @@ class NetCDFToParquetConverter:
         Args:
             input_dir: Directory containing .nc files
             max_workers: Maximum number of worker processes (None=auto based on CPU count)
+            on_progress: Optional ``(files_done, files_total, message)`` callback,
+                invoked from the main process after each file completes (both
+                sequential and parallel paths). Used by the web UI to drive a
+                conversion progress bar.
 
         Returns:
             Statistics dict with counts
@@ -123,11 +133,24 @@ class NetCDFToParquetConverter:
         netcdf_files = sorted(input_dir.glob("*.nc"))
         if not netcdf_files:
             self.logger.warning(f"No NetCDF files found in {input_dir}")
+            if on_progress is not None:
+                on_progress(0, 0, "No NetCDF files to convert")
             return {"total": 0, "converted": 0, "skipped": 0, "failed": 0}
 
         self.logger.info(f"Found {len(netcdf_files)} NetCDF files to convert")
 
-        stats = {"total": len(netcdf_files), "converted": 0, "skipped": 0, "failed": 0}
+        total = len(netcdf_files)
+        stats = {"total": total, "converted": 0, "skipped": 0, "failed": 0}
+        done = 0
+
+        def _tick(name: str) -> None:
+            nonlocal done
+            done += 1
+            if on_progress is not None:
+                on_progress(done, total, f"Converted {done}/{total}: {name}")
+
+        if on_progress is not None:
+            on_progress(0, total, f"Converting {total} file(s) to Parquet")
 
         if len(netcdf_files) == 1 or max_workers == 1:
             # Single file or explicit single-worker mode: convert sequentially
@@ -138,6 +161,7 @@ class NetCDFToParquetConverter:
                 except Exception as e:
                     stats["failed"] += 1
                     self.logger.error(f"Failed: {nc_file.name}: {e}")
+                _tick(nc_file.name)
         else:
             # Parallel conversion
             from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -174,6 +198,7 @@ class NetCDFToParquetConverter:
                     except Exception as e:
                         stats["failed"] += 1
                         self.logger.error(f"Failed: {nc_file.name}: {e}")
+                    _tick(nc_file.name)
 
         self.logger.info(
             f"Conversion complete: {stats['converted']} converted, "

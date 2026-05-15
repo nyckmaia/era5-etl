@@ -113,16 +113,7 @@ def start_run(body: PipelineRunIn, request: Request) -> PipelineRunOut:
                 progress_callback=run.emit_chunk_event,
                 apply_diff=body.apply_diff,
             )
-            ctx = pipe.run()
-            # Hook into context's progress callback if available.
-            ctx.set_progress_callback(
-                lambda progress, message: run.emit(
-                    stage="overall",
-                    stage_progress=progress,
-                    message=message,
-                    global_progress=progress,
-                )
-            )
+            pipe.run()
             run.mark_completed()
         except Exception as exc:  # pragma: no cover - depends on CDS access
             run.mark_failed(str(exc))
