@@ -136,6 +136,23 @@ export interface QuerySchema {
   columns: QuerySchemaColumn[];
 }
 
+export interface QueryHistoryEntry {
+  id: string;
+  sql: string;
+  ts: number;
+  rows: number;
+  elapsed_ms: number;
+  name: string | null;
+  favorite: boolean;
+}
+
+export interface TemplateItem {
+  id: string;
+  name: string;
+  sql: string;
+  category: string | null;
+}
+
 export type PrecisionMethod = "round" | "truncate";
 
 export interface ColumnPrecision {
@@ -227,7 +244,7 @@ export const api = {
       "/api/pipeline/run",
       { method: "POST", body: JSON.stringify(body) },
     ),
-  query: (body: { dataset: string; sql: string; limit?: number }) =>
+  query: (body: { dataset?: string; sql: string; limit?: number }) =>
     request<{
       columns: string[];
       column_types: string[];
@@ -239,6 +256,64 @@ export const api = {
     request<QuerySchema>(
       `/api/query/schema?dataset=${encodeURIComponent(dataset)}`,
     ),
+  exportQuery: async (fmt: "csv" | "parquet", sql: string) => {
+    const r = await fetch(`/api/export/${fmt}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
+    if (!r.ok) {
+      let detail = `HTTP ${r.status}`;
+      try {
+        const j = await r.json();
+        if (j.detail) detail = String(j.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `query-export.${fmt}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
+  queryHistory: {
+    list: (view: string) =>
+      request<QueryHistoryEntry[]>(
+        `/api/query/history/${encodeURIComponent(view)}`,
+      ),
+    append: (
+      view: string,
+      entry: { sql: string; rows?: number; elapsed_ms?: number },
+    ) =>
+      request<QueryHistoryEntry[]>(
+        `/api/query/history/${encodeURIComponent(view)}`,
+        { method: "POST", body: JSON.stringify(entry) },
+      ),
+    patch: (
+      view: string,
+      id: string,
+      patch: { name?: string | null; favorite?: boolean },
+    ) =>
+      request<QueryHistoryEntry[]>(
+        `/api/query/history/${encodeURIComponent(view)}/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+      ),
+    del: (view: string, id: string) =>
+      request<QueryHistoryEntry[]>(
+        `/api/query/history/${encodeURIComponent(view)}/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    clear: (view: string) =>
+      request<QueryHistoryEntry[]>(
+        `/api/query/history/${encodeURIComponent(view)}`,
+        { method: "DELETE" },
+      ),
+  },
   precision: {
     get: (dataset: string) =>
       request<PrecisionConfig>(

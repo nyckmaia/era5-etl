@@ -12,6 +12,9 @@ interface SqlEditorProps {
   onRun: () => void;
   schemaColumns: SchemaColumn[];
   viewName: string;
+  /** Distinct Monaco model path per tab → independent undo history. */
+  path?: string;
+  height?: string;
 }
 
 const SQL_KEYWORDS = [
@@ -139,6 +142,8 @@ export default function SqlEditor({
   onRun,
   schemaColumns,
   viewName,
+  path,
+  height = "240px",
 }: SqlEditorProps) {
   // Keep the module-level schema ref current on every render so the
   // globally-registered provider always sees the latest dataset.
@@ -158,9 +163,10 @@ export default function SqlEditor({
   return (
     <div className="overflow-hidden rounded-lg border border-ink-200">
       <Editor
-        height="240px"
+        height={height}
         language="sql"
         theme="light"
+        path={path}
         value={value}
         onChange={(v) => onChange(v ?? "")}
         onMount={handleMount}
