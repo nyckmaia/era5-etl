@@ -12,7 +12,13 @@
       "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('src/era5_etl/web/routes/export.py'\\).read\\(\\)\\); ast.parse\\(open\\('src/era5_etl/web/routes/query.py'\\).read\\(\\)\\); print\\('ok'\\)\")",
       "Bash(py -3.12 -c \"import ast; ast.parse\\(open\\('src/era5_etl/web/routes/inventory.py'\\).read\\(\\)\\); print\\('ok'\\)\")",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(node -e \"console.log\\(require\\('./package.json'\\).dependencies['@tanstack/react-router']\\)\")",
+      "Bash(bun run *)",
+      "Read(//c/Users/nyck/dev/datasus-etl/**)",
+      "Read(//c/Users/nyck/dev/datasus-etl/web-ui/src/**)",
+      "Read(//c/Users/nyck/dev/datasus-etl/web-ui/src/pages/**)",
+      "Bash(xargs grep -l \"history\")"
     ]
   }
 }
