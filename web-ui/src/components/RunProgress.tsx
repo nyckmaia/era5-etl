@@ -1,11 +1,15 @@
+import { Link } from "@tanstack/react-router";
 import {
+  ArrowRight,
   CheckCircle2,
   Clock,
   Cloud,
+  Database,
   Download,
   FileStack,
   Loader2,
   Send,
+  Sparkles,
   XCircle,
 } from "lucide-react";
 import { useEffect, useReducer, useRef } from "react";
@@ -197,6 +201,18 @@ export function RunProgress({ runId }: { runId: string }) {
   const convPct =
     conv && conv.total > 0 ? Math.round((conv.done / conv.total) * 100) : 0;
 
+  // "Starting up": run accepted by the backend but no SSE chunk event has
+  // arrived yet. Make it explicit that the FIRST step is submitting the CDS
+  // request (not a frozen "Running" spinner).
+  const startingUp =
+    state.status === "running" &&
+    !active &&
+    completed === 0 &&
+    !(conv && conv.total > 0);
+  // Show a small non-zero fill on the current-request bar while starting so
+  // the user sees motion immediately after clicking "Start download".
+  const phaseBarPct = startingUp && phasePct === 0 ? 8 : phasePct;
+
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
@@ -211,18 +227,39 @@ export function RunProgress({ runId }: { runId: string }) {
             </div>
             <div className="mt-1 text-lg font-semibold text-ink-900">
               {state.status === "completed"
-                ? `${completed} of ${total} chunk(s) downloaded · conversion done`
-                : active
-                  ? `Chunk ${active.chunk_index ?? "?"} of ${total}`
-                  : conv && conv.total > 0
-                    ? `Converting ${conv.done}/${conv.total}`
-                    : `${completed} of ${total} chunk(s)`}
+                ? "Pipeline concluído com sucesso"
+                : startingUp
+                  ? "Iniciando — enviando requisição ao CDS…"
+                  : active
+                    ? `Chunk ${active.chunk_index ?? "?"} de ${total}`
+                    : conv && conv.total > 0
+                      ? `Convertendo ${conv.done}/${conv.total}`
+                      : `${completed} de ${total} chunk(s)`}
             </div>
           </div>
           <StatusIndicator status={state.status} />
         </div>
 
         <div className="mt-5 space-y-4">
+          {/* 1º: requisição/arquivo NetCDF individual (em cima) */}
+          <Bar
+            icon={<Cloud className="h-4 w-4 text-amber-600" />}
+            label="Requisição CDS atual (NetCDF individual)"
+            pct={phaseBarPct}
+            sub={
+              curPhase
+                ? (PHASE_STEPS.find((s) => s.phase === curPhase)?.label ??
+                  curPhase)
+                : state.status === "completed"
+                  ? "Concluído"
+                  : startingUp
+                    ? "Enviando requisição ao CDS…"
+                    : "Aguardando primeira requisição…"
+            }
+            tone={state.status === "failed" ? "fail" : "phase"}
+            pulse={startingUp}
+          />
+          {/* 2º: grupo de chunks (abaixo) */}
           <Bar
             icon={<FileStack className="h-4 w-4 text-ocean-600" />}
             label="Download (grupo de chunks)"
@@ -230,20 +267,7 @@ export function RunProgress({ runId }: { runId: string }) {
             sub={`${completed}/${total} chunk(s)`}
             tone={state.status === "failed" ? "fail" : "group"}
           />
-          <Bar
-            icon={<Cloud className="h-4 w-4 text-amber-600" />}
-            label="Requisição CDS atual"
-            pct={phasePct}
-            sub={
-              curPhase
-                ? (PHASE_STEPS.find((s) => s.phase === curPhase)?.label ??
-                  curPhase)
-                : state.status === "completed"
-                  ? "Concluído"
-                  : "Aguardando primeira requisição…"
-            }
-            tone={state.status === "failed" ? "fail" : "phase"}
-          />
+          {/* 3º: conversão */}
           <Bar
             icon={<Download className="h-4 w-4 text-moss-600" />}
             label="Conversão NetCDF → Parquet"
@@ -260,6 +284,31 @@ export function RunProgress({ runId }: { runId: string }) {
         {state.error && (
           <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
             {state.error}
+          </div>
+        )}
+
+        {state.status === "completed" && (
+          <div className="mt-5 flex flex-col items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-5 w-5 shrink-0 text-emerald-600" />
+              <div>
+                <div className="text-sm font-semibold text-emerald-800">
+                  Pipeline finalizado com sucesso
+                </div>
+                <div className="text-xs text-emerald-700">
+                  {completed} chunk(s) baixado(s) e convertido(s) para
+                  Parquet. Os dados já estão consultáveis.
+                </div>
+              </div>
+            </div>
+            <Link
+              to="/query"
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+            >
+              <Database className="h-4 w-4" />
+              Ir para Query
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
         )}
       </header>
@@ -307,12 +356,14 @@ function Bar({
   pct,
   sub,
   tone,
+  pulse = false,
 }: {
   icon: React.ReactNode;
   label: string;
   pct: number;
   sub: string;
   tone: "group" | "phase" | "convert" | "fail";
+  pulse?: boolean;
 }) {
   const fill = {
     group: "bg-ocean-500",
@@ -331,7 +382,11 @@ function Bar({
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-ink-100">
         <div
-          className={cn("h-full rounded-full transition-all duration-500", fill)}
+          className={cn(
+            "h-full rounded-full transition-all duration-500",
+            fill,
+            pulse && "animate-pulse",
+          )}
           style={{ width: `${pct}%` }}
         />
       </div>
