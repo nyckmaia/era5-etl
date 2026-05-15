@@ -23,6 +23,7 @@
     "apache-arrow": "^17.0.0",
     "clsx": "^2.1.1",
     "deck.gl": "^9.0.0",
+    "esbuild": "^0.28.0",
     "lucide-react": "^0.408.0",
     "maplibre-gl": "^4.5.0",
     "react": "^18.3.1",

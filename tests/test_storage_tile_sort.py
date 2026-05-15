@@ -1,6 +1,6 @@
-"""Tests for v0.6.0 phase 2: tile-based sort + coverage index hook.
+"""Tests for v0.6.0 phase 2: tile-based sort.
 
-Two behaviours under test:
+Behaviour under test:
 
 1. ``merge_into_partitioned_parquet`` sorts rows by transient
    ``(_lat_tile, _lon_tile, latitude, longitude, hour_utc)`` keys, then
@@ -8,10 +8,16 @@ Two behaviours under test:
    contain the tile columns, but row groups must have tight 2D min/max
    stats on both latitude and longitude.
 
-2. After every successful write, the per-dataset ``CoverageIndex`` is
-   updated with the rows just committed. Failures in the coverage upsert
-   must be non-fatal -- the parquet on disk is canonical, the coverage
-   index is derived state.
+2. Two parallel writers targeting the SAME date partition serialise behind
+   a per-partition ``filelock`` instead of racing on the parquet read /
+   write / delete cycle (which previously produced "must end with PAR1" or
+   Windows mmap "os error 1224" failures).
+
+The coverage index is no longer updated inline by the writer (DuckDB only
+allows one writer per file, which broke under parallel conversion). It is
+refreshed once at the end of the pipeline by the ``RefreshCoverageStage``;
+see ``tests/test_coverage_index.py::test_ensure_coverage_index_rebuilds``
+for the equivalent end-to-end test.
 """
 
 from __future__ import annotations
@@ -195,9 +201,11 @@ def test_tile_sort_preserves_dedup_within_partition(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 
 
-def test_merge_calls_coverage_upsert(tmp_path: Path) -> None:
-    """After a write, ``_coverage.duckdb`` must exist next to the parquet
-    files and contain rows for every (lat, lon, date, var) cell written.
+def test_merge_does_NOT_create_coverage_db(tmp_path: Path) -> None:
+    """Inverse of the v0.6.0-phase-2 hook: writes must NOT touch
+    ``_coverage.duckdb`` anymore. Coverage is updated by the pipeline-level
+    ``RefreshCoverageStage`` after parallel conversion completes, so the
+    DB doesn't exist after a bare ``merge_into_partitioned_parquet`` call.
     """
     parquet_dir = resolve_dataset_dir(tmp_path, "era5-land")
     df = _grid_df(
@@ -211,54 +219,47 @@ def test_merge_calls_coverage_upsert(tmp_path: Path) -> None:
     merge_into_partitioned_parquet(df, parquet_dir)
 
     cov_db = parquet_dir / COVERAGE_DB_FILENAME
-    assert cov_db.exists(), f"Expected coverage DB at {cov_db}"
-
-    with CoverageIndex("era5-land", tmp_path) as cov:
-        stats = cov.stats()
-        # We wrote a 3x3 grid of distinct (lat, lon) cells, one date, one var.
-        n_lats = len({round(la, 3) for la in df["latitude"].to_list()})
-        n_lons = len({round(lo, 3) for lo in df["longitude"].to_list()})
-        expected_rows = n_lats * n_lons
-        assert stats["total_rows"] == expected_rows
-        assert stats["n_cells"] == expected_rows
-        assert stats["n_dates"] == 1
-        assert stats["n_variables"] == 1
+    assert not cov_db.exists(), (
+        f"Coverage DB should NOT be created by the writer; found {cov_db}"
+    )
 
 
-# ----------------------------------------------------------------------
-# Test 5 -- coverage failure must NOT prevent the parquet commit
-# ----------------------------------------------------------------------
-
-
-def test_coverage_failure_does_not_prevent_parquet_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """If ``CoverageIndex.upsert_from_dataframe`` raises, the parquet file
-    must still be written and readable. The error must be logged but
-    swallowed -- coverage is derived state, parquet is canonical.
+def test_concurrent_writes_to_same_partition_serialise(tmp_path: Path) -> None:
+    """Two threads writing into the same date partition must serialise via
+    the per-partition file lock; both writes should land and produce a
+    deduplicated parquet (no PAR1 / mmap collisions).
     """
-
-    def _explode(self: CoverageIndex, df: pl.DataFrame) -> int:
-        raise RuntimeError("simulated coverage backend failure")
-
-    monkeypatch.setattr(CoverageIndex, "upsert_from_dataframe", _explode)
+    import threading
 
     parquet_dir = resolve_dataset_dir(tmp_path, "era5-land")
-    df = _grid_df(lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), var_value=295.0)
+    df_a = _grid_df(
+        lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), hour=0, var_value=10.0
+    )
+    df_b = _grid_df(
+        lat_range=(-22.0, -21.9), lon_range=(-44.0, -43.9), hour=12, var_value=20.0
+    )
+    errors: list[Exception] = []
 
-    with caplog.at_level("WARNING", logger=pm_module.__name__):
-        merge_into_partitioned_parquet(df, parquet_dir)
+    def _worker(df: pl.DataFrame) -> None:
+        try:
+            merge_into_partitioned_parquet(df, parquet_dir)
+        except Exception as exc:  # noqa: BLE001 -- collected for the assertion below
+            errors.append(exc)
 
-    # Parquet must exist and be readable despite coverage failure.
+    t_a = threading.Thread(target=_worker, args=(df_a,))
+    t_b = threading.Thread(target=_worker, args=(df_b,))
+    t_a.start()
+    t_b.start()
+    t_a.join(timeout=30)
+    t_b.join(timeout=30)
+
+    assert not errors, f"Concurrent writes raised: {errors}"
+
     files = sorted((parquet_dir / "date=2024-01-01").glob("*.parquet"))
-    assert len(files) == 1
-    readback = pl.read_parquet(files[0])
-    assert len(readback) == len(df)
-    assert (readback["t2m"] == 295.0).all()
-
-    # Failure must have been logged at WARNING.
-    assert any(
-        "Coverage index upsert failed" in rec.getMessage()
-        and rec.levelname == "WARNING"
-        for rec in caplog.records
-    ), f"Expected a WARNING log about coverage failure; got: {[r.getMessage() for r in caplog.records]}"
+    assert len(files) == 1, f"Expected single merged file; found {files}"
+    readback = pl.read_parquet(files[0]).sort(["hour_utc", "latitude", "longitude"])
+    # Both writers' rows must be present (4 cells x 2 hours = 8 rows).
+    assert len(readback) == 2 * len(df_a), (
+        f"Expected {2 * len(df_a)} rows, got {len(readback)}"
+    )
+    assert set(readback["hour_utc"].to_list()) == {0, 12}

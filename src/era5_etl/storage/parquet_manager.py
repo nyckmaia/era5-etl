@@ -22,9 +22,10 @@ from typing import Literal
 
 import duckdb
 import polars as pl
+from filelock import FileLock
 
 from era5_etl.storage.manifest import ChunkRecord, Manifest
-from era5_etl.storage.paths import base_dir_from_dataset_dir, resolve_dataset_dir
+from era5_etl.storage.paths import resolve_dataset_dir
 
 # Within a date partition, every (latitude, longitude, hour_utc) tuple is unique.
 # Two downloads covering the same grid cell at the same date+hour collapse into
@@ -77,44 +78,46 @@ def merge_into_partitioned_parquet(
     for (date_value,), df_part in df.group_by(["date"], maintain_order=True):
         date_str = str(date_value)
         partition_dir = parquet_dir / f"date={date_str}"
-        existing_files = (
-            sorted(partition_dir.glob("*.parquet")) if partition_dir.exists() else []
-        )
-        new_payload = df_part.drop("date")
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        # Per-partition lock: under parallel conversion (ProcessPoolExecutor)
+        # two workers may target the same date partition. Without
+        # serialization, worker B reads worker A's in-progress parquet
+        # ("File must end with PAR1") or hits Windows mmap collisions
+        # ("os error 1224"). The lock scope brackets read-modify-write;
+        # workers across processes still parallelise across DIFFERENT dates.
+        lock_path = partition_dir / ".write.lock"
+        with FileLock(str(lock_path)):
+            existing_files = (
+                sorted(partition_dir.glob("*.parquet"))
+                if partition_dir.exists()
+                else []
+            )
+            new_payload = df_part.drop("date")
 
-        if existing_files:
-            existing = _read_partition_payload(existing_files)
-            merged = _merge_by_key(existing, new_payload)
-        else:
-            merged = new_payload
+            if existing_files:
+                existing = _read_partition_payload(existing_files)
+                merged = _merge_by_key(existing, new_payload)
+            else:
+                merged = new_payload
 
-        merged = _sort_for_storage(merged)
-        _replace_partition_files(
-            parquet_dir,
-            date_str,
-            merged,
-            existing_files,
-            compression,
-            log,
-            row_group_size,
-        )
+            merged = _sort_for_storage(merged)
+            _replace_partition_files(
+                parquet_dir,
+                date_str,
+                merged,
+                existing_files,
+                compression,
+                log,
+                row_group_size,
+            )
 
-    # Update the per-dataset coverage index. Coverage is *derived state* --
-    # the parquet on disk is the source of truth -- so a failure here must
-    # NOT prevent the parquet commit. We log a warning and move on; the user
-    # can rebuild the index via `era5 coverage rebuild`.
-    try:
-        # Late import to avoid a circular dependency: coverage.py imports
-        # from paths.py, which is fine, but importing it at module load
-        # would couple parquet_manager <-> coverage at import time.
-        from era5_etl.storage.coverage import CoverageIndex
-
-        dataset_name = parquet_dir.name
-        base_dir = base_dir_from_dataset_dir(parquet_dir)
-        with CoverageIndex(dataset=dataset_name, base_dir=base_dir) as cov:
-            cov.upsert_from_dataframe(df)
-    except Exception as exc:  # noqa: BLE001 -- coverage failures are non-fatal by design
-        log.warning("Coverage index upsert failed (non-fatal): %s", exc)
+    # NOTE on coverage index updates: previously this function upserted into
+    # `_coverage.duckdb` here, but DuckDB only allows one writer per file and
+    # the parallel ProcessPoolExecutor in transform/netcdf_to_parquet.py made
+    # workers race on the same DB file. Coverage is now refreshed once at the
+    # END of the pipeline (see `era5_etl.pipeline.era5_pipeline.ERA5Pipeline`)
+    # via `CoverageIndex.rebuild_from_parquet`. The parquet on disk remains
+    # the canonical source of truth; coverage is derived state.
 
 
 def _compute_sort_keys(df: pl.DataFrame) -> pl.DataFrame:

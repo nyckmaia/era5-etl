@@ -59,6 +59,7 @@ dependencies = [
     "tomli-w>=1.0",
     "httpx>=0.27",
     "packaging>=23.0",
+    "filelock>=3.0",
 ]
 
 [project.optional-dependencies]

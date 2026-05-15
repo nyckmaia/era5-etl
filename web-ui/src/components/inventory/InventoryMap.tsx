@@ -202,7 +202,6 @@ export function InventoryMap(props: InventoryMapProps) {
         onDrag={handleDrag}
         onDragEnd={handleDragEnd}
         getTooltip={tooltip}
-        onAfterRender={undefined}
       >
         <MapLibreMap
           mapLib={maplibregl as unknown as never}

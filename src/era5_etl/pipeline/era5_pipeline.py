@@ -10,6 +10,7 @@ from era5_etl.core.context import PipelineContext
 from era5_etl.core.pipeline import Pipeline
 from era5_etl.core.stage import Stage
 from era5_etl.download.cds_downloader import CDSDownloader
+from era5_etl.storage.coverage import rebuild_from_parquet
 from era5_etl.storage.manifest import Manifest
 from era5_etl.storage.parquet_manager import ParquetManager
 from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
@@ -75,6 +76,41 @@ class ConvertToParquetStage(Stage):
         self.logger.info(
             f"Converted {stats['converted']}/{stats['total']} files to Parquet"
         )
+        return context
+
+
+class RefreshCoverageStage(Stage):
+    """Refresh the per-cell coverage index from the on-disk parquets.
+
+    Runs in a single process AFTER the parallel ConvertToParquetStage so we
+    don't fight DuckDB's single-writer lock on `_coverage.duckdb`. Coverage
+    is derived state -- the parquet files are canonical -- so a failure
+    here is logged but does not fail the pipeline.
+    """
+
+    def __init__(self, config: PipelineConfig) -> None:
+        super().__init__("Refresh coverage index")
+        self.config = config
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        try:
+            stats = rebuild_from_parquet(
+                self.config.dataset_name,
+                self.config.storage.database_dir,
+                logger=self.logger,
+            )
+            context.set_metadata("coverage_stats", stats)
+            self.logger.info(
+                "Coverage index refreshed: %s rows / %s files",
+                stats.get("total_rows", "?"),
+                stats.get("n_files", "?"),
+            )
+        except Exception as exc:  # noqa: BLE001 -- coverage is derived; never fail the pipeline
+            self.logger.warning(
+                "Coverage index refresh failed (non-fatal); run "
+                "`era5 coverage rebuild` manually to recover: %s",
+                exc,
+            )
         return context
 
 
@@ -144,5 +180,6 @@ class ERA5Pipeline(Pipeline[PipelineConfig]):
             )
         )
         self.add_stage(ConvertToParquetStage(self.config))
+        self.add_stage(RefreshCoverageStage(self.config))
         self.add_stage(CreateViewStage(self.config))
         self.logger.info(f"Pipeline configured with {len(self._stages)} stages")
