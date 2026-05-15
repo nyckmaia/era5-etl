@@ -178,6 +178,34 @@ class QuerySchemaOut(BaseModel):
     columns: list[SchemaColumn]
 
 
+class QueryHistoryEntry(BaseModel):
+    id: str
+    sql: str
+    ts: int  # epoch ms
+    rows: int
+    elapsed_ms: int
+    name: str | None = None
+    favorite: bool = False
+
+
+class QueryHistoryAppendIn(BaseModel):
+    sql: str
+    rows: int = 0
+    elapsed_ms: int = 0
+
+
+class QueryHistoryPatch(BaseModel):
+    name: str | None = None
+    favorite: bool | None = None
+
+
+class TemplateItem(BaseModel):
+    id: str
+    name: str
+    sql: str
+    category: str | None = None
+
+
 class VersionOut(BaseModel):
     version: str
 
@@ -224,6 +252,10 @@ __all__ = [
     "DiffPreviewOut",
     "QueryIn",
     "QueryOut",
+    "QueryHistoryEntry",
+    "QueryHistoryAppendIn",
+    "QueryHistoryPatch",
+    "TemplateItem",
     "VersionOut",
     "CredentialStatusOut",
     "CredentialsIn",
