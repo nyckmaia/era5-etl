@@ -723,11 +723,15 @@ def variables(
 
 @app.command()
 def ui(
-    data_dir: Path = typer.Option(
-        Path("./data"),
+    data_dir: Path | None = typer.Option(
+        None,
         "--data-dir",
         "-d",
-        help="Base directory for data storage",
+        help=(
+            "Base directory for data storage. If omitted, the path saved in "
+            "the web UI Settings (persisted user config) is used; only if "
+            "none was ever saved does it fall back to ./data."
+        ),
     ),
     port: int = typer.Option(8788, "--port", help="HTTP port"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser"),
@@ -757,8 +761,31 @@ def ui(
 
         threading.Thread(target=_open, daemon=True).start()
 
-    app_instance = create_app(data_dir)
+    # Resolve the storage root. Precedence:
+    #   1. explicit --data-dir on the CLI (also persisted so the UI agrees)
+    #   2. the data_dir saved via the web UI Settings (persisted user config)
+    #   3. ./data fallback (first run, nothing configured yet)
+    from era5_etl.web.user_config import load_user_config, update_user_config
+
+    if data_dir is not None:
+        resolved_dir = Path(data_dir).expanduser().resolve()
+        update_user_config(data_dir=str(resolved_dir))
+        source = "--data-dir flag"
+    else:
+        cfg = load_user_config()
+        if cfg.data_dir.strip():
+            resolved_dir = Path(cfg.data_dir).expanduser().resolve()
+            source = "web UI Settings"
+        else:
+            resolved_dir = Path("./data").expanduser().resolve()
+            source = "./data fallback (no Settings saved yet)"
+
+    app_instance = create_app(resolved_dir)
     console.print(f"[green]Starting ERA5-ETL UI on http://127.0.0.1:{port}/[/green]")
+    console.print(
+        f"[cyan]Storage root:[/cyan] {resolved_dir} "
+        f"[dim](from {source}; climate_data_store_db/ + _tmp_netcdf/ live here)[/dim]"
+    )
     uvicorn.run(app_instance, host="127.0.0.1", port=port, log_level="info")
 
 
