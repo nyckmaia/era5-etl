@@ -473,3 +473,43 @@ def test_diff_preview_rejects_invalid_hours(client: TestClient):
     }
     r = client.post("/api/pipeline/diff-preview", json=body)
     assert r.status_code == 422, r.text
+
+
+# ---------------------------------------------------------------------------
+# /api/inventory/grid-points -- hour filter
+# ---------------------------------------------------------------------------
+
+
+def test_grid_points_hour_filter(client: TestClient, data_dir: Path):
+    """Repeatable `hour` param applies the restrictive all-present rule."""
+    df_partial = _coverage_df(
+        lats=[-10.0], lons=[-50.0], hours=[0, 1, 2], dates=["2024-01-01"]
+    )
+    df_full = _coverage_df(
+        lats=[-11.0], lons=[-50.0], hours=list(range(24)), dates=["2024-01-01"]
+    )
+    _populate(data_dir, "era5-land", df_partial)
+    _populate(data_dir, "era5-land", df_full)
+
+    # {0,1} present in both cells.
+    r = client.get(
+        "/api/inventory/grid-points",
+        params={"dataset": "era5-land", "format": "json", "hour": [0, 1]},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()) == 2
+
+    # {0,5}: only the fully-covered cell has hour 5.
+    r = client.get(
+        "/api/inventory/grid-points",
+        params={"dataset": "era5-land", "format": "json", "hour": [0, 5]},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()) == 1
+
+    # Out-of-range hour -> 422.
+    r = client.get(
+        "/api/inventory/grid-points",
+        params={"dataset": "era5-land", "hour": [24]},
+    )
+    assert r.status_code == 422, r.text

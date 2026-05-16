@@ -97,6 +97,11 @@ def grid_points(
         description="CDS variable name(s) to filter on. Repeat for multiple; "
         "omit for all (M07 multi-select).",
     ),
+    hour: list[int] | None = Query(  # noqa: B008 - FastAPI Query default
+        None,
+        description="UTC hour(s) 0-23 to filter on. Repeat for multiple; "
+        "a cell is kept only if a row has ALL selected hours. Omit for all.",
+    ),
     format: Literal["json", "arrow", "auto"] = Query(  # noqa: A002 - matches public API
         "auto", description="Response format. 'auto' = arrow if rows > 5000."
     ),
@@ -107,6 +112,14 @@ def grid_points(
     df_from = _parse_iso_date(date_from, "date_from")
     df_to = _parse_iso_date(date_to, "date_to")
 
+    if hour is not None:
+        for h in hour:
+            if h < 0 or h > 23:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid hour: {h} (expected 0-23)",
+                )
+
     # Empty-inventory short-circuit -- a valid state.
     if not _coverage_db_exists(base_dir, dataset):
         if format == "arrow":
@@ -115,7 +128,10 @@ def grid_points(
 
     with CoverageIndex(dataset, base_dir) as cov:
         df = cov.query_grid_points(
-            date_from=df_from, date_to=df_to, variable=variable or None
+            date_from=df_from,
+            date_to=df_to,
+            variable=variable or None,
+            hours=hour or None,
         )
 
     # The frontend GridPoint contract is {lat, lon, days, vars} for BOTH

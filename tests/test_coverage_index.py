@@ -657,3 +657,40 @@ def test_old_schema_db_is_rebuilt(tmp_path: Path) -> None:
         s = cov.stats()
         assert s["n_cells"] == 1
         assert s["n_variables"] == 1  # t2m only, not 'stale'
+
+
+# ----------------------------------------------------------------------
+# 19. hours filter on query_grid_points
+# ----------------------------------------------------------------------
+
+
+def test_query_grid_points_hours_filter(tmp_path: Path) -> None:
+    """`hours` keeps a cell only if a row's mask contains ALL selected hours."""
+    df_full = _grid_df(
+        lats=[-22.5], lons=[-43.5], hours=list(range(24)), date_str="2024-01-01"
+    )
+    df_partial = _grid_df(
+        lats=[-23.0], lons=[-43.5], hours=[0, 6], date_str="2024-01-01"
+    )
+
+    with CoverageIndex("era5-land", tmp_path) as cov:
+        cov.upsert_from_dataframe(df_full)
+        cov.upsert_from_dataframe(df_partial)
+
+        # All 24 selected -> only the fully-covered cell qualifies.
+        g_all = cov.query_grid_points(hours=list(range(24)))
+        assert g_all.height == 1
+        assert g_all.row(0, named=True)["latitude"] == -22.5
+
+        # {0, 6} present in BOTH cells.
+        g_sub = cov.query_grid_points(hours=[0, 6])
+        assert g_sub.height == 2
+
+        # {0, 6, 12}: partial cell lacks hour 12 -> excluded.
+        g_mix = cov.query_grid_points(hours=[0, 6, 12])
+        assert g_mix.height == 1
+        assert g_mix.row(0, named=True)["latitude"] == -22.5
+
+        # None / empty -> unchanged behavior (both cells).
+        assert cov.query_grid_points(hours=None).height == 2
+        assert cov.query_grid_points(hours=[]).height == 2

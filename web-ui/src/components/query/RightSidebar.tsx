@@ -97,25 +97,22 @@ function HistoryPanel({
               key={e.id}
               className="group mb-1 rounded-lg border border-ink-100 p-2 text-[11px] hover:border-ink-200"
             >
+              {e.name ? (
+                <div className="mb-1 truncate text-[11px] font-medium text-ink-700">
+                  {e.name}
+                </div>
+              ) : null}
               <pre className="mb-1 max-h-16 overflow-hidden whitespace-pre-wrap font-mono text-[10px] text-ink-600">
-                {e.name ? `★ ${e.name}` : e.sql}
+                {e.sql}
               </pre>
               <div className="flex items-center justify-between text-[10px] text-ink-400">
                 <span>
                   {e.rows} rows · {e.elapsed_ms}ms
                 </span>
-                <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    title="Carregar"
-                    onClick={() => onLoad(e.sql)}
-                    className="rounded p-0.5 hover:bg-ocean-100 hover:text-ocean-700"
-                  >
-                    <Play className="h-3 w-3" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Favoritar"
+                    title={e.favorite ? "Desfavoritar" : "Favoritar"}
                     onClick={() =>
                       patch.mutate({
                         id: e.id,
@@ -127,36 +124,48 @@ function HistoryPanel({
                     <Star
                       className={cn(
                         "h-3 w-3",
-                        e.favorite && "fill-amber-500 text-amber-500",
+                        e.favorite
+                          ? "fill-amber-500 text-amber-500"
+                          : "text-ink-400",
                       )}
                     />
                   </button>
-                  <button
-                    type="button"
-                    title="Renomear"
-                    onClick={() => {
-                      const name = window.prompt(
-                        "Nome (vazio = remover):",
-                        e.name ?? "",
-                      );
-                      if (name === null) return;
-                      patch.mutate({
-                        id: e.id,
-                        patch: { name: name.trim() || null },
-                      });
-                    }}
-                    className="rounded p-0.5 hover:bg-ink-100"
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Excluir"
-                    onClick={() => del.mutate(e.id)}
-                    className="rounded p-0.5 hover:bg-red-100 hover:text-red-600"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                    <button
+                      type="button"
+                      title="Carregar"
+                      onClick={() => onLoad(e.sql)}
+                      className="rounded p-0.5 hover:bg-ocean-100 hover:text-ocean-700"
+                    >
+                      <Play className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Renomear"
+                      onClick={() => {
+                        const name = window.prompt(
+                          "Nome (vazio = remover):",
+                          e.name ?? "",
+                        );
+                        if (name === null) return;
+                        patch.mutate({
+                          id: e.id,
+                          patch: { name: name.trim() || null },
+                        });
+                      }}
+                      className="rounded p-0.5 hover:bg-ink-100"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Excluir"
+                      onClick={() => del.mutate(e.id)}
+                      className="rounded p-0.5 hover:bg-red-100 hover:text-red-600"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

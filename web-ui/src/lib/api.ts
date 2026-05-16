@@ -355,6 +355,7 @@ export const api = {
       date_from?: string;
       date_to?: string;
       variable?: string[];
+      hour?: number[];
       format?: "json" | "arrow" | "auto";
     }) => {
       const q = new URLSearchParams({ dataset: params.dataset });
@@ -362,6 +363,9 @@ export const api = {
       if (params.date_to) q.set("date_to", params.date_to);
       if (params.variable) {
         for (const v of params.variable) q.append("variable", v);
+      }
+      if (params.hour) {
+        for (const h of params.hour) q.append("hour", String(h));
       }
       if (params.format) q.set("format", params.format);
       return requestArrowOrJson<GridPoint>(`/api/inventory/grid-points?${q}`);

@@ -12,6 +12,10 @@ import { RegionSummaryPanel } from "@/components/inventory/RegionSummaryPanel";
 import { SelectionToolbar } from "@/components/inventory/SelectionToolbar";
 import { api, type DatasetInfo, type GridPoint } from "@/lib/api";
 import { cn, formatBytes } from "@/lib/format";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const fmtHour = (h: number) => `${String(h).padStart(2, "0")}:00`;
 
 export function InventoryPage() {
   const navigate = useNavigate();
@@ -22,13 +26,27 @@ export function InventoryPage() {
 
   const [dataset, setDataset] = useState<string>("");
   const [variableFilter, setVariableFilter] = useState<string[]>([]);
+  const [hourFilter, setHourFilter] = useState<number[]>(HOURS);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const userEditedDates = useRef(false);
+  const seededVarsFor = useRef<string>("");
   const [varMenuOpen, setVarMenuOpen] = useState(false);
+  const [hourMenuOpen, setHourMenuOpen] = useState(false);
   const varMenuRef = useRef<HTMLDivElement | null>(null);
-  const [colormap, setColormap] = useState<"binary" | "intensity">("intensity");
-  const [showPoints, setShowPoints] = useState(true);
+  const hourMenuRef = useRef<HTMLDivElement | null>(null);
+  const [pointColor, setPointColor] = useLocalStorage<string>(
+    "inventory.pointColor",
+    "#2864c8",
+  );
+  const [pointOpacity, setPointOpacity] = useLocalStorage<number>(
+    "inventory.pointOpacity",
+    85,
+  );
+  const [showPoints, setShowPoints] = useLocalStorage<boolean>(
+    "inventory.showPoints",
+    true,
+  );
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("none");
   const [selection, setSelection] = useState<[number, number][] | null>(null);
   const [activeCell, setActiveCell] = useState<{ lat: number; lon: number } | null>(
@@ -46,6 +64,15 @@ export function InventoryPage() {
     () => datasets?.find((d) => d.name === dataset),
     [datasets, dataset],
   );
+
+  // M1: variables start ALL-checked ("checked = visible"). Seed once per
+  // dataset, when its variable list is known.
+  useEffect(() => {
+    if (!activeDataset) return;
+    if (seededVarsFor.current === activeDataset.name) return;
+    seededVarsFor.current = activeDataset.name;
+    setVariableFilter(activeDataset.variables.map((v) => v.api_name));
+  }, [activeDataset]);
 
   const dateRangeQ = useQuery({
     queryKey: ["inventory-date-range", dataset],
@@ -75,26 +102,59 @@ export function InventoryPage() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [varMenuOpen]);
 
+  useEffect(() => {
+    if (!hourMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (hourMenuRef.current && !hourMenuRef.current.contains(e.target as Node)) {
+        setHourMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [hourMenuOpen]);
+
   function changeDataset(next: string) {
     setDataset(next);
-    // New dataset → reset filters and re-prefill from its own range.
+    // New dataset → reset date/hour filters; variables re-seed via the
+    // effect once the new dataset's variable list resolves.
     userEditedDates.current = false;
+    seededVarsFor.current = "";
     setDateFrom("");
     setDateTo("");
     setVariableFilter([]);
+    setHourFilter(HOURS);
   }
 
+  const allVarNames = useMemo(
+    () => activeDataset?.variables.map((v) => v.api_name) ?? [],
+    [activeDataset],
+  );
+  const varsAllSelected =
+    allVarNames.length > 0 && variableFilter.length === allVarNames.length;
+  const varsNoneSelected = variableFilter.length === 0;
+  const hoursAllSelected = hourFilter.length === HOURS.length;
+  const hoursNoneSelected = hourFilter.length === 0;
+  const emptySelection = varsNoneSelected || hoursNoneSelected;
+
   const pointsQ = useQuery({
-    queryKey: ["inventory-grid-points", dataset, dateFrom, dateTo, variableFilter],
+    queryKey: [
+      "inventory-grid-points",
+      dataset,
+      dateFrom,
+      dateTo,
+      variableFilter,
+      hourFilter,
+    ],
     queryFn: () =>
       api.inventory.gridPoints({
         dataset,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        variable: variableFilter.length > 0 ? variableFilter : undefined,
+        variable: varsAllSelected ? undefined : variableFilter,
+        hour: hoursAllSelected ? undefined : hourFilter,
         format: "auto",
       }),
-    enabled: Boolean(dataset),
+    enabled: Boolean(dataset) && !emptySelection,
   });
 
   const { data: stats } = useQuery({
@@ -103,8 +163,7 @@ export function InventoryPage() {
     enabled: Boolean(dataset),
   });
 
-  const points: GridPoint[] = pointsQ.data ?? [];
-  const totalVars = activeDataset?.variables.length ?? 1;
+  const points: GridPoint[] = emptySelection ? [] : pointsQ.data ?? [];
 
   function fillGaps(_bbox: [number, number, number, number]) {
     // Hand off to the download wizard with the dataset preselected. The
@@ -168,9 +227,11 @@ export function InventoryPage() {
               className="input flex min-w-[12rem] items-center justify-between gap-2 text-left"
             >
               <span className="truncate">
-                {variableFilter.length === 0
+                {varsAllSelected
                   ? "Todas"
-                  : `${variableFilter.length} selecionada(s)`}
+                  : varsNoneSelected
+                    ? "Nenhuma"
+                    : `${variableFilter.length} selecionada(s)`}
               </span>
               <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
             </button>
@@ -178,10 +239,12 @@ export function InventoryPage() {
               <div className="absolute left-0 z-20 mt-1 max-h-72 w-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-2 shadow-elevated">
                 <button
                   type="button"
-                  onClick={() => setVariableFilter([])}
+                  onClick={() =>
+                    setVariableFilter(varsAllSelected ? [] : allVarNames)
+                  }
                   className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-ocean-600 hover:bg-ink-50"
                 >
-                  Todas (limpar seleção)
+                  {varsAllSelected ? "Desmarcar todas" : "Marcar todas"}
                 </button>
                 {activeDataset?.variables.map((v) => {
                   const checked = variableFilter.includes(v.api_name);
@@ -218,43 +281,102 @@ export function InventoryPage() {
             ) : null}
           </div>
         </Field>
-        <Field label="Pontos">
-          <button
-            type="button"
-            onClick={() => setShowPoints((s) => !s)}
-            className={cn(
-              "rounded-lg px-3 py-1.5 text-xs font-medium",
-              showPoints
-                ? "bg-ocean-600 text-white"
-                : "bg-ink-100 text-ink-500 hover:bg-ink-200",
-            )}
-          >
-            {showPoints ? "Visível" : "Oculto"}
-          </button>
-        </Field>
-        <Field label="Cor">
-          <div className="flex gap-1 rounded-lg bg-ink-100 p-0.5">
-            {(["intensity", "binary"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setColormap(m)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-xs font-medium",
-                  colormap === m ? "bg-white text-ink-800 shadow-sm" : "text-ink-500",
-                )}
-              >
-                {m === "intensity" ? "Intensidade" : "Binário"}
-              </button>
-            ))}
+        <Field label="Horas">
+          <div className="relative" ref={hourMenuRef}>
+            <button
+              type="button"
+              onClick={() => setHourMenuOpen((o) => !o)}
+              className="input flex min-w-[10rem] items-center justify-between gap-2 text-left"
+            >
+              <span className="truncate">
+                {hoursAllSelected
+                  ? "Todas"
+                  : hoursNoneSelected
+                    ? "Nenhuma"
+                    : `${hourFilter.length} selecionada(s)`}
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
+            </button>
+            {hourMenuOpen ? (
+              <div className="absolute left-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-xl border border-ink-200 bg-white p-2 shadow-elevated">
+                <button
+                  type="button"
+                  onClick={() => setHourFilter(hoursAllSelected ? [] : HOURS)}
+                  className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-ocean-600 hover:bg-ink-50"
+                >
+                  {hoursAllSelected ? "Desmarcar todas" : "Marcar todas"}
+                </button>
+                {HOURS.map((h) => {
+                  const checked = hourFilter.includes(h);
+                  return (
+                    <label
+                      key={h}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-ink-50",
+                        checked && "bg-ocean-50/60",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setHourFilter((prev) =>
+                            prev.includes(h)
+                              ? prev.filter((x) => x !== h)
+                              : [...prev, h],
+                          )
+                        }
+                      />
+                      <span className="text-ink-800">{fmtHour(h)} UTC</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         </Field>
-        {(dateFrom || dateTo || variableFilter.length > 0) && (
+        <Field label="Pontos">
+          <label className="input flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              checked={showPoints}
+              onChange={(e) => setShowPoints(e.target.checked)}
+            />
+            <span className="text-sm text-ink-700">Mostrar</span>
+          </label>
+        </Field>
+        <Field label="Opacidade">
+          <div className="input flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={pointOpacity}
+              onChange={(e) => setPointOpacity(Number(e.target.value))}
+              className="w-28 accent-ocean-600"
+            />
+            <span className="w-9 text-right text-xs tabular-nums text-ink-600">
+              {pointOpacity}%
+            </span>
+          </div>
+        </Field>
+        <Field label="Cor">
+          <input
+            type="color"
+            value={pointColor}
+            onChange={(e) => setPointColor(e.target.value)}
+            className="h-9 w-12 cursor-pointer rounded-lg border border-ink-200 bg-white p-1"
+            aria-label="Cor dos pontos"
+          />
+        </Field>
+        {(dateFrom || dateTo || !varsAllSelected || !hoursAllSelected) && (
           <button
             onClick={() => {
-              userEditedDates.current = true;
-              setDateFrom("");
-              setDateTo("");
-              setVariableFilter([]);
+              userEditedDates.current = false;
+              setDateFrom(dateRangeQ.data?.min ?? "");
+              setDateTo(dateRangeQ.data?.max ?? "");
+              setVariableFilter(allVarNames);
+              setHourFilter(HOURS);
             }}
             className="text-xs text-ocean-600 hover:underline"
           >
@@ -274,8 +396,8 @@ export function InventoryPage() {
               setActiveCell({ lat, lon });
               setSelection(null);
             }}
-            colormap={colormap}
-            totalVars={totalVars}
+            pointColor={pointColor}
+            pointOpacity={pointOpacity}
             showPoints={showPoints}
           />
           <SelectionToolbar
@@ -295,7 +417,19 @@ export function InventoryPage() {
               Carregando pontos...
             </div>
           ) : null}
-          {!pointsQ.isLoading && points.length === 0 ? (
+          {emptySelection ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="rounded-2xl bg-white/95 p-6 text-center shadow-elevated ring-1 ring-ink-200">
+                <MapPin className="mx-auto h-6 w-6 text-ink-400" />
+                <p className="mt-2 text-sm font-medium text-ink-700">
+                  Nenhuma variável ou hora selecionada.
+                </p>
+                <p className="mt-1 text-xs text-ink-400">
+                  Marque ao menos uma variável e uma hora.
+                </p>
+              </div>
+            </div>
+          ) : !pointsQ.isLoading && points.length === 0 ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="rounded-2xl bg-white/95 p-6 text-center shadow-elevated ring-1 ring-ink-200">
                 <MapPin className="mx-auto h-6 w-6 text-ink-400" />
