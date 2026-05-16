@@ -32,12 +32,18 @@ exposes it via DuckDB views, a Typer CLI, and a FastAPI + React/Vite web UI.
   stage both consult it via `Manifest.has(chunk_id)`. Manifest tracks
   rectangles, not cells.
 - **Coverage index is the source of truth for "cell done".** `storage/coverage.py`
-  exposes `CoverageIndex` over per-dataset `_coverage.duckdb`. One row per
-  `(latitude, longitude, date, variable)` with a 24-bit `hours_mask`.
-  `merge_into_partitioned_parquet` upserts on every successful write
-  (failure non-fatal — the parquet on disk is canonical, coverage is
-  derived). Read by `plan_with_diff`, `/api/inventory/*`, and the
-  `/inventory` web page.
+  exposes `CoverageIndex` over per-dataset `_coverage.duckdb`. Schema v3:
+  a `cell(cell_id, latitude, longitude)` dimension + one row per
+  `(cell_id, date)` in `coverage` with `vars MAP(VARCHAR, UINTEGER)`
+  (variable → 24-bit hours bitmap). **No PRIMARY KEY / index** on the
+  large table — the composite-PK ART was the dominant on-disk cost and
+  the table is always rebuilt deduped from parquet. OR-merge semantics
+  are unchanged. `merge_into_partitioned_parquet` upserts on every
+  successful write (failure non-fatal — the parquet on disk is canonical,
+  coverage is derived; bump `COVERAGE_SCHEMA_VERSION` to force an
+  auto-rebuild, no migration code). Public method signatures + output
+  columns are stable; read by `plan_with_diff`, `/api/inventory/*`, and
+  the `/inventory` web page.
 - **Tile-based parquet sort is part of the writer contract.** `_sort_for_storage`
   computes transient `_lat_tile = floor(lat/PARQUET_TILE_DEG)` /
   `_lon_tile = floor(lon/PARQUET_TILE_DEG)` (`PARQUET_TILE_DEG = 5`),
