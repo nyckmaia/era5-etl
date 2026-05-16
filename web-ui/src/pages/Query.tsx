@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi } from "@tanstack/react-router";
 import {
+  AlertTriangle,
   Download,
   Loader2,
   Play,
@@ -136,7 +137,11 @@ export function QueryPage() {
     },
     onError: (e) => toast.error((e as Error).message),
     onSuccess: (r) =>
-      toast.success(`${r.row_count} linhas${r.truncated ? " (truncado)" : ""}`),
+      r.truncated
+        ? toast.warning(
+            `Exibindo ${r.row_count.toLocaleString()} de ${r.total_rows.toLocaleString()} linhas (resultado truncado)`,
+          )
+        : toast.success(`${r.row_count.toLocaleString()} linhas`),
   });
 
   function updateActiveSql(sql: string, userEdited = true) {
@@ -398,13 +403,30 @@ export function QueryPage() {
 
             {runQuery.data ? (
               <div className="mt-4 overflow-hidden rounded-lg border border-ink-100">
-                <div className="border-b border-ink-100 px-5 py-3 text-xs text-ink-500">
-                  <span className="font-medium text-ink-800">
-                    {runQuery.data.row_count}
-                  </span>{" "}
-                  rows
-                  {runQuery.data.truncated ? " (truncated)" : null}
-                </div>
+                {runQuery.data.truncated ? (
+                  <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs text-amber-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span>
+                      Resultado truncado — exibindo{" "}
+                      <span className="font-semibold tabular-nums">
+                        {runQuery.data.row_count.toLocaleString()}
+                      </span>{" "}
+                      de{" "}
+                      <span className="font-semibold tabular-nums">
+                        {runQuery.data.total_rows.toLocaleString()}
+                      </span>{" "}
+                      linhas. Aumente o limite de linhas ou refine a query
+                      (ex.: filtros / agregação) para ver o restante.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="border-b border-ink-100 px-5 py-3 text-xs text-ink-500">
+                    <span className="font-medium text-ink-800 tabular-nums">
+                      {runQuery.data.row_count.toLocaleString()}
+                    </span>{" "}
+                    linhas
+                  </div>
+                )}
                 <div className="max-h-[40vh] overflow-auto">
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-ink-50">

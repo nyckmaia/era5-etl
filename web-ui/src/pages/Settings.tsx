@@ -8,16 +8,20 @@ import {
   Loader2,
   RefreshCw,
   Save,
+  ShieldAlert,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import {
   api,
   type CredentialTestResult,
+  type DatasetInfo,
   type PrecisionConfig,
   type PrecisionMethod,
 } from "@/lib/api";
-import { cn } from "@/lib/format";
+import { cn, formatBytes } from "@/lib/format";
 
 // Mirror src/era5_etl/storage/paths.py:STORAGE_ROOT_DIRNAME.
 const STORAGE_ROOT_DIRNAME = "climate_data_store_db";
@@ -50,6 +54,119 @@ export function SettingsPage() {
       <DataDirectorySection />
       <CredentialsSection />
       <PrecisionSection />
+      <DangerZoneSection />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Danger zone — wipe a dataset's on-disk data
+// ---------------------------------------------------------------------------
+
+function DangerZoneSection() {
+  const { data: datasets } = useQuery({
+    queryKey: ["datasets"],
+    queryFn: api.datasets,
+  });
+
+  return (
+    <section className="card space-y-5 border-rose-200 bg-rose-50/40 p-6">
+      <div className="flex items-start gap-3">
+        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+        <div>
+          <h2 className="text-lg font-medium text-rose-900">Zona de perigo</h2>
+          <p className="mt-1 text-sm text-rose-700">
+            Apagar os dados de um sistema remove{" "}
+            <strong>permanentemente</strong> todo o conteúdo da sua pasta
+            (partições Parquet, manifesto, índice de cobertura e os arquivos
+            DuckDB) e os NetCDF temporários. <strong>Não há como desfazer</strong>{" "}
+            — os dados terão que ser baixados novamente da CDS.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {(datasets ?? []).map((d) => (
+          <DeleteDatasetRow key={d.name} dataset={d} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
+  const qc = useQueryClient();
+  const [confirmText, setConfirmText] = useState("");
+  const { data: stats } = useQuery({
+    queryKey: ["stats", dataset.name],
+    queryFn: () => api.stats(dataset.name),
+  });
+
+  const del = useMutation({
+    mutationFn: () => api.deleteDatasetData(dataset.name),
+    onSuccess: (res) => {
+      setConfirmText("");
+      if (res.deleted) {
+        toast.success(
+          `Dados de ${dataset.name.toUpperCase()} apagados — ${formatBytes(
+            res.freed_bytes,
+          )} liberados.`,
+        );
+      } else {
+        toast.info(`Nenhum dado em disco para ${dataset.name.toUpperCase()}.`);
+      }
+      // The dataset's storage is gone: refresh everything derived from it.
+      qc.invalidateQueries({ queryKey: ["stats", dataset.name] });
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+      qc.invalidateQueries({ queryKey: ["inventory-grid-points"] });
+      qc.invalidateQueries({ queryKey: ["inventory-date-range"] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const armed = confirmText.trim() === dataset.name;
+  const sizeLabel =
+    stats != null
+      ? `${formatBytes(stats.total_size_bytes)} · ${stats.parquet_files} arquivo(s)`
+      : "—";
+
+  return (
+    <div className="rounded-xl border border-rose-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-medium text-ink-900">
+            {dataset.name.toUpperCase()}
+          </div>
+          <div className="text-xs text-ink-500">Em disco: {sizeLabel}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            className="input w-56 text-sm"
+            placeholder={`Digite "${dataset.name}" para confirmar`}
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            aria-label={`Confirmar exclusão de ${dataset.name}`}
+          />
+          <button
+            type="button"
+            disabled={!armed || del.isPending}
+            onClick={() => del.mutate()}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition",
+              armed && !del.isPending
+                ? "bg-rose-600 text-white hover:bg-rose-700"
+                : "cursor-not-allowed bg-ink-100 text-ink-400",
+            )}
+          >
+            {del.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            Apagar definitivamente
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

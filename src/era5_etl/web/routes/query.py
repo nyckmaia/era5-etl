@@ -69,10 +69,13 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
     finally:
         conn.close()
 
-    truncated = False
-    if len(df) > body.limit:
+    # The full result is already materialized, so the true row count is
+    # known exactly (no extra COUNT(*) probe needed). Expose it so the UI
+    # can show "showing X of Y (truncated)".
+    total_rows = int(len(df))
+    truncated = total_rows > body.limit
+    if truncated:
         df = df.head(body.limit)
-        truncated = True
 
     from era5_etl.web._types import schema_python_types
 
@@ -82,6 +85,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
         rows=df.astype(object).where(df.notnull(), None).values.tolist(),
         row_count=int(len(df)),
         truncated=truncated,
+        total_rows=total_rows,
     )
 
 
