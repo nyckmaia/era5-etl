@@ -144,7 +144,16 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
     from era5_etl.config import DownloadConfig
     from era5_etl.datasets import DatasetRegistry as _DR
     from era5_etl.download.grid import snap_area_to_grid
-    from era5_etl.download.request_planner import build_request_cells
+    from era5_etl.download.request_planner import (
+        DIFF_MAX_CELLS,
+        build_request_cells,
+        plan_requests,
+        request_cell_count,
+    )
+    from era5_etl.download.size_estimator import (
+        PARQUET_DISK_RATIO,
+        estimate_request_size,
+    )
     from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
     from era5_etl.storage.paths import resolve_dataset_dir
 
@@ -163,6 +172,43 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
 
     resolution = _DR.get(cfg.dataset).GRID_RESOLUTION_DEG
     snapped = snap_area_to_grid(list(cfg.area), resolution)
+
+    # Guard: a per-cell diff over a huge request (state × decades) would
+    # allocate many GB and abort the backend process. Bound it
+    # arithmetically BEFORE materialising anything; when too large, skip
+    # the diff and return a memory-safe chunk plan + arithmetic-only size
+    # estimate so the UI can let the user proceed with sequential chunks
+    # or narrow the selection.
+    requested = request_cell_count(cfg, resolution, snapped)
+    if requested > DIFF_MAX_CELLS:
+        chunks = plan_requests(cfg)
+        download_bytes = sum(
+            estimate_request_size(
+                num_variables=len(c.variables),
+                num_hours=len(c.hours),
+                num_days=len(c.days),
+                area=list(c.area),
+                dataset=c.dataset,
+            ).estimated_bytes
+            for c in chunks
+        )
+        disk_bytes = int(download_bytes * PARQUET_DISK_RATIO)
+        return DiffPreviewOut(
+            requested_cells=requested,
+            missing_cells=requested,  # diff not applied → assume all to fetch
+            savings_pct=0.0,
+            sample_missing=[],
+            diff_skipped=True,
+            skip_reason=(
+                f"Requisição expande para {requested:,} células "
+                f"(> {DIFF_MAX_CELLS:,}); o diff célula-a-célula não cabe "
+                "em memória. O download será feito em chunks sequenciais."
+            ),
+            estimated_download_bytes=download_bytes,
+            estimated_disk_bytes=disk_bytes,
+            estimated_chunks=len(chunks),
+        )
+
     cells_df = build_request_cells(cfg, resolution, snapped)
     requested = cells_df.height
 

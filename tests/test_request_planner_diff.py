@@ -361,3 +361,80 @@ def test_hours_to_mask_roundtrip() -> None:
     assert _hours_to_mask(["00:00", "12:00"]) == (1 << 0) | (1 << 12)
     assert _hours_to_mask([f"{h:02d}:00" for h in range(24)]) == (1 << 24) - 1
     assert _hours_to_mask([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Oversized-request guard (memory-safety: must never materialise the dense
+# per-cell frame for a state × decades request).
+# ---------------------------------------------------------------------------
+
+
+def test_request_cell_count_is_arithmetic() -> None:
+    from era5_etl.download.grid import snap_area_to_grid
+    from era5_etl.download.request_planner import request_cell_count
+
+    # area snaps to 1 lat-cell × 2 lon-cells at 0.1deg; 2 dates; 1 var.
+    cfg = _make_cfg(
+        area=[-10.0, -50.0, -10.1, -49.9],
+        start="2024-01-01",
+        end="2024-01-02",
+        variables=["2m_temperature"],
+    )
+    snapped = snap_area_to_grid(list(cfg.area), 0.1)
+    n, w, s, e = snapped
+    from era5_etl.download.request_planner import (
+        _date_range,
+        _grid_axis,
+    )
+
+    expected = (
+        _grid_axis(s, n, 0.1).size
+        * _grid_axis(w, e, 0.1).size
+        * len(_date_range(cfg.start_date, cfg.end_date))
+        * len(cfg.variables)
+    )
+    assert request_cell_count(cfg, 0.1, snapped) == expected
+    assert expected == 1 * 2 * 2 * 1
+
+
+def test_build_request_cells_rejects_oversized_fast() -> None:
+    """Above DIFF_MAX_CELLS the guard raises BEFORE any allocation."""
+    from era5_etl.download.grid import snap_area_to_grid
+    from era5_etl.download.request_planner import (
+        DIFF_MAX_CELLS,
+        build_request_cells,
+        request_cell_count,
+    )
+    from era5_etl.exceptions import DownloadSizeError
+
+    # ~201x201 cells x ~608 days x 1 var ≈ 24.5M > 20M.
+    cfg = _make_cfg(
+        area=[0.0, -60.0, -20.0, -40.0],
+        start="2022-01-01",
+        end="2023-08-31",
+        hours=["00:00"],
+        variables=["2m_temperature"],
+    )
+    snapped = snap_area_to_grid(list(cfg.area), 0.1)
+    count = request_cell_count(cfg, 0.1, snapped)
+    assert count > DIFF_MAX_CELLS
+    with pytest.raises(DownloadSizeError, match="cannot be materialised"):
+        build_request_cells(cfg, 0.1, snapped)
+
+
+def test_plan_with_diff_huge_request_falls_back_to_plan_requests(
+    tmp_path: "Path",
+) -> None:
+    """A request too large to diff must NOT crash; it falls back to the
+    size-bounded chunk plan (byte-equal to plan_requests).
+    """
+    cfg = _make_cfg(
+        area=[0.0, -60.0, -20.0, -40.0],
+        start="2022-01-01",
+        end="2023-08-31",
+        hours=["00:00"],
+        variables=["2m_temperature"],
+    )
+    diff_chunks = plan_with_diff(cfg, tmp_path)
+    assert diff_chunks == plan_requests(cfg)
+    assert len(diff_chunks) > 0

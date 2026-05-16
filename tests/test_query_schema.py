@@ -302,3 +302,49 @@ def test_delete_dataset_data_wipes_storage(
 def test_delete_unknown_dataset_returns_404(client: TestClient) -> None:
     r = client.delete("/api/datasets/not-a-dataset/data")
     assert r.status_code == 404, r.text
+
+
+# --- diff-preview: oversized request must not crash the backend -------------
+
+
+def test_diff_preview_oversized_returns_chunk_plan(client: TestClient) -> None:
+    """A state × decades request used to OOM-abort the process. It must now
+    return 200 with diff_skipped + an arithmetic size/chunk estimate.
+    """
+    r = client.post(
+        "/api/pipeline/diff-preview",
+        json={
+            "dataset": "era5-land",
+            "area": [-19.7, -53.2, -25.4, -44.1],  # São Paulo, snapped-ish
+            "date_from": "2000-01-01",
+            "date_to": "2025-12-31",
+            "hours": [0, 12],
+            "variables": ["2m_temperature", "total_precipitation"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["diff_skipped"] is True
+    assert b["requested_cells"] > 20_000_000
+    assert b["estimated_chunks"] is not None and b["estimated_chunks"] > 0
+    assert b["estimated_download_bytes"] is not None
+    assert b["estimated_disk_bytes"] is not None
+    assert b["skip_reason"]
+
+
+def test_diff_preview_small_request_not_skipped(client: TestClient) -> None:
+    r = client.post(
+        "/api/pipeline/diff-preview",
+        json={
+            "dataset": "era5-land",
+            "area": [-10.0, -50.0, -10.1, -49.9],
+            "date_from": "2024-01-01",
+            "date_to": "2024-01-02",
+            "hours": [0, 12],
+            "variables": ["2m_temperature"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["diff_skipped"] is False
+    assert b["requested_cells"] > 0

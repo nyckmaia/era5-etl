@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -163,6 +164,7 @@ export function DownloadWizardPage() {
             applyDiff={applyDiff}
             onApplyDiffChange={setApplyDiff}
             onCompute={() => diffMutation.mutate()}
+            onNarrow={(s) => setStep(s)}
           />
         )}
         {step === 5 && (
@@ -633,12 +635,20 @@ function StepDiff({
   applyDiff,
   onApplyDiffChange,
   onCompute,
+  onNarrow,
 }: {
   diff: ReturnType<typeof useMutation<DiffPreview, Error, void, unknown>>;
   applyDiff: boolean;
   onApplyDiffChange: (v: boolean) => void;
   onCompute: () => void;
+  onNarrow: (step: Step) => void;
 }) {
+  const skipped = diff.data?.diff_skipped === true;
+  // When the request is too big to diff, the download proceeds via the
+  // size-bounded chunk plan regardless; reflect that in the mode flag.
+  useEffect(() => {
+    if (skipped) onApplyDiffChange(false);
+  }, [skipped, onApplyDiffChange]);
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2">
@@ -661,6 +671,83 @@ function StepDiff({
           <button onClick={onCompute} className="btn-outline">
             Tentar novamente
           </button>
+        </div>
+      ) : diff.data && skipped ? (
+        <div className="space-y-4 rounded-xl border border-amber-300 bg-amber-50 p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div>
+              <h3 className="text-sm font-semibold text-amber-900">
+                Requisição grande demais para o diff célula-a-célula
+              </h3>
+              <p className="mt-1 text-sm text-amber-800">
+                Sua seleção expande para{" "}
+                <span className="font-semibold tabular-nums">
+                  {diff.data.requested_cells.toLocaleString()}
+                </span>{" "}
+                células (ponto × data × hora × variável). Fazer o diff fino
+                disso esgotaria a memória, então ele foi pulado. O download
+                será planejado em{" "}
+                <span className="font-semibold tabular-nums">
+                  {diff.data.estimated_chunks?.toLocaleString() ?? "?"}
+                </span>{" "}
+                chunks sequenciais independentes — processados um a um, sem
+                estourar memória.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <DiffStat
+              label="Download estimado"
+              value={
+                diff.data.estimated_download_bytes != null
+                  ? formatBytes(diff.data.estimated_download_bytes)
+                  : "—"
+              }
+              sub="transferência CDS"
+              tone="neutral"
+            />
+            <DiffStat
+              label="Em disco (≈)"
+              value={
+                diff.data.estimated_disk_bytes != null
+                  ? formatBytes(diff.data.estimated_disk_bytes)
+                  : "—"
+              }
+              sub="parquet estimado"
+              tone="neutral"
+            />
+            <DiffStat
+              label="Chunks sequenciais"
+              value={diff.data.estimated_chunks?.toLocaleString() ?? "—"}
+              sub="baixados em série"
+              tone="warn"
+            />
+          </div>
+
+          <p className="text-xs text-amber-700">
+            Você pode <strong>prosseguir</strong> (clique em “Next”) e o
+            download rodará como esses chunks sequenciais, ou{" "}
+            <strong>voltar</strong> e escolher um período/área menor para um
+            download mais rápido.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onNarrow(2)}
+              className="btn-outline"
+            >
+              <MapPin className="h-4 w-4" /> Ajustar área
+            </button>
+            <button
+              type="button"
+              onClick={() => onNarrow(3)}
+              className="btn-outline"
+            >
+              <ChevronLeft className="h-4 w-4" /> Ajustar período
+            </button>
+          </div>
         </div>
       ) : diff.data ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -689,7 +776,7 @@ function StepDiff({
         </button>
       )}
 
-      {diff.data && diff.data.missing_cells > 0 && (
+      {diff.data && !skipped && diff.data.missing_cells > 0 && (
         <div className="rounded-xl border border-ink-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-semibold text-ink-700">
             Modo de download
@@ -713,7 +800,7 @@ function StepDiff({
         </div>
       )}
 
-      {diff.data && diff.data.missing_cells === 0 && (
+      {diff.data && !skipped && diff.data.missing_cells === 0 && (
         <div className="rounded-xl border border-moss-400 bg-moss-400/10 p-4 text-sm text-moss-600">
           ✓ Tudo que você pediu já está no banco. Nada a baixar.
         </div>
