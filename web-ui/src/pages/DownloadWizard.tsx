@@ -699,23 +699,27 @@ function StepDiff({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <DiffStat
-              label="Download estimado"
+              label="Download TOTAL"
               value={
                 diff.data.estimated_download_bytes != null
                   ? formatBytes(diff.data.estimated_download_bytes)
                   : "—"
               }
-              sub="transferência CDS"
+              sub={
+                diff.data.estimated_chunks
+                  ? `soma dos ${diff.data.estimated_chunks.toLocaleString()} chunks`
+                  : "todos os chunks somados"
+              }
               tone="neutral"
             />
             <DiffStat
-              label="Em disco (≈)"
+              label="Em disco TOTAL (≈)"
               value={
                 diff.data.estimated_disk_bytes != null
                   ? formatBytes(diff.data.estimated_disk_bytes)
                   : "—"
               }
-              sub="parquet estimado"
+              sub="após conversão (todos os chunks)"
               tone="neutral"
             />
             <DiffStat
@@ -725,6 +729,18 @@ function StepDiff({
               tone="warn"
             />
           </div>
+
+          <p className="text-xs text-amber-700">
+            Os tamanhos acima são o <strong>total somado de todos os
+            chunks</strong> (não por chunk).
+            {diff.data.estimated_download_bytes != null &&
+            diff.data.estimated_chunks
+              ? ` Em média ≈ ${formatBytes(
+                  diff.data.estimated_download_bytes /
+                    diff.data.estimated_chunks,
+                )} de download por chunk.`
+              : ""}
+          </p>
 
           <p className="text-xs text-amber-700">
             Você pode <strong>prosseguir</strong> (clique em “Next”) e o
