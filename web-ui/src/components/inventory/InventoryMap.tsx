@@ -54,18 +54,22 @@ export interface InventoryMapProps {
   selection: [number, number][] | null; // polygon ring [lat, lon][]
   onSelectionChange: (poly: [number, number][] | null) => void;
   onCellClick: (lat: number, lon: number) => void;
-  colormap: "binary" | "intensity";
-  totalVars: number;
+  pointColor: string; // hex, e.g. "#2864c8"
+  pointOpacity: number; // 0-100
   showPoints: boolean;
 }
 
-function intensityColor(t: number): [number, number, number, number] {
-  // Smooth interpolation grey -> green-teal. t in [0, 1].
-  const c = Math.max(0, Math.min(1, t));
-  const r = Math.round(170 + (20 - 170) * c);
-  const g = Math.round(170 + (130 - 170) * c);
-  const b = Math.round(170 + (100 - 170) * c);
-  return [r, g, b, 200];
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h;
+  const n = Number.parseInt(full || "2864c8", 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 export function InventoryMap(props: InventoryMapProps) {
@@ -75,8 +79,8 @@ export function InventoryMap(props: InventoryMapProps) {
     selection,
     onSelectionChange,
     onCellClick,
-    colormap,
-    totalVars,
+    pointColor,
+    pointOpacity,
     showPoints,
   } = props;
 
@@ -84,37 +88,28 @@ export function InventoryMap(props: InventoryMapProps) {
   const [dragNow, setDragNow] = useState<[number, number] | null>(null);
   const [lassoPath, setLassoPath] = useState<[number, number][]>([]);
 
-  const pointsLayer = useMemo(
-    () =>
-      new ScatterplotLayer<GridPoint>({
-        id: "grid-points",
-        data: points,
-        visible: showPoints,
-        pickable: true,
-        // World-space radius => points scale with zoom: tiny dots when
-        // zoomed out on all of Brazil, growing circles when zoomed in.
-        // ~11 km is below the 0.25deg (~27 km) ERA5 cell spacing so
-        // neighbours stay distinct. Pixel clamps keep them visible far
-        // out and capped when zoomed in very close.
-        radiusUnits: "meters",
-        radiusMinPixels: 0.25,
-        radiusMaxPixels: 9,
-        getPosition: (d) => [d.lon, d.lat],
-        getRadius: (d) =>
-          1250 + Math.log10(Math.max(1, Number(d.days))) * 600,
-        getFillColor: (d) =>
-          colormap === "binary"
-            ? [40, 100, 200, 220]
-            : intensityColor(Number(d.vars ?? 0) / Math.max(1, totalVars)),
-        getLineColor: [255, 255, 255, 220],
-        lineWidthMinPixels: 1.5,
-        stroked: true,
-        updateTriggers: {
-          getFillColor: [colormap, totalVars],
-        },
-      }),
-    [points, colormap, totalVars, showPoints],
-  );
+  const pointsLayer = useMemo(() => {
+    const [r, g, b] = hexToRgb(pointColor);
+    const alpha = Math.round((Math.max(0, Math.min(100, pointOpacity)) / 100) * 255);
+    return new ScatterplotLayer<GridPoint>({
+      id: "grid-points",
+      data: points,
+      visible: showPoints,
+      pickable: true,
+      radiusUnits: "meters",
+      radiusMinPixels: 0.25,
+      radiusMaxPixels: 9,
+      getPosition: (d) => [d.lon, d.lat],
+      getRadius: (d) => 1250 + Math.log10(Math.max(1, Number(d.days))) * 600,
+      getFillColor: [r, g, b, alpha],
+      getLineColor: [255, 255, 255, 220],
+      lineWidthMinPixels: 1.5,
+      stroked: true,
+      updateTriggers: {
+        getFillColor: [pointColor, pointOpacity],
+      },
+    });
+  }, [points, pointColor, pointOpacity, showPoints]);
 
   const selectionLayer = useMemo(() => {
     const polys: { polygon: [number, number][] }[] = [];
