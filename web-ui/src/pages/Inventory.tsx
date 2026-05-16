@@ -372,9 +372,9 @@ export function InventoryPage() {
         {(dateFrom || dateTo || !varsAllSelected || !hoursAllSelected) && (
           <button
             onClick={() => {
-              userEditedDates.current = true;
-              setDateFrom("");
-              setDateTo("");
+              userEditedDates.current = false;
+              setDateFrom(dateRangeQ.data?.min ?? "");
+              setDateTo(dateRangeQ.data?.max ?? "");
               setVariableFilter(allVarNames);
               setHourFilter(HOURS);
             }}
