@@ -109,7 +109,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-6xl px-8 py-8">
+        <div className="flex min-h-full flex-col px-8 py-8">
           <OnboardingGate>{children}</OnboardingGate>
         </div>
       </main>
