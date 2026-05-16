@@ -122,6 +122,11 @@ export interface DiffPreview {
   missing_cells: number;
   savings_pct: number;
   sample_missing: DiffPreviewSampleRow[];
+  diff_skipped: boolean;
+  skip_reason: string | null;
+  estimated_download_bytes: number | null;
+  estimated_disk_bytes: number | null;
+  estimated_chunks: number | null;
 }
 
 // --- Query schema & display precision (v0.6.x) ----------------------------

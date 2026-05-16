@@ -25,6 +25,13 @@ ERA5_LAND_RESOLUTION = 0.1
 # NetCDF stores float variables as DOUBLE (8 bytes per value)
 BYTES_PER_VALUE = 8
 
+# Heuristic: after conversion to Hive-partitioned Parquet (zstd, values as
+# Float64, coords as Float32) climate fields compress well. This conservative
+# ratio (final on-disk bytes ≈ this × raw-double download bytes) is only used
+# to give the user an order-of-magnitude disk-occupancy figure — it is
+# explicitly an estimate, not a guarantee.
+PARQUET_DISK_RATIO = 0.5
+
 # Conservative default limit: 500 MB per request
 DEFAULT_MAX_REQUEST_BYTES = 500 * 1024 * 1024
 

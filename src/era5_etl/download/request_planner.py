@@ -49,6 +49,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Above this many requested cells (n_lat × n_lon × n_date × n_var) the
+# per-cell Smart-Diff expansion is infeasible in memory: building the dense
+# Polars frame would allocate multiple GB and the Rust allocator aborts the
+# *process* (not a catchable exception). Callers must bound the request
+# arithmetically (see ``request_cell_count``) and skip the per-cell diff,
+# falling back to the size-bounded ``plan_requests`` chunk plan, which never
+# materialises a per-cell grid.
+DIFF_MAX_CELLS = 20_000_000
+
 
 @dataclass(frozen=True)
 class RequestChunk:
@@ -501,6 +510,28 @@ def _date_range(start: str, end: str | None) -> list[date_cls]:
     return [s + timedelta(days=i) for i in range(days + 1)]
 
 
+def request_cell_count(
+    config: DownloadConfig,
+    resolution: float,
+    snapped_area: list[float],
+) -> int:
+    """Number of (lat, lon, date, variable) cells the request expands to.
+
+    Pure arithmetic on the *axis* sizes only (each axis is tiny — a grid
+    row/column count or a date list). It never builds the dense product,
+    so it is safe to call before deciding whether the per-cell diff is
+    feasible at all. ``0`` if any axis is empty.
+    """
+    n, w, s, e = snapped_area
+    n_lat = int(_grid_axis(s, n, resolution).size)
+    n_lon = int(_grid_axis(w, e, resolution).size)
+    n_date = len(_date_range(config.start_date, config.end_date))
+    n_var = len(config.variables)
+    if not (n_lat and n_lon and n_date and n_var):
+        return 0
+    return n_lat * n_lon * n_date * n_var
+
+
 def build_request_cells(
     config: DownloadConfig,
     resolution: float,
@@ -512,7 +543,20 @@ def build_request_cells(
     Output schema: ``latitude (Float32), longitude (Float32), date (Date),
     variable (str), requested_mask (UInt32)`` — must stay stable since the
     coverage-index ``diff()`` JOIN relies on the dtypes matching exactly.
+
+    Raises :class:`DownloadSizeError` if the request would expand to more
+    than :data:`DIFF_MAX_CELLS` cells — materialising it would exhaust
+    memory and abort the process. Callers must check
+    :func:`request_cell_count` first and take the chunked fallback.
     """
+    count = request_cell_count(config, resolution, snapped_area)
+    if count > DIFF_MAX_CELLS:
+        raise DownloadSizeError(
+            f"Request expands to {count:,} cells (> {DIFF_MAX_CELLS:,}); "
+            "the per-cell diff cannot be materialised. Use a chunked plan "
+            "(plan_requests) instead."
+        )
+
     n, w, s, e = snapped_area
     lats = _grid_axis(s, n, resolution)
     lons = _grid_axis(w, e, resolution)
@@ -652,6 +696,20 @@ def plan_with_diff(
 
     resolution = DatasetRegistry.get(config.dataset).GRID_RESOLUTION_DEG
     snapped_area = snap_area_to_grid(list(config.area), resolution)
+
+    # Bound the per-cell diff arithmetically BEFORE materialising anything.
+    # A state × decades request expands to 10^8+ cells; the dense frame
+    # would OOM-abort the process. The size-bounded plan_requests cascade
+    # is the designed memory-safe path for huge requests, so fall back to
+    # it (the download still proceeds in full, just without the diff
+    # optimisation).
+    if request_cell_count(config, resolution, snapped_area) > DIFF_MAX_CELLS:
+        logger.info(
+            "plan_with_diff: request too large for a per-cell diff "
+            "(> %d cells); falling back to plan_requests.",
+            DIFF_MAX_CELLS,
+        )
+        return plan_requests(config)
 
     cells_df = build_request_cells(config, resolution, snapped_area)
     if cells_df.is_empty():

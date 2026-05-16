@@ -143,6 +143,15 @@ class DiffPreviewOut(BaseModel):
     missing_cells: int
     savings_pct: float
     sample_missing: list[DiffPreviewSampleRow]
+    # Set when the request is too large for a per-cell diff. The download
+    # still proceeds via the size-bounded chunk plan; these fields let the
+    # UI explain why and show the (arithmetic-only) size estimate so the
+    # user can proceed with sequential chunks or narrow the selection.
+    diff_skipped: bool = False
+    skip_reason: str | None = None
+    estimated_download_bytes: int | None = None
+    estimated_disk_bytes: int | None = None
+    estimated_chunks: int | None = None
 
 
 class DateRangeOut(BaseModel):
