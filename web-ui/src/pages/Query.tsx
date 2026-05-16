@@ -225,7 +225,7 @@ export function QueryPage() {
   const schemaColumns = schemaQuery.data?.columns ?? [];
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-1 flex-col gap-4">
       <header className="flex items-end justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
@@ -252,7 +252,7 @@ export function QueryPage() {
         </label>
       </header>
 
-      <div className="card flex h-[70vh] overflow-hidden p-0">
+      <div className="card flex min-h-0 flex-1 overflow-hidden p-0">
         <SchemaSidebar
           datasets={datasets?.map((d) => d.name) ?? []}
           collapsed={leftCollapsed}
