@@ -299,6 +299,7 @@ class CoverageIndex:
         date_from: date | None = None,
         date_to: date | None = None,
         variable: str | list[str] | None = None,
+        hours: list[int] | None = None,
     ) -> pl.DataFrame:
         """Return ``(latitude, longitude, days, vars)`` for every distinct cell.
 
@@ -307,6 +308,9 @@ class CoverageIndex:
         - ``date_from`` / ``date_to`` (inclusive on both ends)
         - ``variable``: a single name, OR a list of names (``IN (...)``).
           ``None`` / empty list = all variables (M07 multi-select).
+        - ``hours``: list of hour integers (0-23). A cell is kept only if
+          at least one of its rows has every selected hour set in
+          ``hours_mask``. ``None`` / empty list = no hour filter.
         """
         conn = self._connect()
         clauses: list[str] = []
@@ -324,6 +328,16 @@ class CoverageIndex:
             placeholders = ", ".join("?" for _ in variable)
             clauses.append(f"variable IN ({placeholders})")
             params.extend(variable)
+        if hours:
+            mask = 0
+            for h in hours:
+                mask |= 1 << int(h)
+            # Keep a coverage row only if its hours_mask contains every
+            # selected hour: (hours_mask & mask) = mask. A grid point then
+            # survives the GROUP BY if ANY of its rows qualifies.
+            clauses.append("(hours_mask & ?) = ?")
+            params.append(mask)
+            params.append(mask)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""
             SELECT
