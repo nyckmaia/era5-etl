@@ -6,12 +6,25 @@ expose them as JSON for the web UI's wizard.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import shutil
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.datasets import DatasetRegistry
-from era5_etl.web.models import DatasetOut, DatasetVariableOut
+from era5_etl.storage.paths import resolve_dataset_dir, resolve_netcdf_temp_dir
+from era5_etl.web.models import DatasetDeleteOut, DatasetOut, DatasetVariableOut
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Sum the size of every file under ``path`` (0 if it doesn't exist)."""
+    if not path.exists():
+        return 0
+    return sum(
+        f.stat().st_size for f in path.rglob("*") if f.is_file()
+    )
 
 
 def _to_out(name: str) -> DatasetOut:
@@ -45,3 +58,30 @@ def get_dataset(name: str) -> DatasetOut:
     if name not in DatasetRegistry.names():
         raise HTTPException(status_code=404, detail=f"Unknown dataset: {name}")
     return _to_out(name)
+
+
+@router.delete("/{name}/data", response_model=DatasetDeleteOut)
+def delete_dataset_data(name: str, request: Request) -> DatasetDeleteOut:
+    """Permanently wipe ALL on-disk data for one dataset.
+
+    Removes the dataset's storage folder (parquet partitions, manifest,
+    the per-dataset DuckDB view file, and the ``_coverage.duckdb`` index)
+    *and* its temporary NetCDF directory. This is irreversible — the data
+    must be re-downloaded from the CDS afterwards. The dataset itself
+    stays registered; only its files are deleted.
+    """
+    if name not in DatasetRegistry.names():
+        raise HTTPException(status_code=404, detail=f"Unknown dataset: {name}")
+
+    data_dir = request.app.state.data_dir
+    dataset_dir = resolve_dataset_dir(data_dir, name)
+    tmp_dir = resolve_netcdf_temp_dir(data_dir, name)
+
+    freed = _dir_size_bytes(dataset_dir) + _dir_size_bytes(tmp_dir)
+    deleted = False
+    for target in (dataset_dir, tmp_dir):
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+            deleted = True
+
+    return DatasetDeleteOut(dataset=name, deleted=deleted, freed_bytes=freed)

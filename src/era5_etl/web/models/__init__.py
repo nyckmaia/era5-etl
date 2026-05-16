@@ -164,8 +164,17 @@ class QueryOut(BaseModel):
     columns: list[str]
     column_types: list[str]  # short Python type per column (str/int/float/...)
     rows: list[list]
-    row_count: int
+    row_count: int  # rows actually returned (== min(total_rows, limit))
     truncated: bool
+    total_rows: int  # rows the query would return without the limit
+
+
+class DatasetDeleteOut(BaseModel):
+    """Result of wiping a dataset's on-disk storage."""
+
+    dataset: str
+    deleted: bool
+    freed_bytes: int
 
 
 class SchemaColumn(BaseModel):
@@ -262,6 +271,7 @@ __all__ = [
     "DiffPreviewOut",
     "QueryIn",
     "QueryOut",
+    "DatasetDeleteOut",
     "QueryHistoryEntry",
     "QueryHistoryAppendIn",
     "QueryHistoryPatch",

@@ -239,3 +239,66 @@ def test_grid_points_multi_variable(client: TestClient, tmp_path: Path) -> None:
         params={"dataset": "era5-land", "format": "json"},
     )
     assert len(r3.json()) == 3
+
+
+# --- /api/query truncation: row_count / total_rows / truncated ---------------
+
+
+def test_query_reports_truncation_and_total(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _seed_parquet(tmp_path)  # 2 rows on disk
+
+    # limit below the total -> truncated, total_rows is the true count.
+    r = client.post(
+        "/api/query",
+        json={"sql": "SELECT * FROM era5_land", "limit": 1},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["row_count"] == 1
+    assert body["total_rows"] == 2
+    assert body["truncated"] is True
+
+    # limit above the total -> not truncated, counts agree.
+    r2 = client.post(
+        "/api/query",
+        json={"sql": "SELECT * FROM era5_land", "limit": 100},
+    )
+    assert r2.status_code == 200, r2.text
+    b2 = r2.json()
+    assert b2["row_count"] == 2
+    assert b2["total_rows"] == 2
+    assert b2["truncated"] is False
+
+
+# --- DELETE /api/datasets/{name}/data ---------------------------------------
+
+
+def test_delete_dataset_data_wipes_storage(
+    client: TestClient, tmp_path: Path
+) -> None:
+    _seed_parquet(tmp_path)
+    dataset_dir = resolve_dataset_dir(tmp_path, "era5-land")
+    assert dataset_dir.exists()
+    assert any(dataset_dir.rglob("*.parquet"))
+
+    r = client.delete("/api/datasets/era5-land/data")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dataset"] == "era5-land"
+    assert body["deleted"] is True
+    assert body["freed_bytes"] > 0
+    assert not dataset_dir.exists()
+
+    # Idempotent: a second delete is a no-op (nothing left to remove).
+    r2 = client.delete("/api/datasets/era5-land/data")
+    assert r2.status_code == 200, r2.text
+    b2 = r2.json()
+    assert b2["deleted"] is False
+    assert b2["freed_bytes"] == 0
+
+
+def test_delete_unknown_dataset_returns_404(client: TestClient) -> None:
+    r = client.delete("/api/datasets/not-a-dataset/data")
+    assert r.status_code == 404, r.text

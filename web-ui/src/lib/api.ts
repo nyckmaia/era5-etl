@@ -223,6 +223,11 @@ export const api = {
   datasets: () => request<DatasetInfo[]>("/api/datasets"),
   dataset: (name: string) => request<DatasetInfo>(`/api/datasets/${encodeURIComponent(name)}`),
   stats: (name: string) => request<StorageStats>(`/api/stats/${encodeURIComponent(name)}`),
+  deleteDatasetData: (name: string) =>
+    request<{ dataset: string; deleted: boolean; freed_bytes: number }>(
+      `/api/datasets/${encodeURIComponent(name)}/data`,
+      { method: "DELETE" },
+    ),
   settings: () => request<UserSettings>("/api/settings"),
   saveSettings: (body: Partial<UserSettings>) =>
     request<UserSettings>("/api/settings", { method: "POST", body: JSON.stringify(body) }),
@@ -259,6 +264,7 @@ export const api = {
       rows: (string | number | null)[][];
       row_count: number;
       truncated: boolean;
+      total_rows: number;
     }>("/api/query", { method: "POST", body: JSON.stringify(body) }),
   querySchema: (dataset: string) =>
     request<QuerySchema>(

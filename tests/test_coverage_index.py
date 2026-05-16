@@ -107,20 +107,19 @@ def test_creates_db_and_schema(tmp_path: Path) -> None:
         version = conn.execute(
             "SELECT value FROM coverage_meta WHERE key = 'schema_version'"
         ).fetchone()
-        assert version == ("2",)
-        # v2 schema: no ingested_at column, no cov_spatial index.
-        cols = [
+        assert version == ("3",)
+        # v3 schema: a (lat, lon) `cell` dimension + one MAP-nested row
+        # per (cell, date) in `coverage`; no flat lat/lon/variable cols
+        # and no enforced composite-key index.
+        cov_cols = [
             r[1]
             for r in conn.execute("PRAGMA table_info('coverage')").fetchall()
         ]
-        assert "ingested_at" not in cols
-        assert set(cols) == {
-            "latitude",
-            "longitude",
-            "date",
-            "variable",
-            "hours_mask",
-        }
+        assert set(cov_cols) == {"cell_id", "date", "vars"}
+        cell_cols = [
+            r[1] for r in conn.execute("PRAGMA table_info('cell')").fetchall()
+        ]
+        assert set(cell_cols) == {"cell_id", "latitude", "longitude"}
 
 
 # ----------------------------------------------------------------------
@@ -228,8 +227,8 @@ def test_upsert_with_null_values(tmp_path: Path) -> None:
 
 
 def test_upsert_rolls_back_on_failure(tmp_path: Path) -> None:
-    """A failure mid-loop must roll back any prior variables upserted in the
-    same call -- nothing partially committed.
+    """A failure during the merged write must roll back the whole call --
+    nothing (cells or coverage) partially committed.
     """
     df = _grid_df(
         lats=[-22.5],
@@ -240,7 +239,7 @@ def test_upsert_rolls_back_on_failure(tmp_path: Path) -> None:
 
     class _FlakyConn:
         """Proxy that delegates to a real DuckDB connection but raises on the
-        second ``INSERT INTO coverage`` to simulate a mid-loop failure.
+        merged ``INSERT INTO coverage`` to simulate a mid-write failure.
         """
 
         def __init__(self, real):  # type: ignore[no-untyped-def]
@@ -250,7 +249,7 @@ def test_upsert_rolls_back_on_failure(tmp_path: Path) -> None:
         def execute(self, sql: str, *args, **kwargs):  # type: ignore[no-untyped-def]
             if sql.lstrip().startswith("INSERT INTO coverage"):
                 self._insert_calls += 1
-                if self._insert_calls == 2:
+                if self._insert_calls == 1:
                     raise RuntimeError("simulated mid-loop failure")
             return self._real.execute(sql, *args, **kwargs)
 
@@ -652,7 +651,7 @@ def test_old_schema_db_is_rebuilt(tmp_path: Path) -> None:
     assert rebuilt is True  # stale schema -> rebuilt
 
     with CoverageIndex(dataset, tmp_path) as cov:
-        assert cov.schema_version_on_disk() == "2"
+        assert cov.schema_version_on_disk() == "3"
         # The fabricated 'stale' row is gone; real parquet cell present.
         s = cov.stats()
         assert s["n_cells"] == 1

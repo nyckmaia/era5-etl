@@ -6,26 +6,26 @@ for every (latitude, longitude, date, variable) tuple, *which hours of the
 day* are present in local Parquet storage. Hours are stored as a 24-bit
 bitmap (``UINTEGER``): bit ``h`` set means hour ``h`` UTC is on disk.
 
-This index is the foundation for v0.6.0 features:
+Schema v3 — storage-optimised layout. Instead of one flat row per
+``(latitude, longitude, date, variable)`` with an enforced composite
+PRIMARY KEY (whose ART index dominated the file), the data is stored as:
 
-- **Inventory queries** -- "what variables/dates do I have at this point?"
-- **Smart-diff downloads** -- "which cells are still missing for this
-  request?"
-- **Map UI** -- decimated lat/lon points + per-cell drill-down.
+* ``cell(cell_id, latitude, longitude)`` — the per-dataset (lat, lon)
+  dimension. Each distinct grid point is stored once; the two FLOAT
+  columns no longer repeat on every date/variable row.
+* ``coverage(cell_id, date, vars MAP(VARCHAR, UINTEGER))`` — **one row
+  per (cell, date)**, with every variable's 24-bit hours bitmap nested
+  in a ``MAP``. This removes the ``×n_var`` row blow-up and carries **no
+  PRIMARY KEY and no secondary index** (no ART on the large table).
 
-The schema is intentionally tiny (no spatial extension required) and
-upserts are set-based: a Polars DataFrame coming out of the converter is
-registered as a DuckDB view and OR-merged into the existing rows in a
-single SQL statement per variable. Concretely::
-
-    INSERT INTO coverage (...)
-    SELECT ... FROM staging
-    ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
-    SET hours_mask = coverage.hours_mask | EXCLUDED.hours_mask;
+OR-merge semantics are unchanged (a cell's hours accumulate by bitwise
+OR). They are produced by a ``GROUP BY ... BIT_OR(...)`` at write time and
+a delete-affected-then-insert-merged transaction for incremental upserts.
 
 The index is **derived state**: nothing depends on it beyond performance
 and UI features. ``ensure_coverage_index`` rebuilds it from the parquet
-files on disk if it's missing or empty -- safe to delete and regenerate.
+files on disk if it's missing, empty, or an older schema -- safe to
+delete and regenerate.
 """
 
 from __future__ import annotations
@@ -48,9 +48,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 COVERAGE_DB_FILENAME = "_coverage.duckdb"
-# v2: dropped ingested_at + cov_spatial (M04). A DB written by an older
-# schema is detected on open and rebuilt from parquet from scratch.
-COVERAGE_SCHEMA_VERSION = "2"
+# v3: (lat, lon) dimension table + one MAP-nested row per (cell, date),
+# no PRIMARY KEY / secondary index on the large table. A DB written by an
+# older schema is detected on open and rebuilt from parquet from scratch.
+COVERAGE_SCHEMA_VERSION = "3"
 
 # Columns we never count as "variables" in upsert_from_dataframe.
 _RESERVED_COLS: frozenset[str] = frozenset({"latitude", "longitude", "hour_utc", "date"})
@@ -65,24 +66,27 @@ _PARTITION_RE = re.compile(r"^date=(\d{4}-\d{2}-\d{2})$")
 
 
 def _ddl() -> str:
-    """Return the CREATE statements for the coverage schema.
+    """Return the CREATE statements for the coverage schema (v3).
 
-    Schema v2 (M04): dropped ``ingested_at`` (8-byte ts/row + churn, no
-    consumer) and the ``cov_spatial`` index (the PRIMARY KEY already
-    leads with ``(latitude, longitude)`` so a separate index on the same
-    prefix is pure bloat). This roughly halves the on-disk size for
-    large grids.
+    No PRIMARY KEY or index on ``coverage``: the composite-key ART was
+    the single largest on-disk component, and the table is always
+    rebuilt deduped from parquet so uniqueness is a property of the
+    write path, not an enforced constraint. ``cell`` is tiny (one row
+    per distinct grid point) and joined by hash, so it needs no index
+    either.
     """
     return """
-    CREATE TABLE IF NOT EXISTS coverage (
-        latitude    FLOAT     NOT NULL,
-        longitude   FLOAT     NOT NULL,
-        date        DATE      NOT NULL,
-        variable    VARCHAR   NOT NULL,
-        hours_mask  UINTEGER  NOT NULL,
-        PRIMARY KEY (latitude, longitude, date, variable)
+    CREATE TABLE IF NOT EXISTS cell (
+        cell_id   INTEGER  NOT NULL,
+        latitude  FLOAT    NOT NULL,
+        longitude FLOAT    NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS cov_date ON coverage(date);
+
+    CREATE TABLE IF NOT EXISTS coverage (
+        cell_id INTEGER NOT NULL,
+        date    DATE    NOT NULL,
+        vars    MAP(VARCHAR, UINTEGER) NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS coverage_meta (
         key   VARCHAR PRIMARY KEY,
@@ -197,17 +201,20 @@ class CoverageIndex:
     # ---- writes ------------------------------------------------------
 
     def upsert_from_dataframe(self, df: pl.DataFrame) -> int:
-        """OR-merge each cell's hours_mask into ``coverage``.
+        """OR-merge each cell's per-variable hours bitmap into ``coverage``.
 
         ``df`` must have columns ``latitude``, ``longitude``, ``hour_utc``,
         ``date``, and one or more variable columns (any column not in the
-        reserved set is treated as a variable). For each variable column,
-        groups by (lat, lon, date), computes
-        ``hours_mask = SUM(1 << hour_utc) FILTER (var IS NOT NULL)``,
-        and INSERTs with ON CONFLICT ... DO UPDATE
-        ``hours_mask = old | new``.
+        reserved set is treated as a variable). For each variable, the
+        per-(lat, lon, date) bitmap ``BIT_OR(1 << hour_utc)`` is computed,
+        new grid points are assigned a ``cell_id``, and the affected
+        ``(cell_id, date)`` rows are recomputed as the OR-merge of any
+        existing ``vars`` MAP with the staged masks (delete-then-insert
+        inside one transaction, so the result is exactly the old behaviour
+        without an enforced unique constraint).
 
-        Returns the total rows upserted across all variables.
+        Returns the number of distinct ``(cell, date, variable)`` entries
+        contributed by ``df`` (so a rebuild can sum "rows upserted").
         """
         required = {"latitude", "longitude", "hour_utc", "date"}
         missing = required - set(df.columns)
@@ -229,62 +236,139 @@ class CoverageIndex:
         total = 0
         conn.execute("BEGIN TRANSACTION")
         try:
-            for var in var_cols:
-                # Project to a staging frame with one row per (lat, lon, date, hour) for this var,
-                # excluding nulls. Then aggregate the hours_mask in DuckDB SQL (set-based).
-                staging = df.select(["latitude", "longitude", "date", "hour_utc", var]).filter(
-                    pl.col(var).is_not_null()
+            conn.execute(
+                """
+                CREATE OR REPLACE TEMP TABLE _stage (
+                    latitude   FLOAT,
+                    longitude  FLOAT,
+                    date       DATE,
+                    variable   VARCHAR,
+                    hours_mask UINTEGER
                 )
+                """
+            )
+            for var in var_cols:
+                # One row per (lat, lon, date, hour) for this var, nulls dropped.
+                staging = df.select(
+                    ["latitude", "longitude", "date", "hour_utc", var]
+                ).filter(pl.col(var).is_not_null())
                 if staging.is_empty():
                     continue
-
-                arrow_tbl = staging.to_arrow()
-                conn.register("coverage_staging", arrow_tbl)
+                conn.register("coverage_staging", staging.to_arrow())
                 try:
-                    # Aggregate in DuckDB: OR-fold (1 << hour_utc), one row per cell+date,
-                    # then upsert. We materialize the aggregated row count first so we can
-                    # report how many cell+date+variable rows were touched (DuckDB has no
-                    # standard ROW_COUNT() across statements, and ON CONFLICT updates do
-                    # not show up in `RETURNING *` in 1.4.x reliably).
-                    affected_row = conn.execute(
-                        """
-                        WITH agg AS (
-                            SELECT
-                                latitude,
-                                longitude,
-                                date,
-                                CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER))
-                                     AS UINTEGER) AS hours_mask
-                            FROM coverage_staging
-                            WHERE hour_utc BETWEEN 0 AND 23
-                            GROUP BY latitude, longitude, date
-                        )
-                        SELECT COUNT(*) FROM agg
-                        """
-                    ).fetchone()
-                    affected = int(affected_row[0]) if affected_row else 0
-
                     conn.execute(
                         """
-                        INSERT INTO coverage (latitude, longitude, date, variable, hours_mask)
+                        INSERT INTO _stage
                         SELECT
                             latitude,
                             longitude,
                             date,
                             ? AS variable,
-                            CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER)) AS UINTEGER)
-                                AS hours_mask
+                            CAST(BIT_OR(CAST((1::UINTEGER << hour_utc) AS UINTEGER))
+                                 AS UINTEGER) AS hours_mask
                         FROM coverage_staging
                         WHERE hour_utc BETWEEN 0 AND 23
                         GROUP BY latitude, longitude, date
-                        ON CONFLICT (latitude, longitude, date, variable) DO UPDATE
-                        SET hours_mask = coverage.hours_mask | EXCLUDED.hours_mask;
                         """,
                         [var],
                     )
-                    total += affected
                 finally:
                     conn.unregister("coverage_staging")
+
+            staged_n = conn.execute("SELECT COUNT(*) FROM _stage").fetchone()
+            if not staged_n or staged_n[0] == 0:
+                conn.execute("COMMIT")
+                return 0
+
+            # Assign cell_id to any (lat, lon) not seen before. ROW_NUMBER
+            # is 1-based, so on an empty ``cell`` table (MAX = -1) the
+            # first id is 0 and ids stay contiguous thereafter.
+            conn.execute(
+                """
+                INSERT INTO cell (cell_id, latitude, longitude)
+                SELECT
+                    (SELECT COALESCE(MAX(cell_id), -1) FROM cell)
+                        + ROW_NUMBER() OVER (ORDER BY latitude, longitude),
+                    latitude,
+                    longitude
+                FROM (
+                    SELECT DISTINCT s.latitude, s.longitude
+                    FROM _stage s
+                    LEFT JOIN cell c
+                      ON c.latitude = s.latitude AND c.longitude = s.longitude
+                    WHERE c.cell_id IS NULL
+                ) d
+                """
+            )
+
+            conn.execute(
+                """
+                CREATE OR REPLACE TEMP TABLE _se AS
+                SELECT cl.cell_id, s.date, s.variable, s.hours_mask
+                FROM _stage s
+                JOIN cell cl
+                  ON cl.latitude = s.latitude AND cl.longitude = s.longitude
+                """
+            )
+            total_row = conn.execute(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT cell_id, date, variable FROM _se)"
+            ).fetchone()
+            total = int(total_row[0]) if total_row else 0
+
+            # OR-merge: existing MAP entries for the affected (cell, date)
+            # keys + the staged masks, BIT_OR-folded per variable, then
+            # re-packed into a MAP. Delete the affected rows and insert the
+            # merged ones (one row per (cell, date)).
+            conn.execute(
+                """
+                CREATE OR REPLACE TEMP TABLE _merged AS
+                WITH affected AS (
+                    SELECT DISTINCT cell_id, date FROM _se
+                ),
+                existing AS (
+                    SELECT
+                        cov.cell_id,
+                        cov.date,
+                        unnest(map_keys(cov.vars))   AS variable,
+                        unnest(map_values(cov.vars)) AS hours_mask
+                    FROM coverage cov
+                    SEMI JOIN affected a
+                      ON a.cell_id = cov.cell_id AND a.date = cov.date
+                ),
+                all_e AS (
+                    SELECT cell_id, date, variable, hours_mask FROM existing
+                    UNION ALL
+                    SELECT cell_id, date, variable, hours_mask FROM _se
+                ),
+                folded AS (
+                    SELECT
+                        cell_id, date, variable,
+                        CAST(BIT_OR(hours_mask) AS UINTEGER) AS hours_mask
+                    FROM all_e
+                    GROUP BY cell_id, date, variable
+                )
+                SELECT
+                    cell_id,
+                    date,
+                    map_from_entries(
+                        list({'key': variable, 'value': hours_mask})
+                    ) AS vars
+                FROM folded
+                GROUP BY cell_id, date
+                """
+            )
+            conn.execute(
+                """
+                DELETE FROM coverage
+                WHERE (cell_id, date) IN (SELECT cell_id, date FROM _merged)
+                """
+            )
+            conn.execute(
+                "INSERT INTO coverage SELECT cell_id, date, vars FROM _merged"
+            )
+            conn.execute("DROP TABLE IF EXISTS _merged")
+            conn.execute("DROP TABLE IF EXISTS _se")
+            conn.execute("DROP TABLE IF EXISTS _stage")
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -309,46 +393,59 @@ class CoverageIndex:
         - ``variable``: a single name, OR a list of names (``IN (...)``).
           ``None`` / empty list = all variables (M07 multi-select).
         - ``hours``: list of hour integers (0-23). A cell is kept only if
-          at least one of its rows has every selected hour set in
-          ``hours_mask``. ``None`` / empty list = no hour filter.
+          at least one of its (date, variable) entries has every selected
+          hour set in its bitmap. ``None`` / empty list = no hour filter.
         """
         conn = self._connect()
-        clauses: list[str] = []
+        # Date filter is applied before the MAP is unnested (cheap, on the
+        # narrow coverage row); variable/hours filters apply per entry.
+        pre: list[str] = []
         params: list[Any] = []
         if date_from is not None:
-            clauses.append("date >= ?")
+            pre.append("cov.date >= ?")
             params.append(date_from)
         if date_to is not None:
-            clauses.append("date <= ?")
+            pre.append("cov.date <= ?")
             params.append(date_to)
+        pre_where = f"WHERE {' AND '.join(pre)}" if pre else ""
+
+        post: list[str] = []
         if isinstance(variable, str):
-            clauses.append("variable = ?")
+            post.append("ex.variable = ?")
             params.append(variable)
         elif variable:  # non-empty list
             placeholders = ", ".join("?" for _ in variable)
-            clauses.append(f"variable IN ({placeholders})")
+            post.append(f"ex.variable IN ({placeholders})")
             params.extend(variable)
         if hours:
             mask = 0
             for h in hours:
                 mask |= 1 << int(h)
-            # Keep a coverage row only if its hours_mask contains every
-            # selected hour: (hours_mask & mask) = mask. A grid point then
-            # survives the GROUP BY if ANY of its rows qualifies.
-            clauses.append("(hours_mask & ?) = ?")
+            post.append("(ex.hours_mask & ?) = ?")
             params.append(mask)
             params.append(mask)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        post_where = f"WHERE {' AND '.join(post)}" if post else ""
+
         sql = f"""
+            WITH ex AS (
+                SELECT
+                    cov.cell_id,
+                    cov.date,
+                    unnest(map_keys(cov.vars))   AS variable,
+                    unnest(map_values(cov.vars)) AS hours_mask
+                FROM coverage cov
+                {pre_where}
+            )
             SELECT
-                latitude,
-                longitude,
-                COUNT(DISTINCT date)     AS days,
-                COUNT(DISTINCT variable) AS vars
-            FROM coverage
-            {where}
-            GROUP BY latitude, longitude
-            ORDER BY latitude, longitude
+                cl.latitude,
+                cl.longitude,
+                COUNT(DISTINCT ex.date)     AS days,
+                COUNT(DISTINCT ex.variable) AS vars
+            FROM ex
+            JOIN cell cl USING (cell_id)
+            {post_where}
+            GROUP BY cl.latitude, cl.longitude
+            ORDER BY cl.latitude, cl.longitude
         """
         return conn.execute(sql, params).pl()
 
@@ -362,8 +459,15 @@ class CoverageIndex:
         return conn.execute(
             """
             SELECT date, variable, hours_mask
-            FROM coverage
-            WHERE latitude = ? AND longitude = ?
+            FROM (
+                SELECT
+                    cov.date,
+                    unnest(map_keys(cov.vars))   AS variable,
+                    unnest(map_values(cov.vars)) AS hours_mask
+                FROM coverage cov
+                JOIN cell cl USING (cell_id)
+                WHERE cl.latitude = ? AND cl.longitude = ?
+            )
             ORDER BY date, variable
             """,
             [latitude, longitude],
@@ -404,10 +508,13 @@ class CoverageIndex:
             }
 
         conn = self._connect()
-        # Pull all distinct cells once and filter in Python -- cheap for the
-        # sizes we expect (~hundreds of thousands at most).
+        # Distinct grid points that actually have coverage (cells with data).
         all_points = conn.execute(
-            "SELECT DISTINCT latitude, longitude FROM coverage"
+            """
+            SELECT DISTINCT cl.latitude, cl.longitude
+            FROM cell cl
+            SEMI JOIN coverage cov ON cov.cell_id = cl.cell_id
+            """
         ).fetchall()
 
         inside: list[tuple[float, float]] = [
@@ -424,44 +531,50 @@ class CoverageIndex:
                 "gaps": [],
             }
 
-        # Register the inside set as a temp view so we can JOIN it.
         inside_df = pl.DataFrame(
             {"latitude": [p[0] for p in inside], "longitude": [p[1] for p in inside]}
         )
         conn.register("region_cells", inside_df.to_arrow())
         try:
-            # Date range over polygon cells + average variables per polygon cell.
             row = conn.execute(
                 """
-                WITH per_cell_vars AS (
-                    SELECT latitude, longitude, COUNT(DISTINCT variable) AS n_vars
-                    FROM coverage
-                    GROUP BY latitude, longitude
+                WITH rc AS (
+                    SELECT cl.cell_id
+                    FROM region_cells r
+                    JOIN cell cl USING (latitude, longitude)
+                ),
+                ucov AS (
+                    SELECT
+                        cov.cell_id,
+                        cov.date,
+                        unnest(map_keys(cov.vars)) AS variable
+                    FROM coverage cov
+                    SEMI JOIN rc ON rc.cell_id = cov.cell_id
                 )
                 SELECT
-                    (SELECT MIN(c.date)
-                       FROM coverage c
-                       JOIN region_cells r USING (latitude, longitude))   AS min_date,
-                    (SELECT MAX(c.date)
-                       FROM coverage c
-                       JOIN region_cells r USING (latitude, longitude))   AS max_date,
-                    (SELECT COALESCE(AVG(p.n_vars), 0.0)
-                       FROM per_cell_vars p
-                       JOIN region_cells r USING (latitude, longitude))   AS vars_avg
+                    (SELECT MIN(date) FROM ucov)                       AS min_date,
+                    (SELECT MAX(date) FROM ucov)                       AS max_date,
+                    (SELECT COALESCE(AVG(nv), 0.0) FROM (
+                        SELECT cell_id, COUNT(DISTINCT variable) AS nv
+                        FROM ucov GROUP BY cell_id
+                    ))                                                 AS vars_avg
                 """
             ).fetchone()
             min_date, max_date, vars_avg = row if row is not None else (None, None, 0.0)
             vars_avg = float(vars_avg) if vars_avg is not None else 0.0
 
-            # Gap analysis: for each date with any coverage, count distinct
-            # in-polygon cells that have at least one row.
             gaps_rows = conn.execute(
                 """
-                WITH per_date AS (
-                    SELECT c.date, COUNT(DISTINCT (c.latitude, c.longitude)) AS cells_with_data
-                    FROM coverage c
-                    JOIN region_cells r USING (latitude, longitude)
-                    GROUP BY c.date
+                WITH rc AS (
+                    SELECT cl.cell_id
+                    FROM region_cells r
+                    JOIN cell cl USING (latitude, longitude)
+                ),
+                per_date AS (
+                    SELECT cov.date, COUNT(DISTINCT cov.cell_id) AS cells_with_data
+                    FROM coverage cov
+                    SEMI JOIN rc ON rc.cell_id = cov.cell_id
+                    GROUP BY cov.date
                 )
                 SELECT date, cells_with_data
                 FROM per_date
@@ -496,8 +609,10 @@ class CoverageIndex:
             - ``requested_mask``          (UINTEGER, 24 bits)
 
         Returns the same columns plus ``missing_mask`` =
-        ``requested_mask & ~COALESCE(coverage.hours_mask, 0)``, filtered to
-        ``missing_mask <> 0``.
+        ``requested_mask & ~COALESCE(stored_mask, 0)``, filtered to
+        ``missing_mask <> 0``. ``stored_mask`` is the per-variable value
+        pulled out of the ``coverage.vars`` MAP for the matching
+        ``(cell, date)``; an unknown cell/date yields the full request.
         """
         required = {"latitude", "longitude", "date", "variable", "requested_mask"}
         missing = required - set(cells_df.columns)
@@ -516,32 +631,63 @@ class CoverageIndex:
         try:
             return conn.execute(
                 """
+                WITH req AS (
+                    SELECT
+                        r.latitude,
+                        r.longitude,
+                        r.date,
+                        r.variable,
+                        r.requested_mask,
+                        CAST(
+                            COALESCE(cov.vars[r.variable], 0::UINTEGER)
+                            AS UINTEGER
+                        ) AS stored_mask
+                    FROM diff_request r
+                    LEFT JOIN cell cl
+                      ON cl.latitude = r.latitude AND cl.longitude = r.longitude
+                    LEFT JOIN coverage cov
+                      ON cov.cell_id = cl.cell_id AND cov.date = r.date
+                )
                 SELECT
-                    r.latitude,
-                    r.longitude,
-                    r.date,
-                    r.variable,
-                    r.requested_mask,
-                    CAST(
-                        r.requested_mask & (~COALESCE(c.hours_mask, 0::UINTEGER))
-                        AS UINTEGER
-                    ) AS missing_mask
-                FROM diff_request r
-                LEFT JOIN coverage c
-                    USING (latitude, longitude, date, variable)
-                WHERE (r.requested_mask & (~COALESCE(c.hours_mask, 0::UINTEGER))) <> 0
-                ORDER BY r.latitude, r.longitude, r.date, r.variable
+                    latitude,
+                    longitude,
+                    date,
+                    variable,
+                    requested_mask,
+                    CAST(requested_mask & (~stored_mask) AS UINTEGER) AS missing_mask
+                FROM req
+                WHERE (requested_mask & (~stored_mask)) <> 0
+                ORDER BY latitude, longitude, date, variable
                 """
             ).pl()
         finally:
             conn.unregister("diff_request")
 
+    def _compact_sorted(self) -> None:
+        """Rewrite both tables in a compression-friendly order.
+
+        Called once at the end of a rebuild (the tmp file is fresh and
+        atomically swapped in, so recreating the tables here yields a
+        clean, tightly RLE/dictionary-packed layout). ``date`` leads so
+        the date column collapses to near-constant runs; ``cell_id``
+        within a date keeps the small integer key contiguous.
+        """
+        conn = self._connect()
+        conn.execute(
+            "CREATE OR REPLACE TABLE coverage AS "
+            "SELECT cell_id, date, vars FROM coverage ORDER BY date, cell_id"
+        )
+        conn.execute(
+            "CREATE OR REPLACE TABLE cell AS "
+            "SELECT cell_id, latitude, longitude FROM cell ORDER BY cell_id"
+        )
+
     def checkpoint(self) -> None:
         """Flush the WAL and compact the database file.
 
         DuckDB does not auto-compact: without an explicit CHECKPOINT the
-        on-disk file keeps growing as superseded row/index versions pile
-        up. Called once at the end of a rebuild.
+        on-disk file keeps growing as superseded row versions pile up.
+        Called once at the end of a rebuild.
         """
         conn = self._connect()
         conn.execute("CHECKPOINT")
@@ -563,9 +709,9 @@ class CoverageIndex:
     def schema_version_on_disk(self) -> str | None:
         """Return the persisted schema version, or ``None`` if absent.
 
-        An older-schema DB (pre-v2: had ``ingested_at``/``cov_spatial``)
-        either lacks the row or carries an older value, so callers can
-        detect it and trigger a fresh rebuild.
+        An older-schema DB (pre-v3) either lacks the row or carries an
+        older value, so callers can detect it and trigger a fresh
+        rebuild.
         """
         conn = self._connect()
         try:
@@ -577,19 +723,31 @@ class CoverageIndex:
         return str(row[0]) if row and row[0] is not None else None
 
     def stats(self) -> dict[str, Any]:
-        """Return small summary stats for status reports + the auto-rebuild hook."""
+        """Return small summary stats for status reports + the auto-rebuild hook.
+
+        ``total_rows`` keeps its historical meaning: the number of
+        logical ``(cell, date, variable)`` entries (sum of MAP sizes),
+        not the physical row count.
+        """
         conn = self._connect()
         row = conn.execute(
             """
             SELECT
-                COUNT(*)                                            AS total_rows,
-                COUNT(DISTINCT (latitude, longitude))               AS n_cells,
-                COUNT(DISTINCT date)                                AS n_dates,
-                COUNT(DISTINCT variable)                            AS n_variables
+                COALESCE(SUM(len(map_keys(vars))), 0)            AS total_rows,
+                COUNT(DISTINCT cell_id)                          AS n_cells,
+                COUNT(DISTINCT date)                             AS n_dates
             FROM coverage
             """
         ).fetchone()
-        total_rows, n_cells, n_dates, n_variables = row if row else (0, 0, 0, 0)
+        total_rows, n_cells, n_dates = row if row else (0, 0, 0)
+        nvar_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT v) FROM (
+                SELECT unnest(map_keys(vars)) AS v FROM coverage
+            )
+            """
+        ).fetchone()
+        n_variables = nvar_row[0] if nvar_row else 0
         size = self._db_path.stat().st_size if self._db_path.exists() else 0
         return {
             "n_cells": int(n_cells or 0),
@@ -684,6 +842,7 @@ def rebuild_from_parquet(
             if progress is not None and task_id is not None:
                 progress.advance(task_id)
 
+        cov._compact_sorted()
         cov.checkpoint()
         final_stats = cov.stats()
 
@@ -715,14 +874,16 @@ def ensure_coverage_index(
     *,
     logger: logging.Logger | None = None,
 ) -> bool:
-    """Rebuild the coverage index if it is missing or empty.
+    """Rebuild the coverage index if it is missing, empty, or stale.
 
     Returns ``True`` if a rebuild ran, ``False`` if the existing index was
-    already populated (or there was nothing to index in the first place).
+    already populated at the current schema (or there was nothing to index
+    in the first place).
 
     Intended to be called as a one-line guard at the start of ``download``
     and ``update`` flows: if the user has parquet data on disk but no
-    coverage index, build it transparently before planning.
+    coverage index (or an older-schema one), build it transparently before
+    planning.
     """
     log = logger or logging.getLogger(__name__)
     parquet_dir = resolve_dataset_dir(base_dir, dataset)
@@ -732,11 +893,15 @@ def ensure_coverage_index(
 
     db_path = parquet_dir / COVERAGE_DB_FILENAME
     if db_path.exists():
+        # Check the schema version FIRST and short-circuit to a rebuild on
+        # mismatch -- the read queries (stats) assume the v3 layout and
+        # would error against an older-schema table.
         with CoverageIndex(dataset, base_dir) as cov:
             on_disk = cov.schema_version_on_disk()
-            populated = cov.stats()["total_rows"] > 0
-        if populated and on_disk == COVERAGE_SCHEMA_VERSION:
-            return False  # Already populated and current schema.
+            if on_disk == COVERAGE_SCHEMA_VERSION:
+                populated = cov.stats()["total_rows"] > 0
+                if populated:
+                    return False  # Already populated and current schema.
         if on_disk != COVERAGE_SCHEMA_VERSION:
             log.info(
                 "Coverage index for %s is schema %s (want %s); rebuilding.",
