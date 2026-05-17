@@ -103,6 +103,28 @@ export function DownloadWizardPage() {
       }),
   });
 
+  // Any change to an input that feeds the diff/estimate invalidates their
+  // cached results. Without this, going Back from Smart Diff to adjust the
+  // period/area and returning shows STALE estimates: the step-4 auto-fetch
+  // only fires when `diffMutation.data` is empty, and the Confirm step's
+  // estimate has the same staleness. Resetting forces a recompute on the
+  // next visit. `reset` is stable; deps are the serialized inputs only.
+  const diffReset = diffMutation.reset;
+  const estimateReset = estimateMutation.reset;
+  useEffect(() => {
+    diffReset();
+    estimateReset();
+  }, [
+    dataset,
+    startDate,
+    endDate,
+    area.join(","),
+    hours.join(","),
+    variables.join(","),
+    diffReset,
+    estimateReset,
+  ]);
+
   const canAdvance = ((): boolean => {
     switch (step) {
       case 0:
