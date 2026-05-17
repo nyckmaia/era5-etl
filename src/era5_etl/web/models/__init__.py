@@ -149,9 +149,13 @@ class DiffPreviewOut(BaseModel):
     # user can proceed with sequential chunks or narrow the selection.
     diff_skipped: bool = False
     skip_reason: str | None = None
-    estimated_download_bytes: int | None = None
-    estimated_disk_bytes: int | None = None
+    estimated_download_bytes: int | None = None  # full request total
+    estimated_disk_bytes: int | None = None  # full request total
     estimated_chunks: int | None = None
+    # What Smart Diff will actually fetch (full request scaled by the
+    # missing fraction). Equals the totals above when nothing is cached.
+    missing_download_bytes: int | None = None
+    missing_disk_bytes: int | None = None
 
 
 class DateRangeOut(BaseModel):

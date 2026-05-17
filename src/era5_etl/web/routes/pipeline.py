@@ -223,6 +223,30 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
             sample_missing=[],
         )
 
+    # Full-request size (arithmetic only, same machinery as the chunked
+    # fallback and /estimate). The per-cell *missing* bytes are estimated
+    # by scaling this total by the missing fraction — bytes ∝ cells, so
+    # this is a good order-of-magnitude figure for "what Smart Diff will
+    # actually fetch".
+    total_download_bytes = sum(
+        estimate_request_size(
+            num_variables=len(c.variables),
+            num_hours=len(c.hours),
+            num_days=len(c.days),
+            area=list(c.area),
+            dataset=c.dataset,
+        ).estimated_bytes
+        for c in plan_requests(cfg)
+    )
+    total_disk_bytes = int(total_download_bytes * PARQUET_DISK_RATIO)
+
+    def _missing_sizes(missing: int) -> tuple[int, int]:
+        frac = missing / requested if requested > 0 else 0.0
+        return (
+            int(total_download_bytes * frac),
+            int(total_disk_bytes * frac),
+        )
+
     if not db_path.exists():
         # No coverage yet -> nothing covered -> all requested cells are "missing".
         sample = []
@@ -238,11 +262,16 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
                     missing_mask=int(row["requested_mask"]),
                 )
             )
+        miss_dl, miss_disk = _missing_sizes(requested)
         return DiffPreviewOut(
             requested_cells=requested,
             missing_cells=requested,
             savings_pct=0.0,
             sample_missing=sample,
+            estimated_download_bytes=total_download_bytes,
+            estimated_disk_bytes=total_disk_bytes,
+            missing_download_bytes=miss_dl,
+            missing_disk_bytes=miss_disk,
         )
 
     with CoverageIndex(cfg.dataset, base_dir) as cov:
@@ -264,11 +293,16 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
             )
         )
 
+    miss_dl, miss_disk = _missing_sizes(missing)
     return DiffPreviewOut(
         requested_cells=requested,
         missing_cells=missing,
         savings_pct=savings,
         sample_missing=sample_rows,
+        estimated_download_bytes=total_download_bytes,
+        estimated_disk_bytes=total_disk_bytes,
+        missing_download_bytes=miss_dl,
+        missing_disk_bytes=miss_disk,
     )
 
 
