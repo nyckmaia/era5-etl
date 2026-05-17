@@ -127,6 +127,8 @@ export interface DiffPreview {
   estimated_download_bytes: number | null;
   estimated_disk_bytes: number | null;
   estimated_chunks: number | null;
+  missing_download_bytes: number | null;
+  missing_disk_bytes: number | null;
 }
 
 // --- Query schema & display precision (v0.6.x) ----------------------------

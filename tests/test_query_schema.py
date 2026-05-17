@@ -348,3 +348,11 @@ def test_diff_preview_small_request_not_skipped(client: TestClient) -> None:
     b = r.json()
     assert b["diff_skipped"] is False
     assert b["requested_cells"] > 0
+    # Sizes are reported for the normal path too (Melhoria): full-request
+    # totals + the (scaled) "what will be fetched" portion.
+    assert b["estimated_download_bytes"] is not None
+    assert b["estimated_disk_bytes"] is not None
+    assert b["missing_download_bytes"] is not None
+    assert b["missing_disk_bytes"] is not None
+    assert b["missing_download_bytes"] <= b["estimated_download_bytes"]
+    assert b["missing_disk_bytes"] <= b["estimated_disk_bytes"]

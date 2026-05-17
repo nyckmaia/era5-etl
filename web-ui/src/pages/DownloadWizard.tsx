@@ -814,6 +814,48 @@ function StepDiff({
         </button>
       )}
 
+      {diff.data && !skipped && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <DiffStat
+              label="Será baixado (≈)"
+              value={
+                diff.data.missing_download_bytes != null
+                  ? formatBytes(diff.data.missing_download_bytes)
+                  : "—"
+              }
+              sub="apenas o que falta · transferência CDS"
+              tone={diff.data.missing_cells === 0 ? "success" : "warn"}
+            />
+            <DiffStat
+              label="Em disco (≈)"
+              value={
+                diff.data.missing_disk_bytes != null
+                  ? formatBytes(diff.data.missing_disk_bytes)
+                  : "—"
+              }
+              sub="parquet após conversão"
+              tone="neutral"
+            />
+          </div>
+          {diff.data.estimated_download_bytes != null && (
+            <p className="text-xs text-ink-400">
+              Requisição completa:{" "}
+              <span className="font-medium text-ink-600">
+                {formatBytes(diff.data.estimated_download_bytes)}
+              </span>{" "}
+              de download ·{" "}
+              <span className="font-medium text-ink-600">
+                {diff.data.estimated_disk_bytes != null
+                  ? formatBytes(diff.data.estimated_disk_bytes)
+                  : "—"}
+              </span>{" "}
+              em disco (caso opte por “baixar tudo”).
+            </p>
+          )}
+        </div>
+      )}
+
       {diff.data && !skipped && diff.data.missing_cells > 0 && (
         <div className="rounded-xl border border-ink-200 bg-white p-4">
           <h3 className="mb-3 text-sm font-semibold text-ink-700">
