@@ -6,11 +6,12 @@ from era5_etl.datasets import DatasetRegistry
 from era5_etl.datasets.base import DatasetConfig
 from era5_etl.datasets.era5.config import Era5Config
 from era5_etl.datasets.era5_land.config import Era5LandConfig
+from era5_etl.datasets.inmet.config import InmetConfig
 
 
-def test_registry_lists_both_datasets():
+def test_registry_lists_all_datasets():
     names = DatasetRegistry.names()
-    assert names == ("era5", "era5-land")
+    assert names == ("era5", "era5-land", "inmet")
 
 
 def test_registry_get_returns_config_instance():
@@ -61,6 +62,41 @@ def test_era5_land_does_not_have_pressure_levels():
     api_names = [v.api_name for v in cfg.variables]
     # mean_sea_level_pressure is single-level-only
     assert "mean_sea_level_pressure" not in api_names
+
+
+def test_inmet_metadata():
+    cfg = DatasetRegistry.get("inmet")
+    assert isinstance(cfg, InmetConfig)
+    assert cfg.NAME == "inmet"
+    assert cfg.CDS_DATASET_ID == ""
+    assert cfg.GRID_RESOLUTION_DEG == 0.0
+    assert cfg.SOURCE_KIND == "inmet_zip"
+    assert cfg.parquet_dir_name == "inmet"
+
+
+def test_inmet_is_not_gridded_and_keeps_full_coord_precision():
+    cfg = DatasetRegistry.get("inmet")
+    assert cfg.is_gridded is False
+    # Station coordinates must never be snapped to a grid.
+    assert cfg.latlon_decimals == 6
+
+
+def test_era5_is_gridded_default():
+    cfg = DatasetRegistry.get("era5")
+    assert cfg.is_gridded is True
+    assert cfg.SOURCE_KIND == "cds_grid"
+
+
+def test_inmet_has_17_measurement_variables():
+    cfg = DatasetRegistry.get("inmet")
+    api_names = [v.api_name for v in cfg.variables]
+    assert len(api_names) == 17
+    assert "temp_ar" in api_names
+    assert "precipitacao_total" in api_names
+    assert "vento_velocidade" in api_names
+    # No reduced preset / derived indices.
+    assert "ibutg" not in api_names
+    assert "wbgt" not in api_names
 
 
 def test_defaults_subset_of_variables():

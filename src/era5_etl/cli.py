@@ -254,7 +254,16 @@ def pipeline(
         config.transform.max_workers = workers
 
         if dry_run:
-            _print_plan(config)
+            if _is_gridded(ds_name):
+                _print_plan(config)
+            else:
+                from era5_etl.download.inmet_portal import years_from_dates
+
+                console.print(
+                    f"[cyan]{ds_name}: would download + convert INMET "
+                    f"yearly ZIP(s) for "
+                    f"{years_from_dates(start_date, end_date)}.[/cyan]"
+                )
             continue
 
         try:
@@ -336,21 +345,33 @@ def _print_summary(context, dataset: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_gridded(dataset_name: str) -> bool:
+    """Whether the dataset is a CDS gridded source (vs. a station source)."""
+    return DatasetRegistry.get(dataset_name).is_gridded
+
+
 def _auto_rebuild_coverage(data_dir: Path, dataset_name: str) -> None:
-    """Trigger ``ensure_coverage_index`` once and surface a single info line.
+    """Sync the derived index with on-disk parquet before a run.
 
-    Called from ``download`` and ``update`` before the actual run starts, so
-    the coverage index is in sync with on-disk parquet even when the user
-    has been running pre-v0.6.0 versions or has manually removed
-    ``_coverage.duckdb``.
+    Grid datasets (ERA5/ERA5-LAND) get the cell ``_coverage.duckdb``;
+    station datasets (INMET) get the ``_stations.duckdb`` index. Called
+    from ``download``/``update`` so the index stays in sync even after a
+    manual delete or a pre-index version.
     """
-    from era5_etl.storage.coverage import ensure_coverage_index
+    if _is_gridded(dataset_name):
+        from era5_etl.storage.coverage import ensure_coverage_index
 
-    rebuilt = ensure_coverage_index(dataset_name, data_dir)
+        rebuilt = ensure_coverage_index(dataset_name, data_dir)
+        index_label = "Coverage index"
+    else:
+        from era5_etl.storage.stations import ensure_station_index
+
+        rebuilt = ensure_station_index(dataset_name, data_dir)
+        index_label = "Station index"
     if rebuilt:
         console.print(
-            f"[cyan]Coverage index for {dataset_name} was missing; rebuilt from "
-            f"existing parquet partitions.[/cyan]"
+            f"[cyan]{index_label} for {dataset_name} was missing; rebuilt "
+            f"from existing parquet.[/cyan]"
         )
 
 
@@ -403,13 +424,26 @@ def download(
         )
 
         if dry_run:
-            _print_plan(config, apply_diff=apply_diff, data_dir=data_dir)
+            if _is_gridded(ds_name):
+                _print_plan(config, apply_diff=apply_diff, data_dir=data_dir)
+            else:
+                from era5_etl.download.inmet_portal import years_from_dates
+
+                yrs = years_from_dates(start_date, end_date)
+                console.print(
+                    f"[cyan]{ds_name}: would download INMET yearly ZIP(s) "
+                    f"for {yrs} from the portal.[/cyan]"
+                )
             continue
 
         try:
-            from era5_etl.download.cds_downloader import CDSDownloader
+            from era5_etl.pipeline.source_handlers import get_handler
+            from era5_etl.storage.manifest import Manifest
 
-            downloader = CDSDownloader(config.download)
+            manifest = Manifest(data_dir, ds_name)
+            downloader = get_handler(ds_name).make_downloader(
+                config.download, manifest, None
+            )
             files = downloader.download(apply_diff=apply_diff, base_dir=data_dir)
             console.print(f"\n[green]Downloaded {len(files)} files for {ds_name}[/green]")
         except Exception as exc:
@@ -430,8 +464,8 @@ def convert(
     override: bool = typer.Option(False, "--override", help="Override existing files"),
     workers: int | None = typer.Option(None, "--workers", "-w", help="Parallel workers"),
 ) -> None:
-    """Convert NetCDF files to Parquet format."""
-    from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
+    """Convert downloaded source files (NetCDF or INMET CSV) to Parquet."""
+    from era5_etl.pipeline.source_handlers import get_handler
 
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Converting -- {ds_name}[/bold blue]\n")
@@ -442,10 +476,11 @@ def convert(
             compression=compression,  # type: ignore[arg-type]
         )
         try:
-            converter = NetCDFToParquetConverter(
-                transform_config=config.transform,
-                storage_config=config.storage,
-                output_dir=config.get_parquet_dir(),
+            converter = get_handler(ds_name).make_converter(
+                config.transform,
+                config.storage,
+                config.get_parquet_dir(),
+                ds_name,
             )
             stats = converter.convert_directory(config.get_netcdf_dir(), max_workers=workers)
             console.print(
@@ -503,6 +538,14 @@ def update(
 
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Update -- {ds_name}[/bold blue]\n")
+        if not _is_gridded(ds_name):
+            console.print(
+                f"[yellow]{ds_name} is a station source (no cell-level "
+                f"smart diff). Use `era5 pipeline --dataset {ds_name}` or "
+                f"`era5 download --dataset {ds_name}` to (re-)fetch yearly "
+                f"data; per-year reuse is handled via the manifest.[/yellow]"
+            )
+            continue
         _auto_rebuild_coverage(data_dir, ds_name)
         config = PipelineConfig.create(
             base_dir=data_dir,
@@ -662,6 +705,67 @@ def query(
         conn.close()
     except Exception as exc:
         console.print(f"\n[bold red]Query failed:[/bold red] {exc}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# era5-inmet (cross-dataset comparison view)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="era5-inmet")
+def era5_inmet(
+    data_dir: Path = typer.Option(
+        Path("./data"), "--data-dir", "-d", help="Base data directory"
+    ),
+    sql: str | None = typer.Option(
+        None,
+        "--sql",
+        "-q",
+        help="SQL over the era5_inmet view. Default: SELECT * FROM era5_inmet.",
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Export full result to CSV/Parquet"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="Rows to display"),
+) -> None:
+    """Create + query the ``era5_inmet`` cross-dataset comparison view.
+
+    Joins INMET stations to the four surrounding ERA5 and ERA5-LAND grid
+    points on the same date and hour (UTC). Grids without parquet on disk
+    are omitted.
+    """
+    import duckdb
+
+    from era5_etl.storage.comparison import (
+        ERA5_INMET_VIEW,
+        create_era5_inmet_view,
+    )
+
+    try:
+        conn = duckdb.connect(":memory:")
+        grids = create_era5_inmet_view(conn, data_dir)
+        console.print(
+            f"[green]VIEW {ERA5_INMET_VIEW} criada[/green] "
+            f"(INMET + {', '.join(grids) if grids else 'nenhuma grade'})\n"
+        )
+        query_sql = sql or f"SELECT * FROM {ERA5_INMET_VIEW}"
+        result = conn.execute(query_sql).pl()
+        console.print(f"[green]{len(result):,} linha(s)[/green]\n")
+        console.print(result.head(limit))
+        if len(result) > limit:
+            console.print(
+                f"\n[yellow]... e mais {len(result) - limit} linha(s)[/yellow]"
+            )
+        if output:
+            if output.suffix.lower() == ".parquet":
+                result.write_parquet(output)
+            else:
+                result.write_csv(output)
+            console.print(f"\n[green]Exportado para {output}[/green]")
+        conn.close()
+    except Exception as exc:
+        console.print(f"\n[bold red]era5-inmet falhou:[/bold red] {exc}")
         sys.exit(1)
 
 

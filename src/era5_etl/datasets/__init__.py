@@ -7,7 +7,7 @@ and registers a ``DatasetConfig`` via ``@DatasetRegistry.register``.
 Public entry points::
 
     DatasetRegistry.get("era5-land")    # -> Era5LandConfig instance
-    DatasetRegistry.names()             # -> ("era5", "era5-land")
+    DatasetRegistry.names()             # -> ("era5", "era5-land", "inmet")
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class DatasetRegistry:
         if cls._loaded:
             return
         # Importing the sub-packages triggers their @register decorators.
-        from era5_etl.datasets import era5, era5_land  # noqa: F401
+        from era5_etl.datasets import era5, era5_land, inmet  # noqa: F401
 
         cls._loaded = True
 

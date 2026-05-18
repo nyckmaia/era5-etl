@@ -27,8 +27,13 @@ from pydantic import BaseModel, Field
 
 from era5_etl.datasets import DatasetRegistry
 from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
-from era5_etl.storage.paths import resolve_dataset_dir
-from era5_etl.web.models import DateRangeOut
+from era5_etl.storage.paths import STATION_INDEX_FILENAME, resolve_dataset_dir
+from era5_etl.storage.stations import StationIndex
+from era5_etl.web.models import (
+    DateRangeOut,
+    StationInventoryOut,
+    StationPointOut,
+)
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -60,6 +65,10 @@ def _validate_dataset(dataset: str) -> None:
 
 def _coverage_db_exists(base_dir, dataset: str) -> bool:
     return (resolve_dataset_dir(base_dir, dataset) / COVERAGE_DB_FILENAME).exists()
+
+
+def _station_db_exists(base_dir, dataset: str) -> bool:
+    return (resolve_dataset_dir(base_dir, dataset) / STATION_INDEX_FILENAME).exists()
 
 
 def _mask_to_hours(mask: int) -> list[int]:
@@ -277,4 +286,60 @@ def date_range(
     return DateRangeOut(
         min=lo.isoformat() if lo is not None else None,
         max=hi.isoformat() if hi is not None else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/inventory/stations  (station-based sources, e.g. INMET)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/stations", response_model=StationInventoryOut)
+def stations(
+    request: Request,
+    dataset: str = Query(..., description="Station dataset name (e.g. inmet)"),
+) -> StationInventoryOut:
+    """List a station dataset's stations as map points.
+
+    The grid ``/grid-points`` endpoint does not apply to station sources
+    (INMET): there is no regular lat/lon grid or hour bitmap. This reads
+    the per-dataset ``_stations.duckdb`` index instead. Empty index is a
+    valid state (HTTP 200, ``stations: []``) -- the UI shows a "no data
+    yet" prompt.
+    """
+    _validate_dataset(dataset)
+    cfg = DatasetRegistry.get(dataset)
+    if cfg.is_gridded:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{dataset} is a gridded dataset; use /api/inventory/"
+                f"grid-points instead of /stations."
+            ),
+        )
+    base_dir = request.app.state.data_dir
+    if not _station_db_exists(base_dir, dataset):
+        return StationInventoryOut(dataset=dataset, n_stations=0, stations=[])
+
+    with StationIndex(dataset, base_dir) as idx:
+        df = idx.query_stations()
+
+    points = [
+        StationPointOut(
+            station_id=str(row["station_id"]),
+            latitude=row["latitude"],
+            longitude=row["longitude"],
+            altitude=row["altitude"],
+            uf=row["uf"],
+            regiao=row["regiao"],
+            nome=row["nome"],
+            year_min=row["year_min"],
+            year_max=row["year_max"],
+            n_years=int(row["n_years"] or 0),
+            n_vars=int(row["n_vars"] or 0),
+        )
+        for row in df.iter_rows(named=True)
+    ]
+    return StationInventoryOut(
+        dataset=dataset, n_stations=len(points), stations=points
     )

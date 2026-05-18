@@ -91,6 +91,16 @@ class DownloadConfig(BaseModel):
         ge=1024 * 1024,
         description="Maximum estimated request size in bytes before auto-splitting",
     )
+    years: list[int] | None = Field(
+        default=None,
+        description=(
+            "Explicit list of years to acquire. Only used by non-grid "
+            "sources (INMET): when set, exactly these yearly ZIPs are "
+            "fetched (the user may pick a non-contiguous subset); when "
+            "None, the year range is derived from start_date/end_date. "
+            "Ignored by CDS/grid datasets."
+        ),
+    )
 
     @field_validator("output_dir")
     @classmethod
@@ -221,6 +231,7 @@ class PipelineConfig(BaseModel):
         override: bool = False,
         keep_temp_files: bool = False,
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
+        years: list[int] | None = None,
     ) -> "PipelineConfig":
         """Assemble a full ``PipelineConfig`` from a ``base_dir`` and options.
 
@@ -250,6 +261,7 @@ class PipelineConfig(BaseModel):
                 end_date=end_date,
                 area=area if area is not None else [float(x) for x in BRAZIL_BBOX],
                 hours=hours if hours is not None else list(HOURS_ALL),
+                years=years,
                 override=override,
             ),
             transform=TransformConfig(override=override),

@@ -15,6 +15,11 @@ export interface DatasetInfo {
   grid_resolution_deg: number;
   default_variables: string[];
   variables: DatasetVariable[];
+  // Non-CDS/non-grid sources (e.g. INMET stations) report source_kind
+  // "inmet_zip" and is_gridded=false. Optional for backward compat with
+  // any cached/older payload shape.
+  source_kind?: string;
+  is_gridded?: boolean;
 }
 
 export interface StorageStats {
@@ -79,6 +84,26 @@ export interface GridPoint {
   lon: number;
   days: number;
   vars: number;
+}
+
+export interface StationPoint {
+  station_id: string;
+  latitude: number | null;
+  longitude: number | null;
+  altitude: number | null;
+  uf: string | null;
+  regiao: string | null;
+  nome: string | null;
+  year_min: number | null;
+  year_max: number | null;
+  n_years: number;
+  n_vars: number;
+}
+
+export interface StationInventory {
+  dataset: string;
+  n_stations: number;
+  stations: StationPoint[];
 }
 
 export interface CellDetailVariable {
@@ -396,6 +421,12 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       }),
+    // Station sources (INMET): list stations as map points. The grid
+    // endpoints above do not apply (no regular lat/lon grid).
+    stations: (dataset: string) =>
+      request<StationInventory>(
+        `/api/inventory/stations?dataset=${encodeURIComponent(dataset)}`,
+      ),
   },
 
   diffPreview: (body: {
@@ -424,4 +455,34 @@ export const api = {
       "/api/pipeline/run",
       { method: "POST", body: JSON.stringify(body) },
     ),
+
+  // INMET (station source) dedicated flow. The ERA5 wizard's
+  // estimate/diff/area/variables don't apply: pick years + run.
+  inmet: {
+    years: () => request<{ years: number[] }>("/api/inmet/years"),
+    prerequisite: () =>
+      request<{
+        era5: boolean;
+        era5_land: boolean;
+        ok: boolean;
+        missing: string[];
+      }>("/api/inmet/prerequisite"),
+    run: (years: number[]) =>
+      request<{ run_id: string; dataset: string; status: string }>(
+        "/api/pipeline/run",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            dataset: "inmet",
+            years,
+            variables: [],
+            start_date: `${Math.min(...years)}-01-01`,
+            end_date: `${Math.max(...years)}-12-31`,
+            area: [0, 0, 0, 0],
+            hours: [],
+            apply_diff: false,
+          }),
+        },
+      ),
+  },
 };

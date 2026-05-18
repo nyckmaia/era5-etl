@@ -9,12 +9,14 @@ from era5_etl.config import PipelineConfig
 from era5_etl.core.context import PipelineContext
 from era5_etl.core.pipeline import Pipeline
 from era5_etl.core.stage import Stage
-from era5_etl.download.cds_downloader import CDSDownloader
+from era5_etl.pipeline.source_handlers import REFRESH_STATIONS, get_handler
 from era5_etl.storage.coverage import rebuild_from_parquet
 from era5_etl.storage.paths import view_name_for
 from era5_etl.storage.manifest import Manifest
 from era5_etl.storage.parquet_manager import ParquetManager
-from era5_etl.transform.netcdf_to_parquet import NetCDFToParquetConverter
+from era5_etl.storage.stations import (
+    rebuild_from_parquet as rebuild_stations_from_parquet,
+)
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -36,17 +38,16 @@ class DownloadStage(Stage):
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Execute download stage."""
         manifest = Manifest(self.config.storage.database_dir, self.config.dataset_name)
-        downloader = CDSDownloader(
+        handler = get_handler(self.config.dataset_name)
+        downloader = handler.make_downloader(
             self.config.download,
-            manifest=manifest,
-            on_event=self.progress_callback,
+            manifest,
+            self.progress_callback,
         )
-        if self.apply_diff:
-            files = downloader.download(
-                apply_diff=True, base_dir=self.config.storage.database_dir
-            )
-        else:
-            files = downloader.download()
+        files = downloader.download(
+            apply_diff=self.apply_diff,
+            base_dir=self.config.storage.database_dir,
+        )
         context.set("downloaded_files", files)
         context.set_metadata("download_count", len(files))
         self.logger.info(f"Downloaded {len(files)} files")
@@ -68,11 +69,12 @@ class ConvertToParquetStage(Stage):
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Execute conversion stage."""
         output_dir = self.config.get_parquet_dir()
-        converter = NetCDFToParquetConverter(
-            transform_config=self.config.transform,
-            storage_config=self.config.storage,
-            output_dir=output_dir,
-            dataset=self.config.dataset_name,
+        handler = get_handler(self.config.dataset_name)
+        converter = handler.make_converter(
+            self.config.transform,
+            self.config.storage,
+            output_dir,
+            self.config.dataset_name,
         )
 
         on_progress = None
@@ -160,6 +162,49 @@ class RefreshCoverageStage(Stage):
         return context
 
 
+class RefreshStationIndexStage(Stage):
+    """Refresh the per-station index from on-disk parquet (INMET).
+
+    The non-grid analogue of :class:`RefreshCoverageStage`. INMET is stored
+    one parquet per ``station=<id>/<id>_<year>.parquet`` (no ``date=``
+    partition), so the grid coverage index does not apply -- the
+    ``_stations.duckdb`` index is rebuilt here instead. Derived state: a
+    failure is logged but never fails the pipeline.
+    """
+
+    def __init__(self, config: PipelineConfig) -> None:
+        super().__init__("Refresh station index")
+        self.config = config
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        from era5_etl.storage.paths import resolve_dataset_dir
+
+        base_dir = self.config.storage.database_dir
+        dataset = self.config.dataset_name
+        parquet_dir = resolve_dataset_dir(base_dir, dataset)
+        self.logger.info(
+            "Refreshing station index for %s from %s", dataset, parquet_dir
+        )
+        try:
+            stats = rebuild_stations_from_parquet(
+                dataset, base_dir, logger=self.logger
+            )
+            context.set_metadata("station_index_stats", stats)
+            self.logger.info(
+                "Station index refreshed: %s station(s), %s file(s)",
+                stats.get("n_stations", "?"),
+                stats.get("files_processed", "?"),
+            )
+        except Exception as exc:  # noqa: BLE001 -- derived; never fail the pipeline
+            self.logger.warning(
+                "Station index refresh failed (non-fatal); run "
+                "`era5 coverage rebuild` equivalent manually to recover: %s",
+                exc,
+                exc_info=True,
+            )
+        return context
+
+
 class CreateViewStage(Stage):
     """Stage for creating a DuckDB VIEW pointing to Parquet files."""
 
@@ -230,6 +275,12 @@ class ERA5Pipeline(Pipeline[PipelineConfig]):
                 self.config, progress_callback=self.progress_callback
             )
         )
-        self.add_stage(RefreshCoverageStage(self.config))
+        # The post-convert refresh stage depends on the source kind:
+        # gridded sources get the cell coverage index; station sources
+        # (INMET) get the station index.
+        if get_handler(self.config.dataset_name).refresh_kind == REFRESH_STATIONS:
+            self.add_stage(RefreshStationIndexStage(self.config))
+        else:
+            self.add_stage(RefreshCoverageStage(self.config))
         self.add_stage(CreateViewStage(self.config))
         self.logger.info(f"Pipeline configured with {len(self._stages)} stages")

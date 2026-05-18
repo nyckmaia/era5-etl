@@ -5,20 +5,57 @@ This file gives a working agent the minimum context to make safe changes.
 ## What this project is
 
 `era5-etl` downloads ERA5 (single-level) and ERA5-LAND climate reanalysis data
-from the Copernicus CDS, converts NetCDF4 to Hive-partitioned Parquet, and
-exposes it via DuckDB views, a Typer CLI, and a FastAPI + React/Vite web UI.
+from the Copernicus CDS, plus INMET Brazilian weather-station data from the
+INMET portal, converts them to Parquet, and exposes them via DuckDB views,
+a Typer CLI, and a FastAPI + React/Vite web UI.
 
 ## Architectural anchors
 
 - **Datasets are plug-ins.** Each lives in
-  `src/era5_etl/datasets/{era5,era5_land}/` and registers itself via
+  `src/era5_etl/datasets/{era5,era5_land,inmet}/` and registers itself via
   `@DatasetRegistry.register`. Never hard-code a dataset literal anywhere
   other than tests; ask `DatasetRegistry.get(name)`.
+- **Source kind drives the pipeline, not `if dataset == ...`.** Each
+  `DatasetConfig` has `SOURCE_KIND` (`"cds_grid"` default; INMET is
+  `"inmet_zip"`) and `is_gridded`. `pipeline/source_handlers.py` maps
+  `SOURCE_KIND` -> (downloader, converter, refresh-stage). To add a
+  non-CDS source, add a `SourceHandler` entry there; the generic
+  `DownloadStage`/`ConvertToParquetStage` and CLI need no changes.
+- **INMET is station-based, not gridded.** It comes as a yearly portal
+  ZIP of one CSV per station (latin-1, `;`/`,`, 8 metadata lines, header
+  on line 9; the *format* drifts across years -- date/time syntax,
+  `-9999` vs empty, accents -- but the 17 variables are stable, mapped
+  **positionally** in `transform/inmet_to_parquet.py`). One CSV -> one
+  Parquet at `inmet/station=<id>/<id>_<year>.parquet` (NOT `date=`
+  partitioned; **never** force INMET into the `date=` layout or the grid
+  coverage index). Station metadata is per-file (altitude is re-surveyed
+  between years). `date`/`hour_utc`/`latitude`/`longitude` are emitted in
+  the ERA5 convention so the DuckDB view stays cross-dataset consistent.
+  Each row also carries, per grid, the 4 enclosing grid-cell corner coords
+  + haversine distances (`era5_lat_top…`, `dist_era5_top_left…`,
+  `era5_land_*`) — `NEIGHBOUR_COL_NAMES` in `inmet_to_parquet.py`, kept in
+  `stations._META_COLS` so they're not counted as variables. Parquet is
+  written **sorted by `(date, hour_utc)`** for row-group pruning.
+- **Cross-dataset comparison view.** `storage/comparison.py` builds
+  `era5_inmet` (CLI `era5 era5-inmet`): INMET joined to its 4
+  ERA5/ERA5-LAND grid neighbours on same `date`+`hour_utc` via an
+  **epsilon coord join** — Float32 grid coords are not exactly equal
+  (`-15.7` stores as `-15.6999998`); never `=` on them.
+- **Station index, not coverage index, for station sources.**
+  `storage/stations.py` (`_stations.duckdb`) is the INMET analogue of the
+  grid `CoverageIndex`. The pipeline runs `RefreshStationIndexStage` for
+  `inmet_zip` and `RefreshCoverageStage` for `cds_grid` -- coverage is
+  skipped for non-grid sources and vice-versa. `update`/smart-diff is
+  CDS-only and no-ops for INMET (per-year reuse via the manifest,
+  `chunk_id="inmet:<year>"`). Web: `/api/inventory/stations` (not
+  `/grid-points`) serves station sources.
 - **All paths go through `src/era5_etl/storage/paths.py`.** Layout::
 
       <base>/
         climate_data_store_db/<dataset>/  -> parquet + manifest + duckdb
-        _tmp_netcdf/<dataset>/              -> raw netcdf downloads
+                                             ERA5: date=YYYY-MM-DD/ + _coverage.duckdb
+                                             INMET: station=<id>/ + _stations.duckdb
+        _tmp_netcdf/<dataset>/              -> raw netcdf (ERA5) / extracted CSVs (INMET)
 
   Folder names are literal (`era5`, `era5-land`). Don't strip hyphens.
 - **NetCDF4 is invariant.** Every CDS request uses `data_format="netcdf"`.

@@ -33,6 +33,8 @@ def _to_out(name: str) -> DatasetOut:
         name=cfg.NAME,
         cds_dataset_id=cfg.CDS_DATASET_ID,
         grid_resolution_deg=cfg.GRID_RESOLUTION_DEG,
+        source_kind=getattr(cfg, "SOURCE_KIND", "cds_grid"),
+        is_gridded=cfg.is_gridded,
         default_variables=list(cfg.default_variables),
         variables=[
             DatasetVariableOut(

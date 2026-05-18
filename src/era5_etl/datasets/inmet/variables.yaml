@@ -1,0 +1,130 @@
+# Canonical variables for the INMET automatic-station dataset.
+#
+# These are the 17 measurement columns of an INMET hourly CSV (the columns
+# after DATA/HORA on line 9). The raw Portuguese headers vary in spelling,
+# accentuation and unit capitalisation across years -- the converter
+# (`transform/inmet_to_parquet.py`) maps them to these stable `api_name`s
+# via substring anchors. `full_name` keeps the original 2000-era header
+# text for reference. `defaults` = all of them (no reduced preset).
+
+defaults:
+  - precipitacao_total
+  - pressao_estacao
+  - pressao_max
+  - pressao_min
+  - radiacao_global
+  - temp_ar
+  - temp_orvalho
+  - temp_max
+  - temp_min
+  - temp_orvalho_max
+  - temp_orvalho_min
+  - umidade_rel_max
+  - umidade_rel_min
+  - umidade_relativa
+  - vento_direcao
+  - vento_rajada_max
+  - vento_velocidade
+
+variables:
+  - api_name: "precipitacao_total"
+    friendly_name: "precipitacao_total"
+    full_name: "PRECIPITAÇÃO TOTAL, HORÁRIO (mm)"
+    description: "Precipitação total acumulada na hora."
+    unit: "mm"
+
+  - api_name: "pressao_estacao"
+    friendly_name: "pressao_estacao"
+    full_name: "PRESSAO ATMOSFERICA AO NIVEL DA ESTACAO, HORARIA (mB)"
+    description: "Pressão atmosférica ao nível da estação, horária."
+    unit: "mB"
+
+  - api_name: "pressao_max"
+    friendly_name: "pressao_max"
+    full_name: "PRESSÃO ATMOSFERICA MAX.NA HORA ANT. (AUT) (mB)"
+    description: "Pressão atmosférica máxima na hora anterior."
+    unit: "mB"
+
+  - api_name: "pressao_min"
+    friendly_name: "pressao_min"
+    full_name: "PRESSÃO ATMOSFERICA MIN. NA HORA ANT. (AUT) (mB)"
+    description: "Pressão atmosférica mínima na hora anterior."
+    unit: "mB"
+
+  - api_name: "radiacao_global"
+    friendly_name: "radiacao_global"
+    full_name: "RADIACAO GLOBAL (KJ/m²)"
+    description: "Radiação solar global."
+    unit: "KJ/m2"
+
+  - api_name: "temp_ar"
+    friendly_name: "temp_ar"
+    full_name: "TEMPERATURA DO AR - BULBO SECO, HORARIA (°C)"
+    description: "Temperatura do ar (bulbo seco), horária."
+    unit: "C"
+
+  - api_name: "temp_orvalho"
+    friendly_name: "temp_orvalho"
+    full_name: "TEMPERATURA DO PONTO DE ORVALHO (°C)"
+    description: "Temperatura do ponto de orvalho."
+    unit: "C"
+
+  - api_name: "temp_max"
+    friendly_name: "temp_max"
+    full_name: "TEMPERATURA MÁXIMA NA HORA ANT. (AUT) (°C)"
+    description: "Temperatura máxima do ar na hora anterior."
+    unit: "C"
+
+  - api_name: "temp_min"
+    friendly_name: "temp_min"
+    full_name: "TEMPERATURA MÍNIMA NA HORA ANT. (AUT) (°C)"
+    description: "Temperatura mínima do ar na hora anterior."
+    unit: "C"
+
+  - api_name: "temp_orvalho_max"
+    friendly_name: "temp_orvalho_max"
+    full_name: "TEMPERATURA ORVALHO MAX. NA HORA ANT. (AUT) (°C)"
+    description: "Temperatura de orvalho máxima na hora anterior."
+    unit: "C"
+
+  - api_name: "temp_orvalho_min"
+    friendly_name: "temp_orvalho_min"
+    full_name: "TEMPERATURA ORVALHO MIN. NA HORA ANT. (AUT) (°C)"
+    description: "Temperatura de orvalho mínima na hora anterior."
+    unit: "C"
+
+  - api_name: "umidade_rel_max"
+    friendly_name: "umidade_rel_max"
+    full_name: "UMIDADE REL. MAX. NA HORA ANT. (AUT) (%)"
+    description: "Umidade relativa máxima na hora anterior."
+    unit: "%"
+
+  - api_name: "umidade_rel_min"
+    friendly_name: "umidade_rel_min"
+    full_name: "UMIDADE REL. MIN. NA HORA ANT. (AUT) (%)"
+    description: "Umidade relativa mínima na hora anterior."
+    unit: "%"
+
+  - api_name: "umidade_relativa"
+    friendly_name: "umidade_relativa"
+    full_name: "UMIDADE RELATIVA DO AR, HORARIA (%)"
+    description: "Umidade relativa do ar, horária."
+    unit: "%"
+
+  - api_name: "vento_direcao"
+    friendly_name: "vento_direcao"
+    full_name: "VENTO, DIREÇÃO HORARIA (gr) (° (gr))"
+    description: "Direção do vento, horária."
+    unit: "deg"
+
+  - api_name: "vento_rajada_max"
+    friendly_name: "vento_rajada_max"
+    full_name: "VENTO, RAJADA MAXIMA (m/s)"
+    description: "Velocidade da rajada máxima de vento."
+    unit: "m/s"
+
+  - api_name: "vento_velocidade"
+    friendly_name: "vento_velocidade"
+    full_name: "VENTO, VELOCIDADE HORARIA (m/s)"
+    description: "Velocidade do vento, horária."
+    unit: "m/s"

@@ -18,7 +18,8 @@
       "Read(//c/Users/nyck/dev/datasus-etl/**)",
       "Read(//c/Users/nyck/dev/datasus-etl/web-ui/src/**)",
       "Read(//c/Users/nyck/dev/datasus-etl/web-ui/src/pages/**)",
-      "Bash(xargs grep -l \"history\")"
+      "Bash(xargs grep -l \"history\")",
+      "Bash(py -3.12 -m pytest tests/test_coverage_index.py tests/test_inventory_routes.py tests/test_request_planner_diff.py -q --no-cov)"
     ]
   }
 }

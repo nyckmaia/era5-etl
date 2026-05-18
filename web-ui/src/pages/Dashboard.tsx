@@ -14,6 +14,11 @@ const DATASET_LABELS: Record<string, { label: string; description: string }> = {
     description:
       "Land-surface reanalysis on a 0.1° grid. Surface temperature, soil moisture, snow, precipitation.",
   },
+  inmet: {
+    label: "INMET",
+    description:
+      "Estações meteorológicas do INMET (Brasil). Uma série por estação/ano; comparável ao ERA5/ERA5-LAND via era5_inmet.",
+  },
 };
 
 export function DashboardPage() {
@@ -43,8 +48,12 @@ export function DashboardPage() {
             <DatasetCard
               key={ds.name}
               dataset={ds.name}
-              label={DATASET_LABELS[ds.name]?.label ?? ds.name}
-              description={DATASET_LABELS[ds.name]?.description ?? ds.cds_dataset_id}
+              label={DATASET_LABELS[ds.name]?.label ?? ds.name.toUpperCase()}
+              description={
+                DATASET_LABELS[ds.name]?.description ||
+                ds.cds_dataset_id ||
+                "Fonte de dados."
+              }
             />
           ))}
         </div>

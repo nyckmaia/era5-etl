@@ -34,6 +34,29 @@ def estimate(body: EstimateIn) -> EstimateOut:
     if body.dataset not in DatasetRegistry.names():
         raise HTTPException(status_code=400, detail=f"Unknown dataset: {body.dataset}")
 
+    # Non-grid sources (INMET) have no area×days×vars chunking: acquisition
+    # is 1 ZIP per year (all stations). The CDS size estimate doesn't apply
+    # and `plan_requests` -> `snap_area_to_grid(res=0.0)` would 500.
+    # Short-circuit with an informative, non-fatal payload (years count).
+    if not DatasetRegistry.get(body.dataset).is_gridded:
+        from era5_etl.download.inmet_portal import years_from_dates
+
+        years = years_from_dates(body.start_date, body.end_date)
+        return EstimateOut(
+            dataset=body.dataset,
+            total_chunks=len(years),
+            total_estimated_bytes=0,
+            total_estimated_mb=0.0,
+            chunks=[],
+            estimate_skipped=True,
+            skip_reason=(
+                f"{body.dataset.upper()} é uma fonte de estações: o download "
+                f"é 1 ZIP por ano (todas as estações), {len(years)} ano(s) "
+                f"({years[0]}–{years[-1]}). O tamanho só é conhecido ao "
+                "baixar; não há estimativa por área/variável."
+            ),
+        )
+
     # Build a temporary DownloadConfig just for planning.
     from era5_etl.config import DownloadConfig
 
@@ -97,6 +120,7 @@ def start_run(body: PipelineRunIn, request: Request) -> PipelineRunOut:
         variables=body.variables,
         area=body.area,
         hours=body.hours,
+        years=body.years,
     )
 
     run_id = uuid.uuid4().hex
@@ -140,6 +164,25 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
     """
     if body.dataset not in DatasetRegistry.names():
         raise HTTPException(status_code=400, detail=f"Unknown dataset: {body.dataset}")
+
+    # Smart Diff is a CDS grid concept (per-cell coverage + area snapping).
+    # Station sources (INMET, GRID_RESOLUTION_DEG == 0) have no grid to
+    # snap to -- calling snap_area_to_grid(res=0.0) would 500. Short-circuit
+    # with a clear, non-fatal "diff skipped" payload the wizard already
+    # knows how to render; INMET reuse is per-year via the manifest.
+    if not DatasetRegistry.get(body.dataset).is_gridded:
+        return DiffPreviewOut(
+            requested_cells=0,
+            missing_cells=0,
+            savings_pct=0.0,
+            sample_missing=[],
+            diff_skipped=True,
+            skip_reason=(
+                f"{body.dataset.upper()} é uma fonte de estações (não-grade): "
+                "o Smart Diff célula-a-célula não se aplica. O download é "
+                "feito por ano, reaproveitando o que já está no manifesto."
+            ),
+        )
 
     from era5_etl.config import DownloadConfig
     from era5_etl.datasets import DatasetRegistry as _DR

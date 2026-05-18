@@ -45,6 +45,22 @@ class DatasetConfig(ABC):
     GRID_RESOLUTION_DEG: float = 0.0
     VARIABLES_YAML: str = "variables.yaml"
 
+    #: How this dataset's data is acquired and shaped. ``"cds_grid"`` (the
+    #: default, used by ERA5/ERA5-LAND) means a gridded NetCDF source pulled
+    #: from the Copernicus CDS. Non-grid sources (e.g. INMET station ZIPs)
+    #: override this; the pipeline dispatches the downloader/converter/refresh
+    #: stage on this value via ``pipeline.source_handlers``.
+    SOURCE_KIND: str = "cds_grid"
+
+    @property
+    def is_gridded(self) -> bool:
+        """Whether this dataset is on a regular lat/lon grid.
+
+        Grid-aware machinery (request splitting by area, the per-cell
+        coverage index, lat/lon snapping) only applies to gridded sources.
+        """
+        return self.SOURCE_KIND == "cds_grid"
+
     @property
     def latlon_decimals(self) -> int:
         """Decimal places lat/lon should be rounded to for this dataset.
@@ -54,7 +70,12 @@ class DatasetConfig(ABC):
         of ``GRID_RESOLUTION_DEG`` (``0.25`` -> ``"25"`` -> 2; ``0.1`` ->
         ``"1"`` -> 1). Floor of 1 so a coordinate never collapses to an
         integer grid.
+
+        Non-gridded sources (station data) keep full coordinate precision
+        -- station latitude/longitude must never be snapped to a grid.
         """
+        if not self.is_gridded:
+            return 6
         s = repr(float(self.GRID_RESOLUTION_DEG))
         if "." not in s:
             return 1

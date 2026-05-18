@@ -12,6 +12,7 @@ import {
 import { getRouteApi } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { InmetDownloadFlow } from "@/components/inmet/InmetDownloadFlow";
 import { RunProgress } from "@/components/RunProgress";
 import { api, DatasetInfo, DiffPreview } from "@/lib/api";
 import { cn, formatBytes } from "@/lib/format";
@@ -141,6 +142,14 @@ export function DownloadWizardPage() {
         return true;
     }
   })();
+
+  // Station sources (INMET) don't fit the CDS wizard (no variables/area/
+  // hours/smart-diff/estimate). Branch to the dedicated minimal flow once
+  // a non-grid dataset is selected. Placed after all hooks (rules of
+  // hooks) and before the wizard render.
+  if (activeDataset && activeDataset.is_gridded === false) {
+    return <InmetDownloadFlow />;
+  }
 
   return (
     <div className="space-y-6">

@@ -57,6 +57,10 @@ export interface InventoryMapProps {
   pointColor: string; // hex, e.g. "#2864c8"
   pointOpacity: number; // 0-100
   showPoints: boolean;
+  // "grid" = ERA5 cells (days/vars). "station" = INMET stations: the
+  // GridPoint carries n_years in `days` and n_vars in `vars`; only the
+  // tooltip wording changes.
+  kind?: "grid" | "station";
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -82,6 +86,7 @@ export function InventoryMap(props: InventoryMapProps) {
     pointColor,
     pointOpacity,
     showPoints,
+    kind = "grid",
   } = props;
 
   const [dragStart, setDragStart] = useState<[number, number] | null>(null);
@@ -208,11 +213,15 @@ export function InventoryMap(props: InventoryMapProps) {
   const tooltip = (info: PickingInfo) => {
     if (!info.object) return null;
     const o = info.object as GridPoint;
+    const detail =
+      kind === "station"
+        ? `${o.days} ano(s) · ${o.vars} variável(eis)`
+        : `${o.days} dia(s) · ${o.vars} variável(eis)`;
     return {
       html: `
         <div style="font-family: Inter, sans-serif; font-size: 12px;">
           <div style="font-weight: 600;">${o.lat.toFixed(3)}, ${o.lon.toFixed(3)}</div>
-          <div style="opacity:0.7; margin-top:2px;">${o.days} dia(s) · ${o.vars} variável(eis)</div>
+          <div style="opacity:0.7; margin-top:2px;">${detail}</div>
         </div>`,
       style: { background: "white", color: "#0f172a", padding: "6px 8px", borderRadius: "6px", boxShadow: "0 2px 6px rgba(0,0,0,0.15)" },
     };

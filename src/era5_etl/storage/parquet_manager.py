@@ -392,26 +392,63 @@ class ParquetManager:
             return []
         return sorted(self.parquet_dir.rglob("*.parquet"))
 
+    def _default_union_by_name(self) -> bool:
+        """Non-grid sources (INMET) default to ``union_by_name=true``.
+
+        Each ``station=<id>/<id>_<year>.parquet`` is written independently
+        from a CSV format that drifts across years, so combining by column
+        name (not position) is the safe default. Unknown/unregistered
+        dataset names fall back to ``False`` (grid behaviour).
+        """
+        try:
+            from era5_etl.datasets import DatasetRegistry
+
+            return not DatasetRegistry.get(self.dataset).is_gridded
+        except Exception:  # noqa: BLE001 -- unknown name -> grid default
+            return False
+
     def create_duckdb_view(
         self,
         conn: duckdb.DuckDBPyConnection,
         view_name: str,
+        *,
+        union_by_name: bool | None = None,
     ) -> None:
-        """Create or replace a DuckDB VIEW pointing at this dataset's Parquet files."""
+        """Create or replace a DuckDB VIEW pointing at this dataset's Parquet files.
+
+        ``union_by_name`` adds ``union_by_name=true`` to ``read_parquet``:
+        files are combined by **column name** rather than position, so a
+        per-file schema that gains/loses/reorders a column still unions
+        cleanly (missing columns become NULL). ``None`` (the default)
+        derives it from the dataset: station sources (INMET) -> True,
+        gridded ERA5/ERA5-LAND -> False. Pass an explicit bool to override.
+        So every view-creation site (pipeline, ``era5 query``, web query)
+        gets the right behaviour for INMET without each passing the flag.
+        """
+        if union_by_name is None:
+            union_by_name = self._default_union_by_name()
         glob_pattern = self.get_glob_pattern()
         files = list(self.parquet_dir.rglob("*.parquet"))
         if not files:
             raise ValueError(f"No Parquet files found in {self.parquet_dir}")
 
+        opts = "hive_partitioning=true"
+        if union_by_name:
+            opts += ", union_by_name=true"
         sql = f"""
             CREATE OR REPLACE VIEW {view_name} AS
             SELECT * FROM read_parquet(
                 '{glob_pattern}',
-                hive_partitioning=true
+                {opts}
             )
         """
         conn.execute(sql)
-        self.logger.info("Created VIEW %s from %d Parquet files", view_name, len(files))
+        self.logger.info(
+            "Created VIEW %s from %d Parquet files (union_by_name=%s)",
+            view_name,
+            len(files),
+            union_by_name,
+        )
 
     def exists(self) -> bool:
         """Return ``True`` if there is at least one Parquet file on disk."""

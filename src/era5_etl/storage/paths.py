@@ -33,6 +33,9 @@ from pathlib import Path
 STORAGE_ROOT_DIRNAME = "climate_data_store_db"
 NETCDF_TMP_DIRNAME = "_tmp_netcdf"
 MANIFEST_FILENAME = "_manifest.json"
+# Per-dataset station index (INMET and any future non-grid point source).
+# Sits next to the parquet tree like the grid coverage DB does.
+STATION_INDEX_FILENAME = "_stations.duckdb"
 
 
 def resolve_base_dir(base_dir: str | Path) -> Path:
@@ -98,6 +101,15 @@ def base_dir_from_dataset_dir(parquet_dir: str | Path) -> Path:
             f"{STORAGE_ROOT_DIRNAME!r}; cannot recover base_dir."
         )
     return p.parent.parent
+
+
+def resolve_station_index_path(base_dir: str | Path, dataset: str) -> Path:
+    """Return the dataset's station-index DuckDB path.
+
+    Lives next to the parquet tree, mirroring the grid coverage DB. Only
+    meaningful for non-grid point datasets (INMET); harmless otherwise.
+    """
+    return resolve_dataset_dir(base_dir, dataset) / STATION_INDEX_FILENAME
 
 
 def resolve_netcdf_temp_dir(base_dir: str | Path, dataset: str) -> Path:

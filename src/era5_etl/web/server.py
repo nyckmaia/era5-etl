@@ -25,6 +25,9 @@ from era5_etl.web.routes import (
     export as export_routes,
 )
 from era5_etl.web.routes import (
+    inmet as inmet_routes,
+)
+from era5_etl.web.routes import (
     inventory as inventory_routes,
 )
 from era5_etl.web.routes import (
@@ -85,6 +88,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(regions_routes.router)
     app.include_router(export_routes.router)
     app.include_router(inventory_routes.router)
+    app.include_router(inmet_routes.router)
 
     @app.exception_handler(404)
     async def _not_found(_request: Request, _exc):

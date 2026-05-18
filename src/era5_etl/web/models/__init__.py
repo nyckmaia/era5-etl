@@ -22,6 +22,47 @@ class DatasetOut(BaseModel):
     grid_resolution_deg: float
     default_variables: list[str]
     variables: list[DatasetVariableOut]
+    # Non-CDS/non-grid sources (e.g. INMET stations) report empty
+    # ``cds_dataset_id`` and ``grid_resolution_deg == 0``; ``source_kind`` /
+    # ``is_gridded`` let the SPA branch (e.g. hide the grid inventory map,
+    # show the station map instead). Defaulted for backward compatibility.
+    source_kind: str = "cds_grid"
+    is_gridded: bool = True
+
+
+class InmetYearsOut(BaseModel):
+    years: list[int]
+
+
+class InmetPrerequisiteOut(BaseModel):
+    """ERA5/ERA5-LAND readiness gate for INMET ingestion."""
+
+    era5: bool
+    era5_land: bool
+    ok: bool
+    missing: list[str]
+
+
+class StationPointOut(BaseModel):
+    """One INMET station for the inventory map."""
+
+    station_id: str
+    latitude: float | None
+    longitude: float | None
+    altitude: float | None
+    uf: str | None
+    regiao: str | None
+    nome: str | None
+    year_min: int | None
+    year_max: int | None
+    n_years: int
+    n_vars: int
+
+
+class StationInventoryOut(BaseModel):
+    dataset: str
+    n_stations: int
+    stations: list[StationPointOut]
 
 
 class StorageStatsOut(BaseModel):
@@ -97,6 +138,12 @@ class EstimateOut(BaseModel):
     total_estimated_bytes: int
     total_estimated_mb: float
     chunks: list[EstimateChunkOut]
+    # Set for non-grid sources (e.g. INMET): the CDS area×days×vars size
+    # estimate does not apply (acquisition is 1 ZIP per year, all stations).
+    # ``total_chunks`` then holds the number of yearly ZIPs. Defaulted for
+    # backward compatibility with the existing wizard.
+    estimate_skipped: bool = False
+    skip_reason: str | None = None
 
 
 class PipelineRunIn(BaseModel):
@@ -111,6 +158,13 @@ class PipelineRunIn(BaseModel):
         description=(
             "Skip already-covered cells via the coverage index (smart diff, v0.6.0+). "
             "Set False to plan the full request without subtraction."
+        ),
+    )
+    years: list[int] | None = Field(
+        default=None,
+        description=(
+            "Non-grid sources (INMET) only: exact yearly ZIPs to fetch "
+            "(may be non-contiguous). Ignored by CDS/grid datasets."
         ),
     )
 
@@ -270,6 +324,10 @@ class CredentialTestOut(BaseModel):
 __all__ = [
     "DatasetVariableOut",
     "DatasetOut",
+    "InmetYearsOut",
+    "InmetPrerequisiteOut",
+    "StationPointOut",
+    "StationInventoryOut",
     "StorageStatsOut",
     "PathValidationOut",
     "UserConfigOut",

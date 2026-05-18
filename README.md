@@ -515,6 +515,68 @@ c.retrieve(
 )
 ```
 
+## INMET × ERA5/ERA5-LAND — unidades de medida
+
+INMET é uma fonte **de estações** (não-grade): ZIP anual do portal, 1 CSV
+por estação, gravado como `inmet/station=<código>/<código>_<ano>.parquet`.
+As **unidades diferem** das do ERA5/ERA5-LAND e precisam ser harmonizadas
+antes de qualquer comparação numérica:
+
+| Grandeza | ERA5 / ERA5-LAND (nativo CDS) | INMET | Conversão / observação |
+|---|---|---|---|
+| Temperatura do ar (2 m) | **K** — `temperature_2m` | **°C** — `temp_ar` | `°C = K − 273.15`. O transform converte por padrão (`convert_kelvin_to_celsius=True`) → o Parquet ERA5 já sai em °C |
+| Ponto de orvalho (2 m) | **K** — `dewpoint_2m` | **°C** — `temp_orvalho` | idem (K → °C) |
+| Pressão atmosférica | **Pa** — `surface_pressure` (e `msl_pressure`, só ERA5 SL) | **hPa = mB** — `pressao_estacao`/`pressao_max`/`pressao_min` | `1 hPa = 1 mB = 100 Pa` → `Pa = mB × 100` |
+| Precipitação | **m**, acumulada — `total_precipitation` | **mm**, total horário — `precipitacao_total` | `1 m = 1000 mm`; semântica difere: ERA5 é acumulado desde o passo anterior |
+| Vento | componentes **U/V em m/s** — `wind_u_10m`/`wind_v_10m` | **velocidade m/s** + rajada + direção (°) — `vento_velocidade`/`vento_rajada_max`/`vento_direcao` | velocidade ERA5 `= √(u²+v²)`; o transform deriva `wind_speed` por padrão (`calculate_wind_speed=True`) |
+| Umidade relativa | **%** — `relative_humidity` (só ERA5 SL) | **%** — `umidade_relativa`/`umidade_rel_max`/`umidade_rel_min` | mesma unidade |
+| Radiação solar global | **J/m²**, acumulada — `solar_radiation` (ERA5 SL) | **kJ/m²** — `radiacao_global` | `1 kJ/m² = 1000 J/m²`; acumulação difere |
+| Radiação térmica | **J/m²** — `thermal_radiation` (ERA5 SL) | — | INMET não mede |
+| Cobertura de nuvens | **fração 0–1** — `cloud_cover` (ERA5 SL) | — | INMET não mede |
+| Evaporação | **m** — `evaporation` (ERA5 SL) | — | INMET não mede |
+| Temperatura de pele/solo | **K** — `skin_temperature`, `soil_temperature_level_1..4` | — | só ERA5-LAND tem perfil de solo |
+| Umidade do solo | **m³/m³** — `volumetric_soil_water_layer_1..4` | — | só ERA5-LAND |
+| Tempo | **hora UTC** — `hour_utc` | **hora UTC** — `hour_utc` | ambos UTC — **sem ajuste de fuso** |
+
+> As "unidades nativas" são o que o CDS entrega. As flags em
+> `TransformConfig` (`convert_kelvin_to_celsius`, `calculate_wind_speed`)
+> mudam o que efetivamente vai para o Parquet ERA5 (por padrão: °C e
+> `wind_speed` derivado). INMET é gravado nas unidades originais do portal.
+
+### Vizinhos de grade por estação (sem snap a 1 ponto)
+
+Cada Parquet do INMET carrega, por estação, a **célula de grade
+envolvente** de cada produto e a distância (km, haversine) da estação aos
+**4 vértices** dessa célula — em vez de arredondar para o ponto mais
+próximo. Colunas: `era5_lat_top/lat_bottom/lon_left/lon_right` +
+`dist_era5_top_left/top_right/bottom_left/bottom_right` (idem
+`era5_land_*`). Isso permite interpolação espacial (IDW/bilinear) na hora
+de comparar, em vez de assumir o ponto mais próximo. O Parquet é gravado
+ordenado por `(date, hour_utc)` para pruning de row-group no DuckDB.
+
+### VIEW `era5_inmet`
+
+`era5 era5-inmet --data-dir ./data` cria e consulta a view `era5_inmet`,
+que alinha cada observação de estação INMET com os **4 pontos de grade
+vizinhos** do ERA5 e do ERA5-LAND na **mesma data e hora (UTC)**, em uma
+única tabela achatada (`i.*` + colunas `era5_<tl|tr|bl|br>_<var>` /
+`era5_land_<...>` + as 8 distâncias para ponderar). Grades sem Parquet em
+disco são omitidas. Também disponível via API:
+`era5_etl.storage.comparison.create_era5_inmet_view(conn, base_dir)`.
+
+```bash
+era5 era5-inmet -q "
+  SELECT station_id, date, hour_utc,
+         temp_ar AS inmet_t2m,
+         era5_tl_temperature_2m, era5_tr_temperature_2m,
+         era5_bl_temperature_2m, era5_br_temperature_2m,
+         dist_era5_top_left, dist_era5_top_right,
+         dist_era5_bottom_left, dist_era5_bottom_right
+  FROM era5_inmet
+  WHERE station_id = 'A001' AND date = DATE '2000-10-05'
+"
+```
+
 ## Troubleshooting
 
 ### `Unknown dataset 'era5land'`
