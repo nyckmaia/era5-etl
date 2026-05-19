@@ -46,6 +46,9 @@ from era5_etl.web.routes import (
     query_store as query_store_routes,
 )
 from era5_etl.web.routes import (
+    user_views as user_views_routes,
+)
+from era5_etl.web.routes import (
     settings as settings_routes,
 )
 from era5_etl.web.routes import (
@@ -88,6 +91,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(pipeline_routes.router)
     app.include_router(query_routes.router)
     app.include_router(query_store_routes.router)
+    app.include_router(user_views_routes.router)
     app.include_router(regions_routes.router)
     app.include_router(export_routes.router)
     app.include_router(inventory_routes.router)
