@@ -709,67 +709,6 @@ def query(
 
 
 # ---------------------------------------------------------------------------
-# era5-inmet (cross-dataset comparison view)
-# ---------------------------------------------------------------------------
-
-
-@app.command(name="era5-inmet")
-def era5_inmet(
-    data_dir: Path = typer.Option(
-        Path("./data"), "--data-dir", "-d", help="Base data directory"
-    ),
-    sql: str | None = typer.Option(
-        None,
-        "--sql",
-        "-q",
-        help="SQL over the era5_inmet view. Default: SELECT * FROM era5_inmet.",
-    ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="Export full result to CSV/Parquet"
-    ),
-    limit: int = typer.Option(50, "--limit", "-n", help="Rows to display"),
-) -> None:
-    """Create + query the ``era5_inmet`` cross-dataset comparison view.
-
-    Joins INMET stations to the four surrounding ERA5 and ERA5-LAND grid
-    points on the same date and hour (UTC). Grids without parquet on disk
-    are omitted.
-    """
-    import duckdb
-
-    from era5_etl.storage.comparison import (
-        ERA5_INMET_VIEW,
-        create_era5_inmet_view,
-    )
-
-    try:
-        conn = duckdb.connect(":memory:")
-        grids = create_era5_inmet_view(conn, data_dir)
-        console.print(
-            f"[green]VIEW {ERA5_INMET_VIEW} criada[/green] "
-            f"(INMET + {', '.join(grids) if grids else 'nenhuma grade'})\n"
-        )
-        query_sql = sql or f"SELECT * FROM {ERA5_INMET_VIEW}"
-        result = conn.execute(query_sql).pl()
-        console.print(f"[green]{len(result):,} linha(s)[/green]\n")
-        console.print(result.head(limit))
-        if len(result) > limit:
-            console.print(
-                f"\n[yellow]... e mais {len(result) - limit} linha(s)[/yellow]"
-            )
-        if output:
-            if output.suffix.lower() == ".parquet":
-                result.write_parquet(output)
-            else:
-                result.write_csv(output)
-            console.print(f"\n[green]Exportado para {output}[/green]")
-        conn.close()
-    except Exception as exc:
-        console.print(f"\n[bold red]era5-inmet falhou:[/bold red] {exc}")
-        sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
 # ibge / variables / ui
 # ---------------------------------------------------------------------------
 

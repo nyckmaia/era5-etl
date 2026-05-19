@@ -96,9 +96,12 @@ def test_query_schema_empty_when_no_parquet(client: TestClient) -> None:
     assert body["columns"] == []
 
 
-def test_query_schema_unknown_dataset_400(client: TestClient) -> None:
+def test_query_schema_unknown_view_empty(client: TestClient) -> None:
+    # Any non-base name may be a user-defined view; an unknown one
+    # returns empty columns (HTTP 200) so the UI renders gracefully.
     r = client.get("/api/query/schema", params={"dataset": "nope"})
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json() == {"view": "nope", "columns": []}
 
 
 # --- M02b: display-precision settings API ------------------------------------

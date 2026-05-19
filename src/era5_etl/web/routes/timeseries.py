@@ -16,7 +16,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.datasets import DatasetRegistry
-from era5_etl.storage.comparison import ERA5_INMET_VIEW, create_era5_inmet_view
 from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
 from era5_etl.storage.paths import STATION_INDEX_FILENAME, resolve_dataset_dir
 from era5_etl.storage.stations import StationIndex
@@ -50,14 +49,13 @@ _VIEW_DATASET = {"era5": "era5", "era5_land": "era5-land", "inmet": "inmet"}
 
 
 def _register_timeseries_views(conn, data_dir: Path) -> set[str]:
-    """Register era5/era5_land/inmet, plus era5_inmet when buildable."""
-    names = set(register_all_views(conn, data_dir))
-    try:
-        create_era5_inmet_view(conn, data_dir)
-        names.add(ERA5_INMET_VIEW)
-    except Exception:  # noqa: BLE001 -- no inmet / not buildable -> skip view
-        pass
-    return names
+    """Register era5/era5_land/inmet plus any user-defined views/macros.
+
+    A view named ``era5_inmet`` is still treated as a station source by
+    :mod:`era5_etl.web.timeseries_sql` (name-based) if the user creates
+    one — there is no longer a Python-generated comparison view.
+    """
+    return set(register_all_views(conn, data_dir))
 
 
 def _view_columns(conn, view: str) -> list[tuple[str, str]]:

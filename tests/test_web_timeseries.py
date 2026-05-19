@@ -212,26 +212,16 @@ def test_multi_view_overlay(client: TestClient, tmp_path: Path):
     assert all(s["error"] is None for s in series)
 
 
-def test_era5_inmet_registered_when_inmet_and_era5(client: TestClient, tmp_path):
+def test_era5_inmet_not_auto_registered(client: TestClient, tmp_path):
+    # era5_inmet is no longer Python-generated. With inmet + era5 data
+    # present it must NOT appear automatically — it only exists if the
+    # user creates a view named era5_inmet (see test_query_user_objects).
     _seed_era5(tmp_path, days=1, hours=2)
     _seed_inmet(tmp_path)
     r = client.get("/api/timeseries/meta")
-    views = {v["view"]: v for v in r.json()["views"]}
-    assert "era5_inmet" in views
-    assert views["era5_inmet"]["location_kind"] == "station"
-    # query an inmet-native column through the joined view
-    rr = client.post(
-        "/api/timeseries",
-        json={
-            "date_from": "2024-01-01", "date_to": "2024-01-02",
-            "series": [_series(
-                "era5_inmet", "temp_ar",
-                {"kind": "point", "station_id": "A001"},
-            )],
-        },
-    )
-    assert rr.status_code == 200, rr.text
-    assert rr.json()["series"][0]["error"] is None
+    views = {v["view"] for v in r.json()["views"]}
+    assert "era5_inmet" not in views
+    assert {"era5", "inmet"} <= views
 
 
 def test_unknown_column_is_per_series_error_not_500(client, tmp_path):

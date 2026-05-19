@@ -196,6 +196,60 @@ _TEMPLATES: list[dict[str, Any]] = [
             "LIMIT 100;"
         ),
     },
+    {
+        "id": "era5-inmet-compare",
+        "name": "era5_inmet — INMET vs ERA5/ERA5-LAND (4-corner, epsilon)",
+        "category": "join",
+        "sql": (
+            "-- INMET stations aligned to their 4 enclosing ERA5 &\n"
+            "-- ERA5-LAND grid corners on the same date+hour. Grid\n"
+            "-- Float32 coords need an epsilon join (never '=').\n"
+            "-- Review/edit, then Save as VIEW to persist as era5_inmet.\n"
+            "CREATE OR REPLACE VIEW era5_inmet AS\n"
+            "SELECT i.*,\n"
+            "       e_tl.value AS era5_tl_value,\n"
+            "       e_tr.value AS era5_tr_value,\n"
+            "       e_bl.value AS era5_bl_value,\n"
+            "       e_br.value AS era5_br_value,\n"
+            "       l_tl.value AS era5_land_tl_value,\n"
+            "       l_tr.value AS era5_land_tr_value,\n"
+            "       l_bl.value AS era5_land_bl_value,\n"
+            "       l_br.value AS era5_land_br_value\n"
+            "FROM inmet i\n"
+            "LEFT JOIN era5 e_tl ON e_tl.date=i.date "
+            "AND e_tl.hour_utc=i.hour_utc\n"
+            "  AND abs(e_tl.latitude-i.era5_lat_top)<1e-4\n"
+            "  AND abs(e_tl.longitude-i.era5_lon_left)<1e-4\n"
+            "LEFT JOIN era5 e_tr ON e_tr.date=i.date "
+            "AND e_tr.hour_utc=i.hour_utc\n"
+            "  AND abs(e_tr.latitude-i.era5_lat_top)<1e-4\n"
+            "  AND abs(e_tr.longitude-i.era5_lon_right)<1e-4\n"
+            "LEFT JOIN era5 e_bl ON e_bl.date=i.date "
+            "AND e_bl.hour_utc=i.hour_utc\n"
+            "  AND abs(e_bl.latitude-i.era5_lat_bottom)<1e-4\n"
+            "  AND abs(e_bl.longitude-i.era5_lon_left)<1e-4\n"
+            "LEFT JOIN era5 e_br ON e_br.date=i.date "
+            "AND e_br.hour_utc=i.hour_utc\n"
+            "  AND abs(e_br.latitude-i.era5_lat_bottom)<1e-4\n"
+            "  AND abs(e_br.longitude-i.era5_lon_right)<1e-4\n"
+            "LEFT JOIN era5_land l_tl ON l_tl.date=i.date "
+            "AND l_tl.hour_utc=i.hour_utc\n"
+            "  AND abs(l_tl.latitude-i.era5_land_lat_top)<1e-4\n"
+            "  AND abs(l_tl.longitude-i.era5_land_lon_left)<1e-4\n"
+            "LEFT JOIN era5_land l_tr ON l_tr.date=i.date "
+            "AND l_tr.hour_utc=i.hour_utc\n"
+            "  AND abs(l_tr.latitude-i.era5_land_lat_top)<1e-4\n"
+            "  AND abs(l_tr.longitude-i.era5_land_lon_right)<1e-4\n"
+            "LEFT JOIN era5_land l_bl ON l_bl.date=i.date "
+            "AND l_bl.hour_utc=i.hour_utc\n"
+            "  AND abs(l_bl.latitude-i.era5_land_lat_bottom)<1e-4\n"
+            "  AND abs(l_bl.longitude-i.era5_land_lon_left)<1e-4\n"
+            "LEFT JOIN era5_land l_br ON l_br.date=i.date "
+            "AND l_br.hour_utc=i.hour_utc\n"
+            "  AND abs(l_br.latitude-i.era5_land_lat_bottom)<1e-4\n"
+            "  AND abs(l_br.longitude-i.era5_land_lon_right)<1e-4;"
+        ),
+    },
 ]
 
 
