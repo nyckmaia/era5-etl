@@ -285,6 +285,42 @@ def test_parquet_sorted_by_date_hour(converter, tmp_path):
     assert keys == sorted(keys), f"parquet not sorted by (date, hour_utc): {keys}"
 
 
+def test_cleanup_removes_empty_temp_tree(converter, tmp_path):
+    """After cleanup, _tmp_netcdf/inmet/<year>/ and parents are gone."""
+    tmp_tree = tmp_path / "_tmp_netcdf" / "inmet"
+    year_dir = tmp_tree / "2026"
+    year_dir.mkdir(parents=True)
+    (year_dir / "INMET_CO_DF_A001_X_01-01-2026_A_30-04-2026.CSV").write_bytes(
+        _CSV_2026.encode("latin-1")
+    )
+
+    stats = converter.convert_directory(tmp_tree, cleanup=True)
+    assert stats["converted"] == 1 and stats["failed"] == 0
+    # Parquet written to the (separate) output dir.
+    assert (converter.output_dir / "station=A001" / "A001_2026.parquet").exists()
+    # The whole temp tree is removed.
+    assert not year_dir.exists()
+    assert not tmp_tree.exists()
+    assert not (tmp_path / "_tmp_netcdf").exists()
+
+
+def test_cleanup_keeps_temp_tree_when_a_file_fails(converter, tmp_path):
+    tmp_tree = tmp_path / "_tmp_netcdf" / "inmet"
+    year_dir = tmp_tree / "2026"
+    year_dir.mkdir(parents=True)
+    (year_dir / "INMET_CO_DF_A001_X_01-01-2026_A_30-04-2026.CSV").write_bytes(
+        _CSV_2026.encode("latin-1")
+    )
+    (year_dir / "INMET_XX_YY_BAD0_Z_01-01-2099_A_31-12-2099.CSV").write_bytes(
+        b"junk\n"
+    )
+    with pytest.raises(ProcessingError):
+        converter.convert_directory(tmp_tree, cleanup=True)
+    # Failure -> the temp tree (with the bad file) is kept for inspection.
+    assert year_dir.exists()
+    assert (year_dir / "INMET_XX_YY_BAD0_Z_01-01-2099_A_31-12-2099.CSV").exists()
+
+
 def test_convert_directory_can_collect_without_raising(converter, tmp_path):
     src = tmp_path / "raw"
     src.mkdir()

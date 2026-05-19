@@ -186,6 +186,7 @@ export function InmetDownloadFlow() {
             <RunProgress
               runId={runMutation.data.run_id}
               dataset="inmet"
+              kind="station"
             />
             <div className="rounded-xl border border-ink-200 bg-ink-50/60 p-4 text-sm">
               <p className="font-medium text-ink-800">Próximos passos</p>

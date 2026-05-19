@@ -174,6 +174,41 @@ class InmetPortalDownloader:
             except Exception:  # noqa: BLE001 -- UI callback must never break ETL
                 logger.debug("on_event callback raised", exc_info=True)
 
+    # Map an INMET per-year status to the chunk ``phase`` the web
+    # progress UI understands (so each year drives the same bars/list the
+    # CDS path uses -- there is no submitting/queued for a portal ZIP).
+    _STATUS_PHASE = {
+        "downloading": "downloading",
+        "completed": "completed",
+        "skipped": "completed",
+        "missing": "failed",
+        "failed": "failed",
+    }
+
+    def _emit_year(
+        self,
+        year: int,
+        idx: int,
+        total: int,
+        status: str,
+        message: str = "",
+    ) -> None:
+        """Emit a chunk-shaped event for one INMET year.
+
+        Shaped so ``runtime.emit_chunk_event`` / the web ``RunProgress``
+        reducer track it exactly like a CDS chunk: the "ano atual" bar
+        follows ``phase`` and the "anos" group bar fills as years finish.
+        """
+        self._emit(
+            chunk_id=f"INMET {year}",
+            chunk_index=idx,
+            chunks_total=total,
+            phase=self._STATUS_PHASE.get(status, "running"),
+            status=status,
+            year=year,
+            message=message or f"Ano {year}: {status}",
+        )
+
     # ---- public API --------------------------------------------------
 
     def download(
@@ -223,8 +258,9 @@ class InmetPortalDownloader:
             raise DownloadError(f"Failed to scrape INMET portal: {e}") from e
 
         by_year = {f["year"]: f for f in available}
+        total = len(years)
         out_dirs: list[Path] = []
-        for year in years:
+        for idx, year in enumerate(years, start=1):
             chunk_id = manifest_chunk_id(year)
             year_dir = output_root / str(year)
 
@@ -236,25 +272,39 @@ class InmetPortalDownloader:
                 and any(year_dir.glob("*.CSV"))
             ):
                 logger.info("INMET: year %d already downloaded; skipping", year)
-                self._emit(year=year, status="skipped")
+                self._emit_year(
+                    year, idx, total, "skipped",
+                    f"Ano {year} já baixado — reaproveitado",
+                )
                 out_dirs.append(year_dir)
                 continue
 
             info = by_year.get(year)
             if info is None:
                 logger.warning("INMET: year %d not found on portal; skipping", year)
-                self._emit(year=year, status="missing")
+                self._emit_year(
+                    year, idx, total, "missing",
+                    f"Ano {year} não disponível no portal INMET",
+                )
                 continue
 
             try:
-                self._emit(year=year, status="downloading")
+                self._emit_year(
+                    year, idx, total, "downloading",
+                    f"Baixando ZIP do ano {year} do portal INMET…",
+                )
                 n_csv = self._download_and_extract(info, year_dir)
                 self._record(chunk_id, year, n_csv)
-                self._emit(year=year, status="completed", files=n_csv)
+                self._emit_year(
+                    year, idx, total, "completed",
+                    f"Ano {year}: {n_csv} CSV(s) de estação extraído(s)",
+                )
                 out_dirs.append(year_dir)
             except Exception as e:  # noqa: BLE001 -- one bad year shouldn't abort the rest
                 logger.error("INMET: failed year %d: %s", year, e)
-                self._emit(year=year, status="failed", error=str(e))
+                self._emit_year(
+                    year, idx, total, "failed", f"Ano {year} falhou: {e}"
+                )
 
         return out_dirs
 

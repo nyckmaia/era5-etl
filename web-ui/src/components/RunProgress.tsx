@@ -128,7 +128,8 @@ function reducer(state: RunState, action: Action): RunState {
   };
 }
 
-// Friendly, ordered phase labels for the "current CDS request" tracker.
+// Friendly, ordered phase labels for the "current request" tracker.
+// CDS (grid) and INMET (station) have different lifecycles.
 const PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
   { phase: "submitting", label: "Enviando requisição ao CDS" },
   { phase: "queued", label: "Na fila do CDS (aguardando aceitação)" },
@@ -136,19 +137,33 @@ const PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
   { phase: "downloading", label: "Baixando NetCDF" },
   { phase: "completed", label: "Concluído" },
 ];
+const STATION_PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
+  { phase: "downloading", label: "Baixando ZIP do ano (portal INMET)" },
+  { phase: "completed", label: "Ano extraído" },
+];
 
-function phaseRank(phase: ChunkPhase): number {
-  const idx = PHASE_STEPS.findIndex((s) => s.phase === phase);
+function phaseRank(
+  phase: ChunkPhase,
+  steps: { phase: ChunkPhase; label: string }[],
+): number {
+  const idx = steps.findIndex((s) => s.phase === phase);
   return idx < 0 ? 0 : idx;
 }
 
 export function RunProgress({
   runId,
   dataset,
+  kind = "grid",
 }: {
   runId: string;
   dataset?: string;
+  // "grid" = ERA5/ERA5-LAND (CDS/NetCDF). "station" = INMET (yearly
+  // portal ZIPs) -> the 3 bars are relabelled for that context.
+  kind?: "grid" | "station";
 }) {
+  const isStation = kind === "station";
+  const phaseSteps = isStation ? STATION_PHASE_STEPS : PHASE_STEPS;
+  const unitLabel = isStation ? "ano" : "chunk";
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const sourceRef = useRef<EventSource | null>(null);
 
@@ -198,7 +213,11 @@ export function RunProgress({
   // Bar B — current CDS request lifecycle (stepped)
   const curPhase: ChunkPhase | null = active?.phase ?? null;
   const phasePct = curPhase
-    ? Math.round((phaseRank(curPhase) / (PHASE_STEPS.length - 1)) * 100)
+    ? Math.round(
+        (phaseRank(curPhase, phaseSteps) /
+          Math.max(1, phaseSteps.length - 1)) *
+          100,
+      )
     : completed > 0 && completed === total
       ? 100
       : 0;
@@ -235,12 +254,14 @@ export function RunProgress({
               {state.status === "completed"
                 ? "Pipeline concluído com sucesso"
                 : startingUp
-                  ? "Iniciando — enviando requisição ao CDS…"
+                  ? isStation
+                    ? "Iniciando — consultando o portal INMET…"
+                    : "Iniciando — enviando requisição ao CDS…"
                   : active
-                    ? `Chunk ${active.chunk_index ?? "?"} de ${total}`
+                    ? `${isStation ? "Ano" : "Chunk"} ${active.chunk_index ?? "?"} de ${total}`
                     : conv && conv.total > 0
                       ? `Convertendo ${conv.done}/${conv.total}`
-                      : `${completed} de ${total} chunk(s)`}
+                      : `${completed} de ${total} ${unitLabel}(s)`}
             </div>
           </div>
           <StatusIndicator status={state.status} />
@@ -250,38 +271,54 @@ export function RunProgress({
           {/* 1º: requisição/arquivo NetCDF individual (em cima) */}
           <Bar
             icon={<Cloud className="h-4 w-4 text-amber-600" />}
-            label="Requisição CDS atual (NetCDF individual)"
+            label={
+              isStation
+                ? "Ano atual (ZIP do portal INMET)"
+                : "Requisição CDS atual (NetCDF individual)"
+            }
             pct={phaseBarPct}
             sub={
               curPhase
-                ? (PHASE_STEPS.find((s) => s.phase === curPhase)?.label ??
+                ? (phaseSteps.find((s) => s.phase === curPhase)?.label ??
                   curPhase)
                 : state.status === "completed"
                   ? "Concluído"
                   : startingUp
-                    ? "Enviando requisição ao CDS…"
-                    : "Aguardando primeira requisição…"
+                    ? isStation
+                      ? "Consultando o portal INMET…"
+                      : "Enviando requisição ao CDS…"
+                    : isStation
+                      ? "Aguardando o primeiro ano…"
+                      : "Aguardando primeira requisição…"
             }
             tone={state.status === "failed" ? "fail" : "phase"}
             pulse={startingUp}
           />
-          {/* 2º: grupo de chunks (abaixo) */}
+          {/* 2º: grupo (chunks / anos) */}
           <Bar
             icon={<FileStack className="h-4 w-4 text-ocean-600" />}
-            label="Download (grupo de chunks)"
+            label={
+              isStation ? "Download (anos)" : "Download (grupo de chunks)"
+            }
             pct={groupPct}
-            sub={`${completed}/${total} chunk(s)`}
+            sub={`${completed}/${total} ${unitLabel}(s)`}
             tone={state.status === "failed" ? "fail" : "group"}
           />
           {/* 3º: conversão */}
           <Bar
             icon={<Download className="h-4 w-4 text-moss-600" />}
-            label="Conversão NetCDF → Parquet"
+            label={
+              isStation
+                ? "Conversão CSV → Parquet"
+                : "Conversão NetCDF → Parquet"
+            }
             pct={convPct}
             sub={
               conv
                 ? `${conv.done}/${conv.total} arquivo(s) — ${conv.message.slice(0, 60)}`
-                : "Aguardando downloads…"
+                : isStation
+                  ? "Aguardando o download dos anos…"
+                  : "Aguardando downloads…"
             }
             tone={state.status === "failed" ? "fail" : "convert"}
           />
@@ -302,7 +339,7 @@ export function RunProgress({
                   Pipeline finalizado com sucesso
                 </div>
                 <div className="text-xs text-emerald-700">
-                  {completed} chunk(s) baixado(s) e convertido(s) para
+                  {completed} {unitLabel}(s) baixado(s) e convertido(s) para
                   Parquet. Os dados já estão consultáveis.
                 </div>
               </div>
@@ -324,12 +361,14 @@ export function RunProgress({
 
       <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
         <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
-          Chunks
+          {isStation ? "Anos" : "Chunks"}
         </div>
         <ul className="divide-y divide-ink-100">
           {chunkList.length === 0 && (
             <li className="px-5 py-4 text-sm text-ink-400">
-              Waiting for the first chunk…
+              {isStation
+                ? "Aguardando o primeiro ano…"
+                : "Waiting for the first chunk…"}
             </li>
           )}
           {chunkList.map((c) => (

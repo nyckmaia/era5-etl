@@ -1,507 +1,321 @@
-import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown, Loader2, MapPin } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { Loader2, MapPin } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { CellDetailPanel } from "@/components/inventory/CellDetailPanel";
 import {
   InventoryMap,
-  type SelectionMode,
+  MARKER_SHAPES,
+  type MapLayerData,
+  type MarkerShape,
 } from "@/components/inventory/InventoryMap";
-import { RegionSummaryPanel } from "@/components/inventory/RegionSummaryPanel";
-import { SelectionToolbar } from "@/components/inventory/SelectionToolbar";
 import {
   api,
-  type DatasetInfo,
   type GridPoint,
+  type StationInventory,
   type StationPoint,
 } from "@/lib/api";
-import { cn, formatBytes } from "@/lib/format";
+import { cn } from "@/lib/format";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 
-const HOURS = Array.from({ length: 24 }, (_, h) => h);
-const fmtHour = (h: number) => `${String(h).padStart(2, "0")}:00`;
+interface LayerCfg {
+  enabled: boolean;
+  color: string;
+  sizeMul: number; // 0.25 .. 4
+  opacity: number; // 0 .. 100
+  shape: MarkerShape;
+}
+
+const DEFAULT_COLORS: Record<string, string> = {
+  era5: "#2864c8",
+  "era5-land": "#1f9d55",
+  inmet: "#e8730c",
+};
+const DEFAULT_SHAPES: Record<string, MarkerShape> = {
+  era5: "circle",
+  "era5-land": "square",
+  inmet: "star",
+};
+const FALLBACK_PALETTE = [
+  "#2864c8",
+  "#1f9d55",
+  "#e8730c",
+  "#9333ea",
+  "#dc2626",
+];
+const SHAPE_LABELS: Record<MarkerShape, string> = {
+  circle: "Círculo",
+  square: "Quadrado",
+  triangle: "Triângulo",
+  diamond: "Losango",
+  star: "Estrela",
+  cross: "Cruz",
+};
+
+function defaultCfg(name: string, index: number): LayerCfg {
+  return {
+    enabled: true,
+    color:
+      DEFAULT_COLORS[name] ??
+      FALLBACK_PALETTE[index % FALLBACK_PALETTE.length],
+    sizeMul: 1,
+    opacity: 80,
+    shape:
+      DEFAULT_SHAPES[name] ??
+      MARKER_SHAPES[index % MARKER_SHAPES.length],
+  };
+}
+
+type ActivePoint = {
+  datasetId: string;
+  kind: "grid" | "station";
+  lat: number;
+  lon: number;
+} | null;
 
 export function InventoryPage() {
-  const navigate = useNavigate();
   const { data: datasets } = useQuery({
     queryKey: ["datasets"],
     queryFn: api.datasets,
   });
 
-  const [dataset, setDataset] = useState<string>("");
-  const [variableFilter, setVariableFilter] = useState<string[]>([]);
-  const [hourFilter, setHourFilter] = useState<number[]>(HOURS);
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
-  const userEditedDates = useRef(false);
-  const seededVarsFor = useRef<string>("");
-  const [varMenuOpen, setVarMenuOpen] = useState(false);
-  const [hourMenuOpen, setHourMenuOpen] = useState(false);
-  const varMenuRef = useRef<HTMLDivElement | null>(null);
-  const hourMenuRef = useRef<HTMLDivElement | null>(null);
-  const [pointColor, setPointColor] = useLocalStorage<string>(
-    "inventory.pointColor",
-    "#2864c8",
+  // v2: added per-system marker `shape`. New key so older stored configs
+  // (without shape) don't yield an undefined marker.
+  const [cfgMap, setCfgMap] = useLocalStorage<Record<string, LayerCfg>>(
+    "inventory.layers.v2",
+    {},
   );
-  const [pointOpacity, setPointOpacity] = useLocalStorage<number>(
-    "inventory.pointOpacity",
-    85,
-  );
-  const [showPoints, setShowPoints] = useLocalStorage<boolean>(
-    "inventory.showPoints",
-    true,
-  );
-  const [selectionMode, setSelectionMode] = useState<SelectionMode>("none");
-  const [selection, setSelection] = useState<[number, number][] | null>(null);
-  const [activeCell, setActiveCell] = useState<{ lat: number; lon: number } | null>(
-    null,
-  );
-  const [activeStation, setActiveStation] = useState<StationPoint | null>(null);
+  const [active, setActive] = useState<ActivePoint>(null);
 
-  // Default to user's preferred dataset on first load.
-  useMemo(() => {
-    if (!dataset && datasets && datasets.length > 0) {
-      setDataset(datasets[0].name);
-    }
-  }, [dataset, datasets]);
+  const list = useMemo(() => datasets ?? [], [datasets]);
 
-  const activeDataset: DatasetInfo | undefined = useMemo(
-    () => datasets?.find((d) => d.name === dataset),
-    [datasets, dataset],
-  );
+  const cfgFor = (name: string, idx: number): LayerCfg =>
+    cfgMap[name] ?? defaultCfg(name, idx);
 
-  // Station sources (e.g. INMET) have no regular grid: no variable/hour/
-  // date coverage filters, no polygon region summary. They render as
-  // station points from /api/inventory/stations instead of /grid-points.
-  const stationMode = activeDataset ? activeDataset.is_gridded === false : false;
-
-  // M1: variables start ALL-checked ("checked = visible"). Seed once per
-  // dataset, when its variable list is known.
-  useEffect(() => {
-    if (!activeDataset) return;
-    if (seededVarsFor.current === activeDataset.name) return;
-    seededVarsFor.current = activeDataset.name;
-    setVariableFilter(activeDataset.variables.map((v) => v.api_name));
-  }, [activeDataset]);
-
-  const dateRangeQ = useQuery({
-    queryKey: ["inventory-date-range", dataset],
-    queryFn: () => api.inventory.dateRange(dataset),
-    enabled: Boolean(dataset),
-  });
-
-  // Prefill the date inputs with the dataset's min/max once the range
-  // resolves, unless the user has manually edited the inputs.
-  useEffect(() => {
-    if (userEditedDates.current) return;
-    const r = dateRangeQ.data;
-    if (!r) return;
-    setDateFrom(r.min ?? "");
-    setDateTo(r.max ?? "");
-  }, [dateRangeQ.data]);
-
-  // Close the variable popover when clicking outside of it.
-  useEffect(() => {
-    if (!varMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (varMenuRef.current && !varMenuRef.current.contains(e.target as Node)) {
-        setVarMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [varMenuOpen]);
-
-  useEffect(() => {
-    if (!hourMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (hourMenuRef.current && !hourMenuRef.current.contains(e.target as Node)) {
-        setHourMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [hourMenuOpen]);
-
-  function changeDataset(next: string) {
-    setDataset(next);
-    // New dataset → reset date/hour filters; variables re-seed via the
-    // effect once the new dataset's variable list resolves.
-    userEditedDates.current = false;
-    seededVarsFor.current = "";
-    setDateFrom("");
-    setDateTo("");
-    setVariableFilter([]);
-    setHourFilter(HOURS);
-    setActiveStation(null);
-    setActiveCell(null);
-    setSelection(null);
+  function patchCfg(name: string, idx: number, patch: Partial<LayerCfg>) {
+    setCfgMap({
+      ...cfgMap,
+      [name]: { ...cfgFor(name, idx), ...patch },
+    });
   }
 
-  const allVarNames = useMemo(
-    () => activeDataset?.variables.map((v) => v.api_name) ?? [],
-    [activeDataset],
-  );
-  const varsAllSelected =
-    allVarNames.length > 0 && variableFilter.length === allVarNames.length;
-  const varsNoneSelected = variableFilter.length === 0;
-  const hoursAllSelected = hourFilter.length === HOURS.length;
-  const hoursNoneSelected = hourFilter.length === 0;
-  const emptySelection = varsNoneSelected || hoursNoneSelected;
-
-  const pointsQ = useQuery({
-    queryKey: [
-      "inventory-grid-points",
-      dataset,
-      dateFrom,
-      dateTo,
-      variableFilter,
-      hourFilter,
-    ],
-    queryFn: () =>
-      api.inventory.gridPoints({
-        dataset,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        variable: varsAllSelected ? undefined : variableFilter,
-        hour: hoursAllSelected ? undefined : hourFilter,
-        format: "auto",
-      }),
-    enabled: Boolean(dataset) && !stationMode && !emptySelection,
+  // One query per system. Disabled systems don't fetch. Grid datasets use
+  // /grid-points (all cells, no filters); station datasets use /stations.
+  const results = useQueries({
+    queries: list.map((d, idx) => ({
+      queryKey: ["inv-layer", d.name, d.is_gridded],
+      enabled: cfgFor(d.name, idx).enabled,
+      queryFn: () =>
+        d.is_gridded
+          ? api.inventory.gridPoints({ dataset: d.name, format: "auto" })
+          : api.inventory.stations(d.name),
+    })),
   });
 
-  const stationsQ = useQuery({
-    queryKey: ["inventory-stations", dataset],
-    queryFn: () => api.inventory.stations(dataset),
-    enabled: Boolean(dataset) && stationMode,
-  });
-
-  const { data: stats } = useQuery({
-    queryKey: ["stats", dataset],
-    queryFn: () => api.stats(dataset),
-    enabled: Boolean(dataset),
-  });
-
-  // In station mode the StationPoints (lat/lon may be null) are projected
-  // onto the shared GridPoint shape: `days` carries n_years, `vars`
-  // carries n_vars (the map/tooltip switch wording via kind="station").
-  const stationByKey = useMemo(() => {
-    const m = new Map<string, StationPoint>();
-    if (stationMode) {
-      for (const s of stationsQ.data?.stations ?? []) {
-        if (s.latitude == null || s.longitude == null) continue;
-        m.set(`${s.latitude},${s.longitude}`, s);
+  const layerInfos = useMemo(() => {
+    return list.map((d, idx) => {
+      const cfg = cfgFor(d.name, idx);
+      const kind: "grid" | "station" = d.is_gridded ? "grid" : "station";
+      const res = results[idx];
+      let points: GridPoint[] = [];
+      let stations: StationPoint[] = [];
+      if (kind === "grid") {
+        points = (res?.data as GridPoint[] | undefined) ?? [];
+      } else {
+        stations = (res?.data as StationInventory | undefined)?.stations ?? [];
+        points = stations
+          .filter((s) => s.latitude != null && s.longitude != null)
+          .map((s) => ({
+            lat: s.latitude as number,
+            lon: s.longitude as number,
+            days: s.n_years,
+            vars: s.n_vars,
+          }));
       }
-    }
-    return m;
-  }, [stationMode, stationsQ.data]);
+      return {
+        name: d.name,
+        label: d.name.toUpperCase(),
+        kind,
+        cfg,
+        idx,
+        points,
+        stations,
+        loading: cfg.enabled && (res?.isLoading ?? false),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list, results, cfgMap]);
 
-  const points: GridPoint[] = useMemo(() => {
-    if (stationMode) {
-      return (stationsQ.data?.stations ?? [])
-        .filter((s) => s.latitude != null && s.longitude != null)
-        .map((s) => ({
-          lat: s.latitude as number,
-          lon: s.longitude as number,
-          days: s.n_years,
-          vars: s.n_vars,
-        }));
-    }
-    return emptySelection ? [] : pointsQ.data ?? [];
-  }, [stationMode, stationsQ.data, emptySelection, pointsQ.data]);
+  const mapLayers: MapLayerData[] = layerInfos.map((li) => ({
+    id: li.name,
+    label: li.label,
+    kind: li.kind,
+    points: li.points,
+    color: li.cfg.color,
+    opacity: li.cfg.opacity,
+    sizeMul: li.cfg.sizeMul,
+    shape: li.cfg.shape,
+    visible: li.cfg.enabled,
+  }));
 
-  const dataLoading = stationMode ? stationsQ.isLoading : pointsQ.isLoading;
+  const anyLoading = layerInfos.some((li) => li.loading);
+  const totalVisible = layerInfos
+    .filter((li) => li.cfg.enabled)
+    .reduce((n, li) => n + li.points.length, 0);
 
-  function fillGaps(_bbox: [number, number, number, number]) {
-    // Hand off to the download wizard with the dataset preselected. The
-    // wizard jumps to the Variables step when a dataset is passed.
-    navigate({ to: "/download", search: { dataset, step: 1 } });
-  }
+  const activeStation: StationPoint | null = useMemo(() => {
+    if (!active || active.kind !== "station") return null;
+    const li = layerInfos.find((x) => x.name === active.datasetId);
+    return (
+      li?.stations.find(
+        (s) =>
+          s.latitude === active.lat && s.longitude === active.lon,
+      ) ?? null
+    );
+  }, [active, layerInfos]);
 
   return (
     <div className="space-y-4">
-      <header className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
-            Inventário
-          </h1>
-          <p className="mt-1 text-sm text-ink-500">
-            {stationMode
-              ? "Visualize as estações meteorológicas disponíveis; clique em uma para ver seus detalhes."
-              : "Visualize quais pontos da grade já foram baixados, com quais variáveis e em quais datas e horas."}
-          </p>
-        </div>
-        <select
-          value={dataset}
-          onChange={(e) => changeDataset(e.target.value)}
-          className="input"
-        >
-          {datasets?.map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.name.toUpperCase()}
-            </option>
-          ))}
-        </select>
+      <header>
+        <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
+          Inventário
+        </h1>
+        <p className="mt-1 text-sm text-ink-500">
+          Sobreponha os pontos de cobertura de cada sistema (ERA5,
+          ERA5-LAND, INMET). Ajuste cor, tamanho e opacidade por sistema;
+          clique em um ponto para ver detalhes.
+        </p>
       </header>
 
-      <div className="card flex flex-wrap items-end gap-4 p-4">
-        {!stationMode && (
-          <>
-        <Field label="De">
-          <input
-            type="date"
-            className="input"
-            value={dateFrom}
-            onChange={(e) => {
-              userEditedDates.current = true;
-              setDateFrom(e.target.value);
-            }}
-          />
-        </Field>
-        <Field label="Até">
-          <input
-            type="date"
-            className="input"
-            value={dateTo}
-            onChange={(e) => {
-              userEditedDates.current = true;
-              setDateTo(e.target.value);
-            }}
-          />
-        </Field>
-        <Field label="Variáveis">
-          <div className="relative" ref={varMenuRef}>
-            <button
-              type="button"
-              onClick={() => setVarMenuOpen((o) => !o)}
-              className="input flex min-w-[12rem] items-center justify-between gap-2 text-left"
+      {/* Per-system layer controls */}
+      <div className="card space-y-3 p-4">
+        {layerInfos.length === 0 ? (
+          <p className="text-sm text-ink-400">Carregando sistemas…</p>
+        ) : (
+          layerInfos.map((li) => (
+            <div
+              key={li.name}
+              className="flex flex-wrap items-center gap-x-5 gap-y-2"
             >
-              <span className="truncate">
-                {varsAllSelected
-                  ? "Todas"
-                  : varsNoneSelected
-                    ? "Nenhuma"
-                    : `${variableFilter.length} selecionada(s)`}
-              </span>
-              <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
-            </button>
-            {varMenuOpen ? (
-              <div className="absolute left-0 z-20 mt-1 max-h-72 w-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-2 shadow-elevated">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setVariableFilter(varsAllSelected ? [] : allVarNames)
+              <label className="flex w-40 cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={li.cfg.enabled}
+                  onChange={(e) =>
+                    patchCfg(li.name, li.idx, { enabled: e.target.checked })
                   }
-                  className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-ocean-600 hover:bg-ink-50"
+                />
+                <span className="font-medium text-ink-800">{li.label}</span>
+                <span className="text-[10px] uppercase tracking-wide text-ink-400">
+                  {li.kind === "station" ? "estações" : "grade"}
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-ink-500">
+                Cor
+                <input
+                  type="color"
+                  value={li.cfg.color}
+                  onChange={(e) =>
+                    patchCfg(li.name, li.idx, { color: e.target.value })
+                  }
+                  className="h-8 w-10 cursor-pointer rounded-lg border border-ink-200 bg-white p-1"
+                  aria-label={`Cor de ${li.label}`}
+                />
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-ink-500">
+                Marcador
+                <select
+                  value={li.cfg.shape}
+                  onChange={(e) =>
+                    patchCfg(li.name, li.idx, {
+                      shape: e.target.value as MarkerShape,
+                    })
+                  }
+                  className="input h-8 py-0 text-sm"
+                  aria-label={`Marcador de ${li.label}`}
                 >
-                  {varsAllSelected ? "Desmarcar todas" : "Marcar todas"}
-                </button>
-                {activeDataset?.variables.map((v) => {
-                  const checked = variableFilter.includes(v.api_name);
-                  return (
-                    <label
-                      key={v.api_name}
-                      className={cn(
-                        "flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-ink-50",
-                        checked && "bg-ocean-50/60",
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={checked}
-                        onChange={() =>
-                          setVariableFilter((prev) =>
-                            prev.includes(v.api_name)
-                              ? prev.filter((x) => x !== v.api_name)
-                              : [...prev, v.api_name],
-                          )
-                        }
-                      />
-                      <span className="flex-1">
-                        <span className="block text-ink-800">{v.full_name}</span>
-                        <span className="block text-[11px] text-ink-400">
-                          {v.api_name}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        </Field>
-        <Field label="Horas">
-          <div className="relative" ref={hourMenuRef}>
-            <button
-              type="button"
-              onClick={() => setHourMenuOpen((o) => !o)}
-              className="input flex min-w-[10rem] items-center justify-between gap-2 text-left"
-            >
-              <span className="truncate">
-                {hoursAllSelected
-                  ? "Todas"
-                  : hoursNoneSelected
-                    ? "Nenhuma"
-                    : `${hourFilter.length} selecionada(s)`}
+                  {MARKER_SHAPES.map((s) => (
+                    <option key={s} value={s}>
+                      {SHAPE_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-ink-500">
+                Tamanho
+                <input
+                  type="range"
+                  min={0.25}
+                  max={4}
+                  step={0.25}
+                  value={li.cfg.sizeMul}
+                  onChange={(e) =>
+                    patchCfg(li.name, li.idx, {
+                      sizeMul: Number(e.target.value),
+                    })
+                  }
+                  className="w-28 accent-ocean-600"
+                  disabled={!li.cfg.enabled}
+                />
+                <span className="w-9 text-right tabular-nums text-ink-600">
+                  {li.cfg.sizeMul}×
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-ink-500">
+                Opacidade
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={li.cfg.opacity}
+                  onChange={(e) =>
+                    patchCfg(li.name, li.idx, {
+                      opacity: Number(e.target.value),
+                    })
+                  }
+                  className="w-24 accent-ocean-600"
+                  disabled={!li.cfg.enabled}
+                />
+                <span className="w-9 text-right tabular-nums text-ink-600">
+                  {li.cfg.opacity}%
+                </span>
+              </label>
+
+              <span className="ml-auto text-xs tabular-nums text-ink-400">
+                {li.cfg.enabled
+                  ? `${li.points.length.toLocaleString()} ponto(s)`
+                  : "oculto"}
               </span>
-              <ChevronDown className="h-4 w-4 shrink-0 text-ink-400" />
-            </button>
-            {hourMenuOpen ? (
-              <div className="absolute left-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-xl border border-ink-200 bg-white p-2 shadow-elevated">
-                <button
-                  type="button"
-                  onClick={() => setHourFilter(hoursAllSelected ? [] : HOURS)}
-                  className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-ocean-600 hover:bg-ink-50"
-                >
-                  {hoursAllSelected ? "Desmarcar todas" : "Marcar todas"}
-                </button>
-                {HOURS.map((h) => {
-                  const checked = hourFilter.includes(h);
-                  return (
-                    <label
-                      key={h}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-ink-50",
-                        checked && "bg-ocean-50/60",
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setHourFilter((prev) =>
-                            prev.includes(h)
-                              ? prev.filter((x) => x !== h)
-                              : [...prev, h],
-                          )
-                        }
-                      />
-                      <span className="text-ink-800">{fmtHour(h)} UTC</span>
-                    </label>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        </Field>
-          </>
-        )}
-        <Field label="Pontos">
-          <label className="input flex cursor-pointer items-center gap-2">
-            <input
-              type="checkbox"
-              checked={showPoints}
-              onChange={(e) => setShowPoints(e.target.checked)}
-            />
-            <span className="text-sm text-ink-700">Mostrar</span>
-          </label>
-        </Field>
-        <Field label="Opacidade">
-          <div className="input flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={pointOpacity}
-              onChange={(e) => setPointOpacity(Number(e.target.value))}
-              className="w-28 accent-ocean-600"
-            />
-            <span className="w-9 text-right text-xs tabular-nums text-ink-600">
-              {pointOpacity}%
-            </span>
-          </div>
-        </Field>
-        <Field label="Cor">
-          <input
-            type="color"
-            value={pointColor}
-            onChange={(e) => setPointColor(e.target.value)}
-            className="h-9 w-12 cursor-pointer rounded-lg border border-ink-200 bg-white p-1"
-            aria-label="Cor dos pontos"
-          />
-        </Field>
-        {!stationMode &&
-          (dateFrom || dateTo || !varsAllSelected || !hoursAllSelected) && (
-          <button
-            onClick={() => {
-              userEditedDates.current = false;
-              setDateFrom(dateRangeQ.data?.min ?? "");
-              setDateTo(dateRangeQ.data?.max ?? "");
-              setVariableFilter(allVarNames);
-              setHourFilter(HOURS);
-            }}
-            className="text-xs text-ocean-600 hover:underline"
-          >
-            Limpar filtros
-          </button>
+            </div>
+          ))
         )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
         <div className="relative h-[560px]">
-          <InventoryMap
-            points={points}
-            kind={stationMode ? "station" : "grid"}
-            selectionMode={stationMode ? "none" : selectionMode}
-            selection={selection}
-            onSelectionChange={setSelection}
-            onCellClick={(lat, lon) => {
-              if (stationMode) {
-                const s = stationByKey.get(`${lat},${lon}`) ?? null;
-                setActiveStation(s);
-                return;
-              }
-              setActiveCell({ lat, lon });
-              setSelection(null);
-            }}
-            pointColor={pointColor}
-            pointOpacity={pointOpacity}
-            showPoints={showPoints}
-          />
-          {!stationMode && (
-            <SelectionToolbar
-              mode={selectionMode}
-              onChange={(m) => {
-                setSelectionMode(m);
-                if (m !== "none") setActiveCell(null);
-              }}
-              onReset={() => {
-                setSelection(null);
-                setActiveCell(null);
-              }}
-            />
-          )}
-          {dataLoading ? (
+          <InventoryMap layers={mapLayers} onPointClick={(datasetId, kind, lat, lon) =>
+            setActive({ datasetId, kind, lat, lon })
+          } />
+          {anyLoading ? (
             <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full bg-white/95 px-3 py-1 text-xs shadow ring-1 ring-ink-200">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {stationMode ? "Carregando estações..." : "Carregando pontos..."}
+              Carregando pontos…
             </div>
           ) : null}
-          {!stationMode && emptySelection ? (
+          {!anyLoading && totalVisible === 0 ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="rounded-2xl bg-white/95 p-6 text-center shadow-elevated ring-1 ring-ink-200">
                 <MapPin className="mx-auto h-6 w-6 text-ink-400" />
                 <p className="mt-2 text-sm font-medium text-ink-700">
-                  Nenhuma variável ou hora selecionada.
+                  Nenhum ponto para os sistemas ativos.
                 </p>
                 <p className="mt-1 text-xs text-ink-400">
-                  Marque ao menos uma variável e uma hora.
-                </p>
-              </div>
-            </div>
-          ) : !dataLoading && points.length === 0 ? (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="rounded-2xl bg-white/95 p-6 text-center shadow-elevated ring-1 ring-ink-200">
-                <MapPin className="mx-auto h-6 w-6 text-ink-400" />
-                <p className="mt-2 text-sm font-medium text-ink-700">
-                  {stationMode
-                    ? `Nenhuma estação para ${dataset || "este dataset"}.`
-                    : `Nenhum dado baixado para ${dataset || "este dataset"}.`}
-                </p>
-                <p className="mt-1 text-xs text-ink-400">
-                  Use a página Download para começar.
+                  Habilite um sistema acima ou baixe dados na página
+                  Download.
                 </p>
               </div>
             </div>
@@ -509,79 +323,51 @@ export function InventoryPage() {
         </div>
 
         <div className="space-y-3">
-          {stationMode ? (
-            activeStation ? (
-              <StationDetailPanel station={activeStation} />
-            ) : (
-              <div className="card flex h-full flex-col items-center justify-center p-6 text-center text-sm text-ink-400">
-                <MapPin className="mb-2 h-5 w-5" />
-                <p>Clique em uma estação para ver seus detalhes.</p>
-              </div>
-            )
-          ) : selection && selection.length >= 3 ? (
-            <RegionSummaryPanel
-              dataset={dataset}
-              polygon={selection}
-              onFillGapsClick={fillGaps}
-            />
-          ) : activeCell ? (
+          {active && active.kind === "grid" ? (
             <CellDetailPanel
-              dataset={dataset}
-              lat={activeCell.lat}
-              lon={activeCell.lon}
+              dataset={active.datasetId}
+              lat={active.lat}
+              lon={active.lon}
+            />
+          ) : active && active.kind === "station" && activeStation ? (
+            <StationDetailPanel
+              datasetLabel={active.datasetId.toUpperCase()}
+              station={activeStation}
             />
           ) : (
             <div className="card flex h-full flex-col items-center justify-center p-6 text-center text-sm text-ink-400">
               <MapPin className="mb-2 h-5 w-5" />
-              <p>
-                Clique em um ponto para ver detalhes ou use o toolbar para
-                selecionar uma região.
-              </p>
+              <p>Clique em um ponto para ver os detalhes do sistema.</p>
             </div>
           )}
         </div>
       </div>
 
-      <div className="card flex flex-wrap items-center justify-between gap-4 p-4 text-xs text-ink-500">
-        <div className="flex flex-wrap items-center gap-4">
-          <Pill
-            label={stationMode ? "Estações" : "Pontos"}
-            value={points.length.toLocaleString()}
-          />
-          <Pill label="Dataset" value={dataset || "—"} />
-          {stats ? (
-            <>
-              <Pill label="Arquivos" value={stats.parquet_files.toString()} />
-              <Pill label="Tamanho" value={formatBytes(stats.total_size_bytes)} />
-              {!stationMode && (
-                <Pill label="Chunks" value={stats.manifest_chunks.toString()} />
-              )}
-            </>
-          ) : null}
-        </div>
-        {!stationMode && pointsQ.data && pointsQ.data.length >= 5000 ? (
-          <span className="text-[11px] text-ink-400">
-            Carregado via Apache Arrow (payload binário)
-          </span>
-        ) : null}
+      <div className="card flex flex-wrap items-center gap-4 p-4 text-xs text-ink-500">
+        <Pill label="Pontos visíveis" value={totalVisible.toLocaleString()} />
+        {layerInfos
+          .filter((li) => li.cfg.enabled)
+          .map((li) => (
+            <Pill
+              key={li.name}
+              label={li.label}
+              value={li.points.length.toLocaleString()}
+            />
+          ))}
       </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-[10px] uppercase tracking-wide text-ink-500">
-        {label}
-      </span>
-      <div className="mt-1">{children}</div>
-    </label>
-  );
-}
-
-function StationDetailPanel({ station }: { station: StationPoint }) {
+function StationDetailPanel({
+  station,
+  datasetLabel,
+}: {
+  station: StationPoint;
+  datasetLabel: string;
+}) {
   const rows: [string, string][] = [
+    ["Sistema", datasetLabel],
     ["Código (WMO)", station.station_id],
     ["Nome", station.nome ?? "—"],
     ["UF", station.uf ?? "—"],
@@ -623,7 +409,7 @@ function StationDetailPanel({ station }: { station: StationPoint }) {
 
 function Pill({ label, value }: { label: string; value: string }) {
   return (
-    <span className="rounded-full bg-ink-50 px-3 py-1">
+    <span className={cn("rounded-full bg-ink-50 px-3 py-1")}>
       <span className="text-[10px] uppercase tracking-wide text-ink-400">
         {label}{" "}
       </span>
