@@ -21,6 +21,8 @@ interface Props {
   layout: CellLayout;
   /** Per series (index-aligned to results): draw a dashed mean line. */
   showMean: boolean[];
+  /** Per series (index-aligned): visual-only Y unit conversion. */
+  transformFns: ((v: number) => number)[];
 }
 
 export function PlotlyChart({
@@ -29,6 +31,7 @@ export function PlotlyChart({
   styles,
   layout,
   showMean,
+  transformFns,
 }: Props) {
   const data = useMemo(() => {
     const traces: Record<string, unknown>[] = [];
@@ -38,19 +41,21 @@ export function PlotlyChart({
       if (r.error || r.x.length === 0) return;
       const st = styles[seriesId[i]] ?? DEFAULT_STYLE;
       const yaxis = r.axis === "y2" ? "y2" : "y";
+      const tf = transformFns[i] ?? ((v: number) => v);
+      const yv = r.y.map((v) => (v == null ? v : tf(v)));
       traces.push({
         type: "scattergl",
         mode: st.mode,
         name: r.name,
         x: r.x,
-        y: r.y,
+        y: yv,
         yaxis,
         line: { color: st.color, dash: st.dash, width: st.width },
         marker: { color: st.color, size: Math.max(4, st.width + 2) },
         connectgaps: false,
       });
       if (showMean[i]) {
-        const m = computeStats(r.y).mean;
+        const m = computeStats(yv).mean;
         if (m != null) {
           traces.push({
             type: "scattergl",
@@ -71,7 +76,7 @@ export function PlotlyChart({
       }
     });
     return traces;
-  }, [results, styles, seriesId, showMean]);
+  }, [results, styles, seriesId, showMean, transformFns]);
 
   const hasY2 = results.some((r) => !r.error && r.axis === "y2");
 

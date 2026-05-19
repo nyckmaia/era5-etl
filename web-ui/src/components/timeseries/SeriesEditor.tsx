@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import type { TSViewMeta } from "@/lib/api";
 
 import { LocationPicker } from "./LocationPicker";
+import { PRESETS, compileTransform } from "./transform";
 import type { Agg, SeriesCfg } from "./types";
 
 interface Props {
@@ -25,6 +26,7 @@ export function SeriesEditor({
   swatch,
 }: Props) {
   const viewMeta = metaViews.find((v) => v.view === series.view);
+  const tx = compileTransform(series.transform);
 
   function patch(p: Partial<SeriesCfg>) {
     onChange({ ...series, ...p });
@@ -114,6 +116,28 @@ export function SeriesEditor({
           />
         </Field>
 
+        <Field label="Conversão (visual)">
+          <select
+            className="input w-48"
+            value={series.transform?.preset ?? "none"}
+            title="Aplicada só no gráfico e nas estatísticas — os dados originais não mudam."
+            onChange={(e) =>
+              patch({
+                transform: {
+                  preset: e.target.value,
+                  expr: series.transform?.expr,
+                },
+              })
+            }
+          >
+            {PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
         <button
           type="button"
           onClick={onRemove}
@@ -123,6 +147,34 @@ export function SeriesEditor({
           <Trash2 className="h-4 w-4" />
         </button>
       </div>
+
+      {series.transform?.preset === "custom" && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <code className="text-xs text-ink-400">f(x) =</code>
+          <input
+            className="input w-64 font-mono text-xs"
+            placeholder="x - 273.15"
+            defaultValue={series.transform?.expr ?? ""}
+            onBlur={(e) =>
+              patch({
+                transform: { preset: "custom", expr: e.target.value },
+              })
+            }
+          />
+          <span className="text-[11px] text-ink-400">
+            x = valor original (só números, x, e + - * / ( ) )
+          </span>
+        </div>
+      )}
+      {tx.error && (
+        <p className="mt-1 text-xs text-rose-600">{tx.error}</p>
+      )}
+      {!tx.identity && !tx.error && (
+        <p className="mt-1 text-[11px] text-ink-400">
+          Conversão aplicada apenas na visualização e nas estatísticas — os
+          dados originais permanecem inalterados.
+        </p>
+      )}
 
       <div className="mt-3 border-t border-ink-200 pt-3">
         <LocationPicker

@@ -13,6 +13,13 @@ export interface SeriesCfg {
   name?: string;
   /** Draw the series mean as a constant dashed horizontal line. */
   showMean?: boolean;
+  /**
+   * Visual-only unit conversion applied to Y before plotting/stats.
+   * The stored data is never changed. ``preset`` is a key from
+   * transform.PRESETS; for "custom" the lambda body is in ``expr``
+   * (variable ``x`` = the original value, e.g. "x - 273.15").
+   */
+  transform?: { preset: string; expr?: string };
 }
 
 export interface TraceStyle {

@@ -22,6 +22,7 @@ import { cn } from "@/lib/format";
 import { PlotlyChart, STYLE_CYCLE, DEFAULT_STYLE } from "./PlotlyChart";
 import { SeriesEditor } from "./SeriesEditor";
 import { computeStats, fmtStat } from "./stats";
+import { applyTransform, compileTransform } from "./transform";
 import { TraceStylePanel } from "./TraceStylePanel";
 import type { Bucket, Cell, SeriesCfg } from "./types";
 import { newId } from "./types";
@@ -136,6 +137,10 @@ export function ChartCell({
     cell.series.every((s) => s.view && s.yColumn);
 
   const seriesIds = cell.series.map((s) => s.id);
+  // Visual-only unit conversions, index-aligned to series/results.
+  const transformFns = cell.series.map(
+    (s) => compileTransform(s.transform).fn,
+  );
 
   // Available coverage of the first series' view — shown next to the date
   // inputs and used to bound them. Explains why a wide range can return a
@@ -335,6 +340,7 @@ export function ChartCell({
               styles={cell.traceStyles}
               layout={cell.layout}
               showMean={cell.series.map((s) => !!s.showMean)}
+              transformFns={transformFns}
             />
 
             {/* Per-series descriptive statistics */}
@@ -352,7 +358,10 @@ export function ChartCell({
                         color: STYLE_CYCLE[i % STYLE_CYCLE.length],
                       }).color
                     }
-                    y={r.y}
+                    y={applyTransform(
+                      r.y,
+                      transformFns[i] ?? ((v: number) => v),
+                    )}
                     showMean={!!cell.series[i]?.showMean}
                     onToggleMean={(v) =>
                       cell.series[i] &&
