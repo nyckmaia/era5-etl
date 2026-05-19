@@ -10,7 +10,6 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { format as formatSql } from "sql-formatter";
 import { toast } from "sonner";
 
 import { QueryBuilderPanel } from "@/components/query/QueryBuilderPanel";
@@ -22,6 +21,7 @@ import { ViewBuilderModal } from "@/components/query/ViewBuilderModal";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { api, type ColumnPrecision, type UserObject } from "@/lib/api";
 import { cn } from "@/lib/format";
+import { formatSql } from "@/lib/sql";
 
 const SqlEditor = lazy(() => import("@/components/SqlEditor"));
 
@@ -211,15 +211,7 @@ export function QueryPage() {
   }
 
   function tryFormat(sql: string): string {
-    try {
-      return formatSql(sql, {
-        language: "duckdb",
-        keywordCase: "upper",
-        indentStyle: "standard",
-      });
-    } catch {
-      return sql; // Leave SQL untouched if it cannot be parsed.
-    }
+    return formatSql(sql);
   }
 
   function handleFormat() {

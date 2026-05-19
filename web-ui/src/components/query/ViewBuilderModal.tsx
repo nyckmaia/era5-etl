@@ -1,11 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { api, type BuildSpec, type UserObject } from "@/lib/api";
 import { cn } from "@/lib/format";
+import { formatSql } from "@/lib/sql";
+
+const SqlPreview = lazy(() => import("@/components/query/SqlPreview"));
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const APPROX_COLS = new Set(["latitude", "longitude"]);
@@ -165,14 +168,12 @@ export function ViewBuilderModal({
   const nameValid = IDENT_RE.test(name);
 
   const save = useMutation({
-    mutationFn: () =>
-      editing
-        ? api.userViews.update(editing.id, {
-            name,
-            kind: "view",
-            sql,
-          })
-        : api.userViews.create({ name, kind: "view", sql }),
+    mutationFn: () => {
+      const body = { name, kind: "view", sql: formatSql(sql) };
+      return editing
+        ? api.userViews.update(editing.id, body)
+        : api.userViews.create(body);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["user-views"] });
       qc.invalidateQueries({ queryKey: ["query-schema"] });
@@ -202,68 +203,106 @@ export function ViewBuilderModal({
             {/* Left: configuration */}
             <div className="min-h-0 space-y-5 overflow-y-auto border-r border-ink-100 p-5">
               <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
                   1 · Fontes
                 </p>
+                <p className="mb-2 text-[11px] text-ink-400">
+                  Clique para incluir/remover uma view. Selecionadas ficam
+                  em azul com ✓.
+                </p>
                 <div className="flex flex-wrap gap-2">
-                  {datasets.map((v) => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => togglePick(v)}
-                      className={cn(
-                        "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
-                        picked.includes(v)
-                          ? "border-ocean-600 bg-ocean-600 text-white"
-                          : "border-ink-200 bg-white text-ink-600 hover:bg-ink-50",
-                      )}
-                    >
-                      {v.replace(/-/g, "_")}
-                      {picked.includes(v) ? ` · ${aliases[v]}` : ""}
-                    </button>
-                  ))}
+                  {datasets.map((v) => {
+                    const on = picked.includes(v);
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => togglePick(v)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                          on
+                            ? "border-ocean-600 bg-ocean-600 text-white shadow-sm"
+                            : "border-ink-200 bg-white text-ink-600 hover:border-ocean-300 hover:bg-ocean-50",
+                        )}
+                      >
+                        {on ? (
+                          <Check className="h-3 w-3 shrink-0" />
+                        ) : (
+                          <Plus className="h-3 w-3 shrink-0 text-ink-400" />
+                        )}
+                        {v.replace(/-/g, "_")}
+                        {on ? ` · ${aliases[v]}` : ""}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {picked.length > 0 ? (
                 <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
                     2 · Colunas
                   </p>
+                  <p className="mb-2 text-[11px] text-ink-400">
+                    Clique nas colunas que entram na VIEW. As marcadas
+                    (✓, azul) serão projetadas.
+                  </p>
                   <div className="space-y-3">
-                    {picked.map((v) => (
-                      <div key={v}>
-                        <p className="mb-1 text-xs font-medium text-ink-700">
-                          {v.replace(/-/g, "_")}{" "}
-                          <span className="text-ink-400">
-                            ({aliases[v]})
-                          </span>
-                        </p>
-                        <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-lg border border-ink-100 p-2">
-                          {(schemaByView[v] ?? []).length === 0 ? (
-                            <span className="text-[11px] italic text-ink-400">
-                              sem dados
+                    {picked.map((v) => {
+                      const sel = cols[v] ?? [];
+                      return (
+                        <div key={v}>
+                          <p className="mb-1 flex items-center gap-1 text-xs font-medium text-ink-700">
+                            {v.replace(/-/g, "_")}{" "}
+                            <span className="text-ink-400">
+                              ({aliases[v]})
                             </span>
-                          ) : (
-                            schemaByView[v].map((c) => (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => toggleCol(v, c)}
-                                className={cn(
-                                  "rounded px-1.5 py-0.5 text-[11px] transition-colors",
-                                  (cols[v] ?? []).includes(c)
-                                    ? "bg-ocean-100 text-ocean-800"
-                                    : "bg-ink-50 text-ink-600 hover:bg-ink-100",
-                                )}
-                              >
-                                {c}
-                              </button>
-                            ))
-                          )}
+                            <span
+                              className={cn(
+                                "ml-auto rounded-full px-1.5 py-0.5 text-[10px]",
+                                sel.length
+                                  ? "bg-ocean-100 text-ocean-700"
+                                  : "bg-ink-100 text-ink-400",
+                              )}
+                            >
+                              {sel.length} selecionada
+                              {sel.length === 1 ? "" : "s"}
+                            </span>
+                          </p>
+                          <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto rounded-lg border border-ink-100 p-2">
+                            {(schemaByView[v] ?? []).length === 0 ? (
+                              <span className="text-[11px] italic text-ink-400">
+                                sem dados
+                              </span>
+                            ) : (
+                              schemaByView[v].map((c) => {
+                                const on = sel.includes(c);
+                                return (
+                                  <button
+                                    key={c}
+                                    type="button"
+                                    aria-pressed={on}
+                                    onClick={() => toggleCol(v, c)}
+                                    className={cn(
+                                      "flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] transition-colors",
+                                      on
+                                        ? "border-ocean-600 bg-ocean-600 text-white"
+                                        : "border-ink-200 bg-white text-ink-600 hover:border-ocean-300 hover:bg-ocean-50",
+                                    )}
+                                  >
+                                    {on ? (
+                                      <Check className="h-2.5 w-2.5 shrink-0" />
+                                    ) : null}
+                                    {c}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : null}
@@ -357,7 +396,10 @@ export function ViewBuilderModal({
                                 </option>
                               ))}
                             </select>
-                            <label className="flex items-center gap-1 text-[10px] text-ink-500">
+                            <label
+                              className="flex items-center gap-1 text-[10px] text-ink-500"
+                              title="Join aproximado: usa abs(a − b) < epsilon (necessário para coordenadas Float32 de grade)"
+                            >
                               <input
                                 type="checkbox"
                                 checked={r.approx}
@@ -372,7 +414,7 @@ export function ViewBuilderModal({
                                   })
                                 }
                               />
-                              ≈
+                              aprox.
                             </label>
                             <button
                               type="button"
@@ -444,17 +486,27 @@ export function ViewBuilderModal({
                   className="flex items-center gap-1 text-[11px] text-ink-400 hover:text-ink-700"
                   disabled={!sql}
                   onClick={() => {
-                    navigator.clipboard.writeText(sql);
+                    navigator.clipboard.writeText(formatSql(sql));
                     toast.success("SQL copiado");
                   }}
                 >
                   <Copy className="h-3 w-3" /> copiar
                 </button>
               </div>
-              <pre className="min-h-0 flex-1 overflow-auto rounded-xl border border-ink-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-ink-800">
-                {sql ||
-                  "Selecione fontes e colunas para gerar o SQL…"}
-              </pre>
+              <div className="min-h-0 flex-1">
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center rounded-xl border border-ink-200 bg-white text-[11px] text-ink-400">
+                      carregando editor…
+                    </div>
+                  }
+                >
+                  <SqlPreview
+                    sql={sql}
+                    placeholder="Selecione fontes e colunas para gerar o SQL…"
+                  />
+                </Suspense>
+              </div>
               {preview ? (
                 <p
                   className={cn(

@@ -1,11 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { api, type UserObject } from "@/lib/api";
 import { cn } from "@/lib/format";
+import { formatSql } from "@/lib/sql";
+
+const SqlPreview = lazy(() => import("@/components/query/SqlPreview"));
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DDL_RE =
@@ -54,6 +57,10 @@ export function SaveObjectDialog({
     return `CREATE OR REPLACE VIEW ${name} AS\n${body}`;
   }, [editing, initialSql, kind, name]);
 
+  const prettySql = useMemo(
+    () => formatSql(generatedSql),
+    [generatedSql],
+  );
   const nameValid = IDENT_RE.test(name);
   const macroNeedsDdl = kind === "macro" && !DDL_RE.test(generatedSql);
 
@@ -75,8 +82,8 @@ export function SaveObjectDialog({
   const save = useMutation({
     mutationFn: () =>
       editing
-        ? api.userViews.update(editing.id, { name, kind, sql: generatedSql })
-        : api.userViews.create({ name, kind, sql: generatedSql }),
+        ? api.userViews.update(editing.id, { name, kind, sql: prettySql })
+        : api.userViews.create({ name, kind, sql: prettySql }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["user-views"] });
       qc.invalidateQueries({ queryKey: ["query-schema"] });
@@ -119,21 +126,26 @@ export function SaveObjectDialog({
             <div className="text-xs font-medium text-ink-600">
               Tipo
               <div className="mt-1 flex overflow-hidden rounded-xl border border-ink-200">
-                {(["view", "macro"] as const).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setKind(k)}
-                    className={cn(
-                      "px-3 py-2 text-sm capitalize transition-colors",
-                      kind === k
-                        ? "bg-ocean-600 text-white"
-                        : "bg-white text-ink-600 hover:bg-ink-50",
-                    )}
-                  >
-                    {k}
-                  </button>
-                ))}
+                {(["view", "macro"] as const).map((k) => {
+                  const on = kind === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setKind(k)}
+                      className={cn(
+                        "flex items-center gap-1 px-3 py-2 text-sm capitalize transition-colors",
+                        on
+                          ? "bg-ocean-600 font-semibold text-white"
+                          : "bg-white text-ink-500 hover:bg-ocean-50",
+                      )}
+                    >
+                      {on ? <Check className="h-3 w-3" /> : null}
+                      {k}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -153,16 +165,24 @@ export function SaveObjectDialog({
                 type="button"
                 className="flex items-center gap-1 text-[11px] text-ink-400 hover:text-ink-700"
                 onClick={() => {
-                  navigator.clipboard.writeText(generatedSql);
+                  navigator.clipboard.writeText(prettySql);
                   toast.success("SQL copiado");
                 }}
               >
                 <Copy className="h-3 w-3" /> copiar
               </button>
             </div>
-            <pre className="max-h-48 overflow-auto rounded-xl border border-ink-200 bg-ink-50 p-3 font-mono text-[11px] leading-relaxed text-ink-800">
-              {generatedSql || "—"}
-            </pre>
+            <div className="h-48">
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center rounded-xl border border-ink-200 bg-white text-[11px] text-ink-400">
+                    carregando editor…
+                  </div>
+                }
+              >
+                <SqlPreview sql={prettySql} />
+              </Suspense>
+            </div>
           </div>
 
           {macroNeedsDdl ? (
