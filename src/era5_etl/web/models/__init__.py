@@ -254,6 +254,49 @@ class QuerySchemaOut(BaseModel):
     columns: list[SchemaColumn]
 
 
+# --- User-defined views / macros + visual builder ---------------------
+
+
+class SourceSel(BaseModel):
+    view: str
+    alias: str
+    columns: list[str]
+
+
+class JoinPair(BaseModel):
+    left: str  # "<alias>.<col>"
+    right: str  # "<alias>.<col>"
+    approx: bool = False
+    epsilon: float = 1e-4
+
+
+class BuildSpec(BaseModel):
+    name: str
+    join_type: str = "INNER"  # "INNER" | "LEFT"
+    sources: list[SourceSel]
+    joins: list[JoinPair] = []
+
+
+class UserObjectIn(BaseModel):
+    name: str
+    kind: str  # "view" | "macro"
+    sql: str
+
+
+class UserObjectOut(BaseModel):
+    id: str
+    name: str
+    kind: str
+    sql: str
+    ok: bool = True
+    error: str | None = None
+    columns: list[SchemaColumn] = []
+
+
+class BuildSqlOut(BaseModel):
+    sql: str
+
+
 # --- Time-series charting (notebook page) -----------------------------
 
 
