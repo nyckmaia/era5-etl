@@ -38,8 +38,8 @@ espalhado. Tudo é gravado em **Parquet** e exposto via DuckDB, CLI e uma
    _manifest.json · _coverage.duckdb         _manifest.json · _stations.duckdb
         └───────────────────┬─────────────────────────┘
                   ┌─────────▼─────────┐
-                  │ CLI · Web UI      │  + VIEW era5_inmet
-                  │ DuckDB · Python   │  (INMET × 4 vizinhos de grade)
+                  │ CLI · Web UI      │  + VIEWs/MACROs do usuário
+                  │ DuckDB · Python   │  (criadas na tela /query)
                   └───────────────────┘
 ```
 
@@ -62,9 +62,14 @@ espalhado. Tudo é gravado em **Parquet** e exposto via DuckDB, CLI e uma
   ERA5. Cada Parquet carrega ainda os 4 vizinhos de grade ERA5/ERA5-LAND
   + distâncias para comparação espacial. Pré-requisito: ERA5 **e**
   ERA5-LAND precisam ter ao menos o mínimo baixado antes.
-- **VIEW `era5_inmet`** — alinha cada observação INMET aos 4 pontos de
-  grade vizinhos do ERA5/ERA5-LAND na mesma data/hora (CLI
-  `era5 era5-inmet`; também usada pela tela de séries temporais).
+- **VIEWs/MACROs definidas pelo usuário** — na tela `/query` o usuário
+  cria suas próprias VIEWs/MACROs combinando as views base (ERA5,
+  ERA5-LAND, INMET) pelo editor SQL ("Salvar VIEW") ou pelo builder
+  visual de colunas/JOINs (com join por epsilon para coordenadas). As
+  definições são persistidas como SQL e reaplicadas a cada consulta;
+  aparecem no menu SCHEMA. Não há mais a VIEW `era5_inmet` gerada em
+  Python — ela sobrevive como um template de 1 clique
+  (`era5-inmet-compare`) que o usuário revisa e salva.
 - **Layout único de paths** — `storage/paths.py` é o ponto único de verdade:
   `climate_data_store_db/<dataset>/` para Parquet+manifest+DuckDB,
   `_tmp_netcdf/<dataset>/` para downloads brutos. Sem path-joining
@@ -188,7 +193,7 @@ era5 pipeline --dataset all --start-date 2024-01-01 --end-date 2024-01-31
 
 INMET não é grade nem CDS: 1 ZIP por ano no portal, 1 CSV por estação.
 O download exige que ERA5 **e** ERA5-LAND já tenham o mínimo em disco
-(necessário para a comparação `era5_inmet` e as distâncias por estação).
+(necessário para a comparação INMET × grade e as distâncias por estação).
 
 ```bash
 # baixe primeiro o mínimo das grades
@@ -201,15 +206,11 @@ era5 pipeline --dataset inmet --start-date 2000-01-01 --end-date 2026-12-31
 
 ### Comparação ERA5 × INMET
 
-```bash
-era5 era5-inmet --data-dir ./data \
-  -q "SELECT station_id, date, hour_utc, temp_ar,
-             era5_tl_temperature_2m, era5_land_tl_temperature_2m
-      FROM era5_inmet WHERE station_id = 'A001'"
-```
-
-Cria/consulta a VIEW `era5_inmet` (INMET juntado aos 4 vizinhos de grade
-do ERA5 e do ERA5-LAND, mesma data/hora). Sem `-q`, faz `SELECT *`.
+Não há mais um comando `era5 era5-inmet`. A comparação é criada pelo
+usuário na tela `/query`: abra o template **era5_inmet** (aba Templates),
+revise o SQL e clique em **Salvar VIEW**, ou monte-a pelo builder visual
+(JOIN por epsilon nas coordenadas). Depois é só consultar normalmente,
+ex.: `SELECT * FROM era5_inmet WHERE station_id = 'A001'`.
 
 ### Atualização incremental
 
@@ -318,7 +319,6 @@ a partir de `src/era5_etl/web/static/` (gerada no build).
 era5 convert   --dataset era5-land           # só conversão (NetCDF/CSV -> Parquet)
 era5 download  --dataset inmet               # só download (ZIP do portal INMET)
 era5 dedup     --dataset all                 # migração: dedupa parquets antigos
-era5 era5-inmet -q "SELECT * FROM era5_inmet LIMIT 50"   # comparação ERA5×INMET
 era5 ibge      -o ./data/ibge_locais.parquet # gera o Parquet IBGE
 ```
 
@@ -474,8 +474,7 @@ src/era5_etl/
 │   ├── manifest.py              # ChunkRecord, Manifest
 │   ├── parquet_manager.py       # escrita Parquet, view DuckDB
 │   ├── coverage.py              # _coverage.duckdb (grade)
-│   ├── stations.py              # _stations.duckdb (INMET)
-│   └── comparison.py            # VIEW era5_inmet
+│   └── stations.py              # _stations.duckdb (INMET)
 ├── pipeline/
 │   ├── era5_pipeline.py         # Template Method (download → convert → refresh)
 │   └── source_handlers.py       # SOURCE_KIND → (downloader, conversor, refresh)
@@ -639,33 +638,33 @@ próximo. Colunas: `era5_lat_top/lat_bottom/lon_left/lon_right` +
 de comparar, em vez de assumir o ponto mais próximo. O Parquet é gravado
 ordenado por `(date, hour_utc)` para pruning de row-group no DuckDB.
 
-### VIEW `era5_inmet`
+### VIEW `era5_inmet` (definida pelo usuário)
 
-`era5 era5-inmet --data-dir ./data` cria e consulta a view `era5_inmet`,
-que alinha cada observação de estação INMET com os **4 pontos de grade
-vizinhos** do ERA5 e do ERA5-LAND na **mesma data e hora (UTC)**, em uma
-única tabela achatada (`i.*` + colunas `era5_<tl|tr|bl|br>_<var>` /
-`era5_land_<...>` + as 8 distâncias para ponderar). Grades sem Parquet em
-disco são omitidas. Também disponível via API:
-`era5_etl.storage.comparison.create_era5_inmet_view(conn, base_dir)`.
+`era5_inmet` não é mais gerada em Python. Para criá-la, abra a tela
+`/query`, carregue o template **era5_inmet** (`era5-inmet-compare`, aba
+Templates), revise o SQL e clique em **Salvar VIEW** — ou monte-a no
+builder visual. Ela alinha cada observação de estação INMET com os **4
+pontos de grade vizinhos** do ERA5 e do ERA5-LAND na **mesma data e hora
+(UTC)** via join por epsilon nas coordenadas (`abs(a-b) < 1e-4`, pois
+coords Float32 nunca são exatamente iguais). Depois de salva, aparece no
+menu SCHEMA e é consultável como qualquer view:
 
-```bash
-era5 era5-inmet -q "
-  SELECT station_id, date, hour_utc,
-         temp_ar AS inmet_t2m,
-         era5_tl_temperature_2m, era5_tr_temperature_2m,
-         era5_bl_temperature_2m, era5_br_temperature_2m,
-         dist_era5_top_left, dist_era5_top_right,
-         dist_era5_bottom_left, dist_era5_bottom_right
-  FROM era5_inmet
-  WHERE station_id = 'A001' AND date = DATE '2000-10-05'
-"
+```sql
+SELECT station_id, date, hour_utc,
+       temp_ar AS inmet_t2m,
+       era5_tl_value, era5_tr_value,
+       era5_bl_value, era5_br_value,
+       dist_era5_top_left, dist_era5_top_right,
+       dist_era5_bottom_left, dist_era5_bottom_right
+FROM era5_inmet
+WHERE station_id = 'A001' AND date = DATE '2000-10-05';
 ```
 
 ### Tela de séries temporais (`/timeseries`)
 
 Notebook de gráficos para analisar/correlacionar séries temporais entre
-ERA5, ERA5-LAND, INMET e a view `era5_inmet`. Backend:
+ERA5, ERA5-LAND, INMET e quaisquer VIEWs do usuário (uma view chamada
+`era5_inmet`, se criada, é tratada como fonte por estação). Backend:
 `POST /api/timeseries` (1 query capada por série; combina `date`+
 `hour_utc` num timestamp UTC; bucket `raw|hour|day|month` com
 auto-coarsen se exceder o limite de pontos) e `GET /api/timeseries/meta`

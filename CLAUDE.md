@@ -36,11 +36,20 @@ a Typer CLI, and a FastAPI + React/Vite web UI.
   `era5_land_*`) — `NEIGHBOUR_COL_NAMES` in `inmet_to_parquet.py`, kept in
   `stations._META_COLS` so they're not counted as variables. Parquet is
   written **sorted by `(date, hour_utc)`** for row-group pruning.
-- **Cross-dataset comparison view.** `storage/comparison.py` builds
-  `era5_inmet` (CLI `era5 era5-inmet`): INMET joined to its 4
-  ERA5/ERA5-LAND grid neighbours on same `date`+`hour_utc` via an
-  **epsilon coord join** — Float32 grid coords are not exactly equal
-  (`-15.7` stores as `-15.6999998`); never `=` on them.
+- **User-defined views/macros (no hard-coded `era5_inmet`).** There is
+  **no** `storage/comparison.py` and no `era5 era5-inmet` CLI command.
+  Users compose their own DuckDB VIEWs/MACROs from the base views on the
+  `/query` page (SQL editor "Salvar VIEW" or the visual builder).
+  Definitions are SQL text persisted by `web/user_views_store.py`
+  (`user_views.json` next to `query_store.json`) and **replayed** onto
+  the per-request in-memory connection by `register_all_views` — parquet
+  stays immutable, no writable DuckDB file, no single-writer lock. CRUD +
+  `/preview` + `/build-sql` live in `web/routes/user_views.py`;
+  `web/sql_builder.py` is the single source of truth for builder→SQL and
+  mirrors the old **epsilon coord join** (`abs(a-b) < 1e-4`) — Float32
+  grid coords are not exactly equal (`-15.7` stores as `-15.6999998`),
+  never `=` on them. The old `era5_inmet` SQL survives only as the
+  read-only `era5-inmet-compare` template in `web/query_store.py`.
 - **Station index, not coverage index, for station sources.**
   `storage/stations.py` (`_stations.duckdb`) is the INMET analogue of the
   grid `CoverageIndex`. The pipeline runs `RefreshStationIndexStage` for
