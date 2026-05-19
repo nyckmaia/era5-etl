@@ -61,24 +61,23 @@ def register_all_views(conn, data_dir: Path) -> list[str]:
 def run_query(body: QueryIn, request: Request) -> QueryOut:
     import duckdb
 
+    from era5_etl.web.query_engine import query_conn
+
     _validate_sql(body.sql)
 
     data_dir: Path = request.app.state.data_dir
-    conn = duckdb.connect(":memory:")
     try:
-        registered = register_all_views(conn, data_dir)
-        if not registered:
-            raise HTTPException(
-                status_code=404,
-                detail="No Parquet data for any dataset yet.",
-            )
-        result = conn.execute(body.sql).fetch_arrow_table()
-        arrow_schema = result.schema
-        df = result.to_pandas()
+        with query_conn(data_dir) as (conn, registered):
+            if not registered:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No Parquet data for any dataset yet.",
+                )
+            result = conn.execute(body.sql).fetch_arrow_table()
+            arrow_schema = result.schema
+            df = result.to_pandas()
     except duckdb.Error as exc:
         raise HTTPException(status_code=400, detail=f"DuckDB error: {exc}") from exc
-    finally:
-        conn.close()
 
     # The full result is already materialized, so the true row count is
     # known exactly (no extra COUNT(*) probe needed). Expose it so the UI
@@ -112,34 +111,32 @@ def query_schema(dataset: str, request: Request) -> QuerySchemaOut:
     import duckdb
 
     from era5_etl.web._types import arrow_type_to_python
+    from era5_etl.web.query_engine import query_conn
 
     data_dir: Path = request.app.state.data_dir
 
     # A base dataset name (era5 / era5-land / inmet) maps to its view
     # name; anything else is treated as a view name directly (user-defined
-    # views/macros, replayed by register_all_views). Empty columns (HTTP
-    # 200, not 404) when the view isn't available yet so the UI can render
-    # gracefully before the first download / before the object is created.
+    # views/macros). Empty columns (HTTP 200, not 404) when the view isn't
+    # available yet so the UI can render gracefully before the first
+    # download / before the object is created.
     view = (
         view_name_for(dataset)
         if dataset in DatasetRegistry.names()
         else dataset
     )
 
-    conn = duckdb.connect(":memory:")
     try:
-        registered = register_all_views(conn, data_dir)
-        if view not in registered:
-            return QuerySchemaOut(view=view, columns=[])
-        schema = conn.execute(
-            f'SELECT * FROM "{view}" LIMIT 0'  # noqa: S608 -- sanitized ident
-        ).fetch_arrow_table().schema
+        with query_conn(data_dir) as (conn, registered):
+            if view not in registered:
+                return QuerySchemaOut(view=view, columns=[])
+            schema = conn.execute(
+                f'SELECT * FROM "{view}" LIMIT 0'  # noqa: S608 -- sanitized
+            ).fetch_arrow_table().schema
     except duckdb.Error as exc:
         raise HTTPException(
             status_code=400, detail=f"DuckDB error: {exc}"
         ) from exc
-    finally:
-        conn.close()
 
     return QuerySchemaOut(
         view=view,

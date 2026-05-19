@@ -9,24 +9,20 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from era5_etl.web.models import QueryIn
-from era5_etl.web.routes.query import _validate_sql, register_all_views
+from era5_etl.web.query_engine import query_conn
+from era5_etl.web.routes.query import _validate_sql
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
 
 def _run(sql: str, data_dir: Path):
-    import duckdb
-
     _validate_sql(sql)
-    conn = duckdb.connect(":memory:")
-    try:
-        if not register_all_views(conn, data_dir):
+    with query_conn(data_dir) as (conn, registered):
+        if not registered:
             raise HTTPException(
                 status_code=404, detail="No Parquet data for any dataset yet."
             )
         return conn.execute(sql).fetch_arrow_table()
-    finally:
-        conn.close()
 
 
 @router.post("/csv")

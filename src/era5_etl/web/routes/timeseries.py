@@ -29,7 +29,8 @@ from era5_etl.web.models import (
     TSSeriesOut,
     TSViewMetaOut,
 )
-from era5_etl.web.routes.query import _validate_sql, register_all_views
+from era5_etl.web.query_engine import query_conn
+from era5_etl.web.routes.query import _validate_sql
 from era5_etl.web.timeseries_sql import (
     location_where,
     run_series_with_cap,
@@ -46,16 +47,6 @@ _NON_VARIABLE_COLS = frozenset(
 
 # view name -> registered DatasetConfig name (era5_land view <-> era5-land).
 _VIEW_DATASET = {"era5": "era5", "era5_land": "era5-land", "inmet": "inmet"}
-
-
-def _register_timeseries_views(conn, data_dir: Path) -> set[str]:
-    """Register era5/era5_land/inmet plus any user-defined views/macros.
-
-    A view named ``era5_inmet`` is still treated as a station source by
-    :mod:`era5_etl.web.timeseries_sql` (name-based) if the user creates
-    one — there is no longer a Python-generated comparison view.
-    """
-    return set(register_all_views(conn, data_dir))
 
 
 def _view_columns(conn, view: str) -> list[tuple[str, str]]:
@@ -107,14 +98,10 @@ def _date_range(data_dir: Path, view: str) -> tuple[str | None, str | None]:
 def meta(request: Request) -> TimeseriesMetaOut:
     """Per available view: numeric Y columns, location kind, date range,
     grid resolution. Empty (HTTP 200) before any data is downloaded."""
-    import duckdb
-
     data_dir: Path = request.app.state.data_dir
-    conn = duckdb.connect(":memory:")
     out: list[TSViewMetaOut] = []
-    try:
-        registered = _register_timeseries_views(conn, data_dir)
-        for view in sorted(registered):
+    with query_conn(data_dir) as (conn, registered):
+        for view in sorted(set(registered)):
             cols = _view_columns(conn, view)
             numeric = [
                 SchemaColumn(name=n, type=t)
@@ -141,8 +128,6 @@ def meta(request: Request) -> TimeseriesMetaOut:
                     grid_resolution=grid_res,
                 )
             )
-    finally:
-        conn.close()
     return TimeseriesMetaOut(views=out)
 
 
@@ -162,8 +147,6 @@ def _location_label(loc) -> str:
 
 @router.post("", response_model=TimeseriesOut)
 def run(body: TimeseriesIn, request: Request) -> TimeseriesOut:
-    import duckdb
-
     try:
         d_from = dt.date.fromisoformat(body.date_from)
         d_to = dt.date.fromisoformat(body.date_to)
@@ -173,11 +156,10 @@ def run(body: TimeseriesIn, request: Request) -> TimeseriesOut:
         ) from exc
 
     data_dir: Path = request.app.state.data_dir
-    conn = duckdb.connect(":memory:")
     series_out: list[TSSeriesOut] = []
     truncated = False
-    try:
-        registered = _register_timeseries_views(conn, data_dir)
+    with query_conn(data_dir) as (conn, registered_list):
+        registered = set(registered_list)
         col_cache: dict[str, set[str]] = {}
         for s in body.series:
             label = _location_label(s.location)
@@ -226,8 +208,6 @@ def run(body: TimeseriesIn, request: Request) -> TimeseriesOut:
             base.error = res.error
             truncated = truncated or res.downsampled
             series_out.append(base)
-    finally:
-        conn.close()
 
     return TimeseriesOut(
         series=series_out,

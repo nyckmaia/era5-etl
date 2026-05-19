@@ -1,10 +1,10 @@
 """CRUD + preview + visual-builder SQL for user-defined views/macros.
 
 Definitions are persisted by :mod:`era5_etl.web.user_views_store` and
-replayed onto the per-request in-memory connection by
-:func:`era5_etl.web.routes.query.register_all_views`. Validation runs the
-DDL against a throwaway connection (base views registered) so a bad
-definition is rejected at save time, not silently at query time.
+replayed onto the process-cached connection by
+:mod:`era5_etl.web.query_engine`. Validation compiles the DDL against
+that connection inside a rolled-back transaction, so a bad definition is
+rejected at save time without rebuilding the (expensive) base views.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from era5_etl.web.models import (
     UserObjectIn,
     UserObjectOut,
 )
-from era5_etl.web.routes.query import register_all_views
+from era5_etl.web.query_engine import query_conn, user_object_status, validate_conn
 from era5_etl.web.sql_builder import build_view_sql
 
 router = APIRouter(prefix="/api/user-views", tags=["user-views"])
@@ -49,38 +49,32 @@ def _columns_for(conn, name: str) -> list[SchemaColumn]:
 def _validate_against_db(
     data_dir: Path, name: str, kind: str, sql: str
 ) -> list[SchemaColumn]:
-    """Execute ``sql`` on a throwaway connection with base views
-    registered. Raises HTTP 400 if it fails. Returns the resulting view
-    columns (empty for macros / non-introspectable objects)."""
-    conn = duckdb.connect(":memory:")
+    """Compile ``sql`` against the cached connection inside a rolled-back
+    transaction (base views are reused, never rebuilt). Raises HTTP 400
+    if it fails. Returns the resulting view columns (empty for macros /
+    non-introspectable objects)."""
     try:
-        register_all_views(conn, data_dir)
-        conn.execute(sql)
-        if kind != "view":
-            return []
-        try:
-            return _columns_for(conn, name)
-        except duckdb.Error:
-            return []
+        with validate_conn(data_dir) as conn:
+            conn.execute(sql)
+            if kind != "view":
+                return []
+            try:
+                return _columns_for(conn, name)
+            except duckdb.Error:
+                return []
     except duckdb.Error as exc:
         raise HTTPException(
             status_code=400, detail=f"DuckDB error: {exc}"
         ) from exc
-    finally:
-        conn.close()
 
 
 @router.get("", response_model=list[UserObjectOut])
 def list_user_views(request: Request) -> list[UserObjectOut]:
     data_dir: Path = request.app.state.data_dir
-    conn = duckdb.connect(":memory:")
     out: list[UserObjectOut] = []
-    try:
-        register_all_views(conn, data_dir)
-        # register_all_views already replayed the user objects; rerun the
-        # store directly so we get per-object ok/error + can introspect
-        # columns while the connection is still open.
-        for r in store.register_user_objects(conn):
+    status = user_object_status(data_dir)
+    with query_conn(data_dir) as (conn, _registered):
+        for r in status:
             cols: list[SchemaColumn] = []
             if r["ok"] and r["kind"] == "view":
                 try:
@@ -98,8 +92,6 @@ def list_user_views(request: Request) -> list[UserObjectOut]:
                     columns=cols,
                 )
             )
-    finally:
-        conn.close()
     return out
 
 
