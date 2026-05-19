@@ -5,6 +5,7 @@ import {
   Download,
   Loader2,
   Play,
+  Save,
   SlidersHorizontal,
   WandSparkles,
 } from "lucide-react";
@@ -15,9 +16,11 @@ import { toast } from "sonner";
 import { QueryBuilderPanel } from "@/components/query/QueryBuilderPanel";
 import { QueryTabsBar, type PersistedTab } from "@/components/query/QueryTabsBar";
 import { RightSidebar } from "@/components/query/RightSidebar";
+import { SaveObjectDialog } from "@/components/query/SaveObjectDialog";
 import { SchemaSidebar } from "@/components/query/SchemaSidebar";
+import { ViewBuilderModal } from "@/components/query/ViewBuilderModal";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { api, type ColumnPrecision } from "@/lib/api";
+import { api, type ColumnPrecision, type UserObject } from "@/lib/api";
 import { cn } from "@/lib/format";
 
 const SqlEditor = lazy(() => import("@/components/SqlEditor"));
@@ -54,6 +57,13 @@ export function QueryPage() {
     queryKey: ["datasets"],
     queryFn: api.datasets,
   });
+  const { data: userObjects } = useQuery({
+    queryKey: ["user-views"],
+    queryFn: () => api.userViews.list(),
+  });
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<UserObject | null>(null);
 
   // Focused dataset: drives autocomplete/builder/history bucket/precision.
   // It does NOT scope query execution (M02a: every view is registered).
@@ -259,17 +269,21 @@ export function QueryPage() {
 
       <div className="card flex min-h-0 flex-1 overflow-hidden p-0">
         <SchemaSidebar
-          datasets={[
-            ...(datasets?.map((d) => d.name) ?? []),
-            // era5_inmet is a derived cross-dataset view (not a registered
-            // dataset); show it so its columns are browsable/insertable.
-            ...(datasets && datasets.length ? ["era5_inmet"] : []),
-          ]}
+          datasets={datasets?.map((d) => d.name) ?? []}
+          userObjects={userObjects ?? []}
           collapsed={leftCollapsed}
           onToggle={() => setLeftCollapsed((c) => !c)}
           onInsert={(text) =>
             updateActiveSql(activeTab ? `${activeTab.sql} ${text}` : text)
           }
+          onNewView={() => {
+            setEditTarget(null);
+            setBuilderOpen(true);
+          }}
+          onEditView={(o) => {
+            setEditTarget(o);
+            setBuilderOpen(true);
+          }}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -374,6 +388,18 @@ export function QueryPage() {
                 >
                   <Download className="h-4 w-4" />
                   Parquet
+                </button>
+                <button
+                  className="btn-outline"
+                  onClick={() => {
+                    setEditTarget(null);
+                    setSaveOpen(true);
+                  }}
+                  disabled={!activeTab}
+                  title="Salvar a SQL atual como VIEW/MACRO"
+                >
+                  <Save className="h-4 w-4" />
+                  Salvar VIEW
                 </button>
                 <button
                   className="btn-primary"
@@ -502,6 +528,19 @@ export function QueryPage() {
           onLoad={(sql) => updateActiveSql(sql)}
         />
       </div>
+
+      <SaveObjectDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        initialSql={activeTab?.sql ?? ""}
+        editing={editTarget}
+      />
+      <ViewBuilderModal
+        open={builderOpen}
+        onOpenChange={setBuilderOpen}
+        datasets={datasets?.map((d) => d.name) ?? []}
+        editing={editTarget}
+      />
     </div>
   );
 }
