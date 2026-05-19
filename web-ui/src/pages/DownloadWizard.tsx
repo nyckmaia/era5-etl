@@ -287,13 +287,15 @@ function StepDataset({
               ? "ERA5"
               : d.name === "era5-land"
                 ? "ERA5-LAND"
-                : d.name;
+                : d.name.toUpperCase();
           const description =
             d.name === "era5"
               ? "Atmospheric reanalysis on 0.25° grid -- temperature, pressure, wind, radiation, clouds."
               : d.name === "era5-land"
                 ? "Land-surface reanalysis on 0.1° grid -- soil temperature, soil moisture, surface fluxes."
-                : d.cds_dataset_id;
+                : d.name === "inmet"
+                  ? "Estações meteorológicas do INMET (Brasil) -- 1 ZIP por ano, todas as estações."
+                  : d.cds_dataset_id || "Fonte de dados.";
 
           return (
             <button

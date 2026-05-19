@@ -417,6 +417,40 @@ class InmetToParquetConverter:
             return int(m.group(1))
         raise ProcessingError(f"Could not determine year for {csv_path.name}")
 
+    def _remove_empty_temp_tree(self, input_dir: Path) -> None:
+        """Remove the now-empty extracted-CSV tree under ``input_dir``.
+
+        After a successful cleanup run only empty ``<year>/`` dirs remain.
+        Walk bottom-up removing empty dirs, then ``input_dir`` itself
+        (``_tmp_netcdf/inmet``) and its ``_tmp_netcdf`` parent if they end
+        up empty -- using ``rmdir`` so a dir still holding a kept/failed
+        file is left untouched (mirrors the NetCDF converter).
+        """
+        import os
+
+        from era5_etl.storage.paths import NETCDF_TMP_DIRNAME
+
+        for root, _dirs, _files in os.walk(input_dir, topdown=False):
+            p = Path(root)
+            if p == input_dir:
+                continue
+            try:
+                p.rmdir()  # only succeeds if empty
+            except OSError:
+                pass
+        try:
+            input_dir.rmdir()
+            self.logger.info("Removed empty temp dir %s", input_dir)
+        except OSError:
+            return  # something still in it -- keep it
+        parent = input_dir.parent
+        if parent.name == NETCDF_TMP_DIRNAME:
+            try:
+                parent.rmdir()
+                self.logger.info("Removed empty temp dir %s", parent)
+            except OSError:
+                pass  # another dataset's temp dir still present
+
     # -- directory -------------------------------------------------------
 
     def convert_directory(
@@ -488,6 +522,14 @@ class InmetToParquetConverter:
             stats["converted"],
             stats["failed"],
         )
+
+        # After a fully successful cleanup run, the per-file unlink above
+        # left empty ``<year>/`` dirs behind (e.g. _tmp_netcdf/inmet/2026).
+        # Remove the now-empty temp tree so nothing is left over. Skipped
+        # when any file failed -- those CSVs were intentionally kept.
+        if cleanup and not errors:
+            self._remove_empty_temp_tree(input_dir)
+
         if errors and raise_on_error:
             detail = "\n".join(
                 f"  - {e['file']}: {e['error']}" for e in errors
