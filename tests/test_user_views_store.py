@@ -48,12 +48,23 @@ def test_duplicate_name_rejected():
 
 
 def test_reserved_name_rejected():
-    for reserved in ("era5", "era5_land", "inmet", "era5_inmet"):
+    for reserved in ("era5", "era5_land", "inmet"):
         with pytest.raises(store.UserObjectError):
             store.add_object(
                 name=reserved, kind="view",
                 sql=f"CREATE OR REPLACE VIEW {reserved} AS SELECT 1",
             )
+
+
+def test_era5_inmet_is_not_reserved():
+    # era5_inmet is a user-created view (see the era5-inmet-compare
+    # template), not a Parquet-backed base view.
+    obj = store.add_object(
+        name="era5_inmet",
+        kind="view",
+        sql="CREATE OR REPLACE VIEW era5_inmet AS SELECT 1 AS a",
+    )
+    assert obj["name"] == "era5_inmet"
 
 
 def test_unsafe_sql_rejected():

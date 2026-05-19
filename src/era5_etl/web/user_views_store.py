@@ -73,11 +73,13 @@ def _save(data: dict[str, Any]) -> None:
 
 
 def _reserved_names() -> set[str]:
+    # Only the Parquet-backed base views are reserved. `era5_inmet` is
+    # NOT reserved — it is a user-created view (the era5-inmet-compare
+    # template exists precisely so the user can save it under that name).
     return {view_name_for(n) for n in DatasetRegistry.names()} | {
         "era5",
         "era5_land",
         "inmet",
-        "era5_inmet",
     }
 
 
