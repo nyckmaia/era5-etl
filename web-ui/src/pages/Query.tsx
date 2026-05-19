@@ -175,12 +175,31 @@ export function QueryPage() {
       }
       toast.error(msg || "Erro ao executar a query");
     },
-    onSuccess: (r) =>
-      r.truncated
-        ? toast.warning(
-            `Exibindo ${r.row_count.toLocaleString()} de ${r.total_rows.toLocaleString()} linhas (resultado truncado)`,
-          )
-        : toast.success(`${r.row_count.toLocaleString()} linhas`),
+    onSuccess: (r) => {
+      // DDL through Run query (CREATE VIEW/MACRO) returns a 1-row status
+      // table. Surface a friendly toast AND refresh the SCHEMA sidebar
+      // so the new/updated object shows up under Minhas views & macros.
+      const isDdlStatus =
+        r.columns.length === 3 &&
+        r.columns[0] === "object" &&
+        r.columns[1] === "name" &&
+        r.columns[2] === "status" &&
+        r.rows.length === 1;
+      if (isDdlStatus) {
+        const [kind, name, action] = r.rows[0] as [string, string, string];
+        qc.invalidateQueries({ queryKey: ["user-views"] });
+        qc.invalidateQueries({ queryKey: ["query-schema"] });
+        toast.success(`${kind} "${name}" ${action}`);
+        return;
+      }
+      if (r.truncated) {
+        toast.warning(
+          `Exibindo ${r.row_count.toLocaleString()} de ${r.total_rows.toLocaleString()} linhas (resultado truncado)`,
+        );
+      } else {
+        toast.success(`${r.row_count.toLocaleString()} linhas`);
+      }
+    },
   });
 
   function updateActiveSql(sql: string, userEdited = true) {
