@@ -207,6 +207,34 @@ export interface PrecisionConfig {
   columns: Record<string, ColumnPrecision>;
 }
 
+export interface UserObject {
+  id: string;
+  name: string;
+  kind: "view" | "macro";
+  sql: string;
+  ok: boolean;
+  error: string | null;
+  columns: { name: string; type: string }[];
+}
+
+export interface BuildSpec {
+  name: string;
+  join_type: "INNER" | "LEFT";
+  sources: { view: string; alias: string; columns: string[] }[];
+  joins: {
+    left: string;
+    right: string;
+    approx: boolean;
+    epsilon: number;
+  }[];
+}
+
+export interface UserObjectPreview {
+  ok: boolean;
+  error: string | null;
+  columns: { name: string; type: string }[];
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, {
     ...init,
@@ -390,6 +418,34 @@ export const api = {
     uf: () => request<UfBbox[]>("/api/regions/uf"),
   },
   queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
+  userViews: {
+    list: () => request<UserObject[]>("/api/user-views"),
+    create: (b: { name: string; kind: string; sql: string }) =>
+      request<UserObject>("/api/user-views", {
+        method: "POST",
+        body: JSON.stringify(b),
+      }),
+    update: (id: string, b: { name: string; kind: string; sql: string }) =>
+      request<UserObject>(`/api/user-views/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(b),
+      }),
+    del: (id: string) =>
+      request<{ ok: boolean }>(
+        `/api/user-views/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    preview: (b: { name: string; kind: string; sql: string }) =>
+      request<UserObjectPreview>("/api/user-views/preview", {
+        method: "POST",
+        body: JSON.stringify(b),
+      }),
+    buildSql: (spec: BuildSpec) =>
+      request<{ sql: string }>("/api/user-views/build-sql", {
+        method: "POST",
+        body: JSON.stringify(spec),
+      }),
+  },
   queryHistory: {
     list: (view: string) =>
       request<QueryHistoryEntry[]>(
