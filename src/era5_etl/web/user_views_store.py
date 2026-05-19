@@ -185,6 +185,15 @@ def list_objects() -> list[dict[str, Any]]:
         return list(_load()["objects"])
 
 
+def find_by_name(name: str) -> dict[str, Any] | None:
+    """Case-insensitive lookup. Returns ``None`` if no match."""
+    target = name.lower()
+    for o in list_objects():
+        if o["name"].lower() == target:
+            return o
+    return None
+
+
 def register_user_objects(conn) -> list[dict[str, Any]]:
     """Replay every stored object onto ``conn`` (base views must already
     be registered).

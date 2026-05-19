@@ -20,6 +20,38 @@ _DENIED_PATTERNS = [
     re.compile(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|ATTACH|DETACH|COPY|EXPORT|PRAGMA)\b", re.IGNORECASE),
 ]
 
+# DDL the SQL editor's Run query button is allowed to run: a single
+# ``CREATE [OR REPLACE] [TEMP] VIEW|MACRO <name> ...`` statement. The
+# match captures the object kind + name so we can persist it under
+# Minhas views & macros.
+_DDL_NAME_RE = re.compile(
+    r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(VIEW|MACRO)\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?"
+    r'(?:"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))',
+    re.IGNORECASE | re.DOTALL,
+)
+_LEADING_COMMENT_RE = re.compile(r"(?:\s+|--[^\n]*\n|/\*.*?\*/)+", re.DOTALL)
+_CREATE_PREFIX_RE = re.compile(
+    r"^(\s*)CREATE\s+(?:OR\s+REPLACE\s+)?(TEMP(?:ORARY)?\s+)?(VIEW|MACRO)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_leading_comments(sql: str) -> str:
+    """Drop leading whitespace + ``-- line`` / ``/* block */`` comments."""
+    m = _LEADING_COMMENT_RE.match(sql)
+    return sql[m.end():] if m and m.start() == 0 else sql
+
+
+def _normalize_ddl(sql: str) -> str:
+    """Rewrite the leading clause to ``CREATE OR REPLACE`` so replays of
+    the persisted SQL stay idempotent regardless of what the user typed."""
+    return _CREATE_PREFIX_RE.sub(
+        lambda m: f"{m.group(1)}CREATE OR REPLACE {m.group(2) or ''}{m.group(3)}",
+        sql,
+        count=1,
+    )
+
 
 def _validate_sql(sql: str) -> None:
     if not _ALLOWED_PREFIX_RE.search(sql):
@@ -63,15 +95,97 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
 
     import duckdb
 
+    from era5_etl.web import user_views_store as uvs
     from era5_etl.web.query_engine import get_engine, query_conn
     from era5_etl.web.user_config import load_user_config
-
-    _validate_sql(body.sql)
 
     data_dir: Path = request.app.state.data_dir
     timeout_s = max(0, int(load_user_config().query_timeout_s))
     eng = get_engine(data_dir)
     timer_fired = {"v": False}
+
+    def _make_timer():
+        def _on_timeout() -> None:
+            timer_fired["v"] = True
+            try:
+                eng.conn.interrupt()
+            except Exception:  # noqa: BLE001
+                pass
+
+        t = (
+            threading.Timer(timeout_s, _on_timeout)
+            if timeout_s > 0
+            else None
+        )
+        if t is not None:
+            t.daemon = True
+            t.start()
+        return t
+
+    def _map_duckdb_error(exc: duckdb.Error) -> HTTPException:
+        if eng.cancel_requested:
+            return HTTPException(
+                status_code=499, detail="Query cancelada pelo usuário."
+            )
+        if timer_fired["v"] or "interrupt" in str(exc).lower():
+            return HTTPException(
+                status_code=408,
+                detail=f"Tempo limite excedido ({timeout_s}s).",
+            )
+        return HTTPException(status_code=400, detail=f"DuckDB error: {exc}")
+
+    # ------------------------------------------------------------------
+    # DDL through Run query: a single CREATE [OR REPLACE] VIEW/MACRO is
+    # accepted, executed, and persisted under Minhas views & macros so it
+    # shows up in the SCHEMA sidebar (and survives restart).
+    # ------------------------------------------------------------------
+    ddl_m = _DDL_NAME_RE.match(_strip_leading_comments(body.sql))
+    if ddl_m:
+        kind = ddl_m.group(1).lower()
+        name = ddl_m.group(2) or ddl_m.group(3)
+        try:
+            uvs.validate_ddl(name, kind, body.sql)
+        except uvs.UserObjectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            with query_conn(data_dir) as (conn, _registered):
+                eng.cancel_requested = False
+                timer = _make_timer()
+                try:
+                    conn.execute(body.sql)
+                finally:
+                    if timer is not None:
+                        timer.cancel()
+        except duckdb.Error as exc:
+            raise _map_duckdb_error(exc) from exc
+
+        # Persist the OR REPLACE form so subsequent engine resyncs stay
+        # idempotent even if the user typed plain `CREATE VIEW x`.
+        normalized = _normalize_ddl(body.sql)
+        existing = uvs.find_by_name(name)
+        try:
+            if existing is not None:
+                uvs.update_object(
+                    existing["id"], name=name, kind=kind, sql=normalized
+                )
+                action = "atualizado"
+            else:
+                uvs.add_object(name=name, kind=kind, sql=normalized)
+                action = "criado"
+        except uvs.UserObjectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return QueryOut(
+            columns=["object", "name", "status"],
+            column_types=["str", "str", "str"],
+            rows=[[kind.upper(), name, action]],
+            row_count=1,
+            truncated=False,
+            total_rows=1,
+        )
+
+    _validate_sql(body.sql)
 
     try:
         with query_conn(data_dir) as (conn, registered):
@@ -83,22 +197,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
             # Reset the cancel flag inside the lock so a late-arriving
             # /api/query/cancel can only affect THIS execution.
             eng.cancel_requested = False
-
-            def _on_timeout() -> None:
-                timer_fired["v"] = True
-                try:
-                    eng.conn.interrupt()
-                except Exception:  # noqa: BLE001
-                    pass
-
-            timer = (
-                threading.Timer(timeout_s, _on_timeout)
-                if timeout_s > 0
-                else None
-            )
-            if timer is not None:
-                timer.daemon = True
-                timer.start()
+            timer = _make_timer()
             try:
                 result = conn.execute(body.sql).fetch_arrow_table()
                 arrow_schema = result.schema
@@ -107,19 +206,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
                 if timer is not None:
                     timer.cancel()
     except duckdb.Error as exc:
-        if eng.cancel_requested:
-            raise HTTPException(
-                status_code=499, detail="Query cancelada pelo usuário."
-            ) from exc
-        msg = str(exc).lower()
-        if timer_fired["v"] or "interrupt" in msg:
-            raise HTTPException(
-                status_code=408,
-                detail=f"Tempo limite excedido ({timeout_s}s).",
-            ) from exc
-        raise HTTPException(
-            status_code=400, detail=f"DuckDB error: {exc}"
-        ) from exc
+        raise _map_duckdb_error(exc) from exc
 
     # The full result is already materialized, so the true row count is
     # known exactly (no extra COUNT(*) probe needed). Expose it so the UI
