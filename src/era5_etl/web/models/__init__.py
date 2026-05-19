@@ -85,11 +85,13 @@ class PathValidationOut(BaseModel):
 class UserConfigOut(BaseModel):
     data_dir: str
     default_dataset: str
+    query_timeout_s: int = 10
 
 
 class UserConfigIn(BaseModel):
     data_dir: str | None = None
     default_dataset: str | None = None
+    query_timeout_s: int | None = None
 
 
 class ColumnPrecision(BaseModel):

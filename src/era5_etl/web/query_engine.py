@@ -40,6 +40,23 @@ class _Engine:
         self._user_sig: tuple | None = None
         self._user_results: list[dict[str, Any]] = []
         self._user_names: set[str] = set()
+        #: Set by :func:`cancel` so the request handler can distinguish a
+        #: user-initiated abort from a timeout-initiated one.
+        self.cancel_requested = False
+
+    def cancel(self) -> None:
+        """Interrupt the currently running query.
+
+        Safe to call from a thread that does NOT hold :attr:`lock` (that
+        is the whole point — it lets ``POST /api/query/cancel`` abort the
+        query that is currently holding the lock). DuckDB's
+        ``interrupt()`` is documented as thread-safe.
+        """
+        self.cancel_requested = True
+        try:
+            self.conn.interrupt()
+        except Exception:  # noqa: BLE001 -- best-effort interrupt
+            pass
 
     def _ensure_base(self) -> None:
         still_missing: set[str] = set()
@@ -107,6 +124,20 @@ def query_conn(data_dir: str | Path):
         eng._ensure_base()
         eng._ensure_user()
         yield eng.conn, eng.registered()
+
+
+def get_engine(data_dir: str | Path) -> _Engine:
+    """Return the cached engine for ``data_dir`` (creating it on demand).
+
+    Public so :mod:`era5_etl.web.routes.query` can install a timer + read
+    the cancel flag for the timeout/cancel logic.
+    """
+    return _engine(data_dir)
+
+
+def cancel(data_dir: str | Path) -> None:
+    """Interrupt whichever query the cached engine is currently running."""
+    _engine(data_dir).cancel()
 
 
 def user_object_status(data_dir: str | Path) -> list[dict[str, Any]]:

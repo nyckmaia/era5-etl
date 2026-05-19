@@ -59,13 +59,20 @@ def register_all_views(conn, data_dir: Path) -> list[str]:
 
 @router.post("", response_model=QueryOut)
 def run_query(body: QueryIn, request: Request) -> QueryOut:
+    import threading
+
     import duckdb
 
-    from era5_etl.web.query_engine import query_conn
+    from era5_etl.web.query_engine import get_engine, query_conn
+    from era5_etl.web.user_config import load_user_config
 
     _validate_sql(body.sql)
 
     data_dir: Path = request.app.state.data_dir
+    timeout_s = max(0, int(load_user_config().query_timeout_s))
+    eng = get_engine(data_dir)
+    timer_fired = {"v": False}
+
     try:
         with query_conn(data_dir) as (conn, registered):
             if not registered:
@@ -73,11 +80,46 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
                     status_code=404,
                     detail="No Parquet data for any dataset yet.",
                 )
-            result = conn.execute(body.sql).fetch_arrow_table()
-            arrow_schema = result.schema
-            df = result.to_pandas()
+            # Reset the cancel flag inside the lock so a late-arriving
+            # /api/query/cancel can only affect THIS execution.
+            eng.cancel_requested = False
+
+            def _on_timeout() -> None:
+                timer_fired["v"] = True
+                try:
+                    eng.conn.interrupt()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            timer = (
+                threading.Timer(timeout_s, _on_timeout)
+                if timeout_s > 0
+                else None
+            )
+            if timer is not None:
+                timer.daemon = True
+                timer.start()
+            try:
+                result = conn.execute(body.sql).fetch_arrow_table()
+                arrow_schema = result.schema
+                df = result.to_pandas()
+            finally:
+                if timer is not None:
+                    timer.cancel()
     except duckdb.Error as exc:
-        raise HTTPException(status_code=400, detail=f"DuckDB error: {exc}") from exc
+        if eng.cancel_requested:
+            raise HTTPException(
+                status_code=499, detail="Query cancelada pelo usuário."
+            ) from exc
+        msg = str(exc).lower()
+        if timer_fired["v"] or "interrupt" in msg:
+            raise HTTPException(
+                status_code=408,
+                detail=f"Tempo limite excedido ({timeout_s}s).",
+            ) from exc
+        raise HTTPException(
+            status_code=400, detail=f"DuckDB error: {exc}"
+        ) from exc
 
     # The full result is already materialized, so the true row count is
     # known exactly (no extra COUNT(*) probe needed). Expose it so the UI
@@ -148,3 +190,18 @@ def query_schema(dataset: str, request: Request) -> QuerySchemaOut:
             for i in range(len(schema))
         ],
     )
+
+
+@router.post("/cancel")
+def cancel_query(request: Request) -> dict[str, bool]:
+    """Interrupt whichever query is currently executing on this data_dir.
+
+    No-op if nothing is running. The matching ``/api/query`` request
+    returns HTTP 499 so the UI can show a "cancelled" message. Does NOT
+    acquire the engine lock — that is the whole point.
+    """
+    from era5_etl.web.query_engine import cancel as _cancel
+
+    data_dir: Path = request.app.state.data_dir
+    _cancel(data_dir)
+    return {"ok": True}

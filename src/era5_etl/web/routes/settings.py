@@ -29,14 +29,18 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 @router.get("", response_model=UserConfigOut)
 def get_settings() -> UserConfigOut:
     cfg = load_user_config()
-    return UserConfigOut(data_dir=cfg.data_dir, default_dataset=cfg.default_dataset)
+    return UserConfigOut(
+        data_dir=cfg.data_dir,
+        default_dataset=cfg.default_dataset,
+        query_timeout_s=cfg.query_timeout_s,
+    )
 
 
 @router.post("", response_model=UserConfigOut)
 def save_settings(body: UserConfigIn, request: Request) -> UserConfigOut:
     from era5_etl.storage.paths import STORAGE_ROOT_DIRNAME
 
-    changes: dict[str, str] = {}
+    changes: dict[str, object] = {}
     if body.data_dir is not None:
         # Reject empty / clearly broken paths early.
         if not body.data_dir.strip():
@@ -53,9 +57,20 @@ def save_settings(body: UserConfigIn, request: Request) -> UserConfigOut:
         request.app.state.data_dir = resolved
     if body.default_dataset is not None:
         changes["default_dataset"] = body.default_dataset
+    if body.query_timeout_s is not None:
+        if body.query_timeout_s < 0 or body.query_timeout_s > 3600:
+            raise HTTPException(
+                status_code=400,
+                detail="query_timeout_s must be between 0 and 3600 (seconds).",
+            )
+        changes["query_timeout_s"] = int(body.query_timeout_s)
 
-    cfg = update_user_config(**changes)  # type: ignore[arg-type]
-    return UserConfigOut(data_dir=cfg.data_dir, default_dataset=cfg.default_dataset)
+    cfg = update_user_config(**changes)
+    return UserConfigOut(
+        data_dir=cfg.data_dir,
+        default_dataset=cfg.default_dataset,
+        query_timeout_s=cfg.query_timeout_s,
+    )
 
 
 @router.get("/validate-path", response_model=PathValidationOut)

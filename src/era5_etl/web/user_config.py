@@ -31,6 +31,9 @@ class UserConfig:
     data_dir: str = ""
     default_dataset: str = "era5-land"
     last_pick_dir: str = ""
+    #: Seconds after which a Run query is interrupted server-side. The
+    #: ``/query`` page exposes this in Settings; ``0`` disables the timer.
+    query_timeout_s: int = 10
     # Per-dataset display precision (Melhoria 02b). Render-only -- never
     # mutates stored data. Shape:
     #   {<dataset>: {"default_decimals": int, "default_method": "round"|"truncate",
@@ -68,10 +71,15 @@ def load_user_config() -> UserConfig:
         logger.warning("Failed to read %s: %s -- using defaults", path, exc)
         return UserConfig()
     dp = data.get("display_precision", {})
+    try:
+        timeout = int(data.get("query_timeout_s", 10))
+    except (TypeError, ValueError):
+        timeout = 10
     return UserConfig(
         data_dir=str(data.get("data_dir", "")),
         default_dataset=str(data.get("default_dataset", "era5-land")),
         last_pick_dir=str(data.get("last_pick_dir", "")),
+        query_timeout_s=max(0, timeout),
         display_precision=dp if isinstance(dp, dict) else {},
     )
 
@@ -94,7 +102,7 @@ def update_user_config(**changes: object) -> UserConfig:
     """
     current = load_user_config()
     applied = {
-        k: (v if isinstance(v, dict) else str(v))
+        k: (v if isinstance(v, (dict, int, float, bool)) else str(v))
         for k, v in changes.items()
         if hasattr(current, k)
     }
