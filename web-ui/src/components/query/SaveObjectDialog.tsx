@@ -84,9 +84,13 @@ export function SaveObjectDialog({
       editing
         ? api.userViews.update(editing.id, { name, kind, sql: prettySql })
         : api.userViews.create({ name, kind, sql: prettySql }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["user-views"] });
-      qc.invalidateQueries({ queryKey: ["query-schema"] });
+    onSuccess: async () => {
+      // Refresh the SCHEMA sidebar before closing so the new/renamed
+      // object is visible the moment the dialog disappears.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["user-views"] }),
+        qc.invalidateQueries({ queryKey: ["query-schema"] }),
+      ]);
       toast.success(
         editing ? `"${name}" atualizado` : `"${name}" salvo no SCHEMA`,
       );

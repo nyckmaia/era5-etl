@@ -4,7 +4,12 @@ import { Check, Copy, Loader2, Plus, Trash2, X } from "lucide-react";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { api, type BuildSpec, type UserObject } from "@/lib/api";
+import {
+  api,
+  type BuildSpec,
+  type UserObject,
+  type UserObjectBody,
+} from "@/lib/api";
 import { cn } from "@/lib/format";
 import { formatSql } from "@/lib/sql";
 
@@ -64,16 +69,65 @@ export function ViewBuilderModal({
   } | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setName(editing?.name ?? "");
-      setPicked([]);
-      setCols({});
-      setJoins({});
-      setJoinType("LEFT");
-      setSql("");
-      setPreview(null);
+    if (!open) return;
+    setPreview(null);
+    // Editing AND we have a builder snapshot → fully re-hydrate the
+    // sources/columns/joins state so the form matches what produced the
+    // saved SQL.
+    if (editing?.builder_spec && editing.builder_spec.sources.length) {
+      const bs = editing.builder_spec;
+      const datasetFor = (v: string) =>
+        datasets.find((d) => d.replace(/-/g, "_") === v) ?? v;
+      const order = bs.sources.map((s) => datasetFor(s.view));
+      setPicked(order);
+      const newCols: Record<string, string[]> = {};
+      bs.sources.forEach((s, i) => {
+        newCols[order[i]] = [...s.columns];
+      });
+      setCols(newCols);
+      setJoinType(bs.join_type);
+
+      // Re-run aliasFor so aliases stay deterministic with the current
+      // picked order; remap stored joins from old aliases to new ones.
+      const taken = new Set<string>();
+      const newAliases: Record<string, string> = {};
+      for (const v of order) newAliases[v] = aliasFor(v, taken);
+      const oldToNew: Record<string, string> = {};
+      bs.sources.forEach((s, i) => {
+        oldToNew[s.alias] = newAliases[order[i]];
+      });
+      const newJoins: Record<string, JoinRow[]> = {};
+      for (const j of bs.joins ?? []) {
+        const [oldRA, rightCol] = j.right.split(".");
+        const [oldLA, leftCol] = j.left.split(".");
+        const ra = oldToNew[oldRA] ?? oldRA;
+        const la = oldToNew[oldLA] ?? oldLA;
+        const row: JoinRow = {
+          left: `${la}.${leftCol}`,
+          right: rightCol,
+          approx: j.approx,
+          epsilon: j.epsilon,
+        };
+        newJoins[ra] = [...(newJoins[ra] ?? []), row];
+      }
+      setJoins(newJoins);
+      setName(editing.name);
+      // Show the persisted SQL immediately; the debounced live builder
+      // will refresh it once column schemas are available.
+      setSql(editing.sql);
+      return;
     }
-  }, [open, editing]);
+
+    // New view, or editing an object whose SQL came from the SQL editor
+    // (no builder_spec). In the latter case we still hydrate name + SQL
+    // so the user sees the existing definition on the right.
+    setName(editing?.name ?? "");
+    setPicked([]);
+    setCols({});
+    setJoins({});
+    setJoinType("LEFT");
+    setSql(editing?.sql ?? "");
+  }, [open, editing, datasets]);
 
   // Stable alias per picked view (recomputed from order).
   const aliases = useMemo(() => {
@@ -140,9 +194,15 @@ export function ViewBuilderModal({
 
   // Live SQL (debounced) + server validation.
   useEffect(() => {
-    if (!open || spec.sources.length === 0) {
-      setSql("");
-      setPreview(null);
+    if (!open) return;
+    if (spec.sources.length === 0) {
+      // Editing an object that has no builder snapshot? Keep the
+      // persisted SQL visible on the right so the user can still update
+      // name / re-save. Only clear when this is a brand-new view.
+      if (!editing) {
+        setSql("");
+        setPreview(null);
+      }
       return;
     }
     const t = setTimeout(() => {
@@ -169,14 +229,26 @@ export function ViewBuilderModal({
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { name, kind: "view", sql: formatSql(sql) };
+      const body: UserObjectBody = {
+        name,
+        kind: "view",
+        sql: formatSql(sql),
+      };
+      // Persist the builder snapshot only when the user actually used
+      // the builder (sources selected). Editing without rebuilding keeps
+      // builder_spec null so the next edit doesn't pretend to know it.
+      if (spec.sources.length > 0) body.builder_spec = spec;
       return editing
         ? api.userViews.update(editing.id, body)
         : api.userViews.create(body);
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["user-views"] });
-      qc.invalidateQueries({ queryKey: ["query-schema"] });
+    onSuccess: async () => {
+      // Await so the SCHEMA sidebar shows the new/renamed view before
+      // the modal closes — no perceived flicker, no stale list.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["user-views"] }),
+        qc.invalidateQueries({ queryKey: ["query-schema"] }),
+      ]);
       toast.success(`"${name}" salvo no SCHEMA`);
       onOpenChange(false);
     },
@@ -202,6 +274,16 @@ export function ViewBuilderModal({
           <div className="grid min-h-0 flex-1 grid-cols-2">
             {/* Left: configuration */}
             <div className="min-h-0 space-y-5 overflow-y-auto border-r border-ink-100 p-5">
+              {editing && !editing.builder_spec ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
+                  Esta VIEW foi salva pelo editor SQL — não há snapshot do
+                  construtor visual para preencher os campos abaixo. O SQL
+                  atual já está visível à direita; você pode reconstruir
+                  a configuração aqui (sobrescrevendo o SQL ao salvar) ou
+                  fechar este modal e editar diretamente o SQL pelo
+                  botão <strong>Salvar VIEW</strong> do editor.
+                </div>
+              ) : null}
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
                   1 · Fontes

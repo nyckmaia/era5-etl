@@ -209,16 +209,6 @@ export interface PrecisionConfig {
   columns: Record<string, ColumnPrecision>;
 }
 
-export interface UserObject {
-  id: string;
-  name: string;
-  kind: "view" | "macro";
-  sql: string;
-  ok: boolean;
-  error: string | null;
-  columns: { name: string; type: string }[];
-}
-
 export interface BuildSpec {
   name: string;
   join_type: "INNER" | "LEFT";
@@ -229,6 +219,26 @@ export interface BuildSpec {
     approx: boolean;
     epsilon: number;
   }[];
+}
+
+export interface UserObject {
+  id: string;
+  name: string;
+  kind: "view" | "macro";
+  sql: string;
+  /** Visual-builder snapshot — present iff the object was last saved via
+   *  the builder. The modal re-hydrates from it on edit. */
+  builder_spec: BuildSpec | null;
+  ok: boolean;
+  error: string | null;
+  columns: { name: string; type: string }[];
+}
+
+export interface UserObjectBody {
+  name: string;
+  kind: string;
+  sql: string;
+  builder_spec?: BuildSpec | null;
 }
 
 export interface UserObjectPreview {
@@ -431,12 +441,12 @@ export const api = {
   queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
   userViews: {
     list: () => request<UserObject[]>("/api/user-views"),
-    create: (b: { name: string; kind: string; sql: string }) =>
+    create: (b: UserObjectBody) =>
       request<UserObject>("/api/user-views", {
         method: "POST",
         body: JSON.stringify(b),
       }),
-    update: (id: string, b: { name: string; kind: string; sql: string }) =>
+    update: (id: string, b: UserObjectBody) =>
       request<UserObject>(`/api/user-views/${encodeURIComponent(id)}`, {
         method: "PUT",
         body: JSON.stringify(b),
