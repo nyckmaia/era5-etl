@@ -33,8 +33,12 @@ def register_all_views(conn, data_dir: Path) -> list[str]:
     """Register every dataset's DuckDB view that has parquet on disk.
 
     Lets a single query reference any dataset by its view name
-    (``era5``, ``era5_land``) or JOIN across them (M02a). Returns the
-    list of view names registered (empty if no dataset has data yet).
+    (``era5``, ``era5_land``, ``inmet``) or JOIN across them (M02a).
+    When INMET + at least one grid exist, the cross-dataset comparison
+    view ``era5_inmet`` is also registered (best-effort; built on demand
+    by :func:`era5_etl.storage.comparison.create_era5_inmet_view`).
+    Returns the list of view names registered (empty if no dataset has
+    data yet).
     """
     registered: list[str] = []
     for name in DatasetRegistry.names():
@@ -43,6 +47,20 @@ def register_all_views(conn, data_dir: Path) -> list[str]:
             continue
         mgr.create_duckdb_view(conn, view_name_for(name))
         registered.append(view_name_for(name))
+
+    # era5_inmet is not a registered dataset — it's a derived view that
+    # joins INMET to its grid neighbours. Make it available wherever SQL
+    # runs (query, export, schema sidebar). Never fail the base views.
+    try:
+        from era5_etl.storage.comparison import (
+            ERA5_INMET_VIEW,
+            create_era5_inmet_view,
+        )
+
+        create_era5_inmet_view(conn, data_dir)
+        registered.append(ERA5_INMET_VIEW)
+    except Exception:  # noqa: BLE001 -- no inmet / no grid -> skip the view
+        pass
     return registered
 
 
@@ -100,16 +118,47 @@ def query_schema(dataset: str, request: Request) -> QuerySchemaOut:
     """
     import duckdb
 
+    from era5_etl.storage.comparison import ERA5_INMET_VIEW
+    from era5_etl.web._types import arrow_type_to_python
+
+    data_dir: Path = request.app.state.data_dir
+
+    # era5_inmet is the dynamic comparison view, not a registered dataset.
+    # Register everything (which builds era5_inmet when buildable) and
+    # introspect it; empty columns (HTTP 200) when it can't be built yet.
+    if dataset == ERA5_INMET_VIEW:
+        conn = duckdb.connect(":memory:")
+        try:
+            registered = register_all_views(conn, data_dir)
+            if ERA5_INMET_VIEW not in registered:
+                return QuerySchemaOut(view=ERA5_INMET_VIEW, columns=[])
+            schema = conn.execute(
+                f'SELECT * FROM "{ERA5_INMET_VIEW}" LIMIT 0'  # noqa: S608
+            ).fetch_arrow_table().schema
+        except duckdb.Error as exc:
+            raise HTTPException(
+                status_code=400, detail=f"DuckDB error: {exc}"
+            ) from exc
+        finally:
+            conn.close()
+        return QuerySchemaOut(
+            view=ERA5_INMET_VIEW,
+            columns=[
+                SchemaColumn(
+                    name=schema.field(i).name,
+                    type=arrow_type_to_python(schema.field(i).type),
+                )
+                for i in range(len(schema))
+            ],
+        )
+
     if dataset not in DatasetRegistry.names():
         raise HTTPException(status_code=400, detail=f"Unknown dataset: {dataset}")
 
     view = view_name_for(dataset)
-    data_dir: Path = request.app.state.data_dir
     manager = ParquetManager(data_dir, dataset)
     if not manager.exists():
         return QuerySchemaOut(view=view, columns=[])
-
-    from era5_etl.web._types import arrow_type_to_python
 
     conn = duckdb.connect(":memory:")
     try:

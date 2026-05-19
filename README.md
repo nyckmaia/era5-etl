@@ -1,8 +1,10 @@
 # ERA5-ETL
 
-Pipeline para download, processamento e análise de dados ERA5 e ERA5-Land do
-Copernicus Climate Data Store (CDS), com CLI, API Python e interface web
-local.
+Pipeline para download, processamento e análise de dados climáticos —
+**ERA5** e **ERA5-Land** do Copernicus Climate Data Store (CDS) e
+**INMET** (estações meteorológicas do Brasil) — com CLI, API Python e
+interface web local (mapa de inventário, wizard de download, SQL e
+gráficos de séries temporais).
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -10,38 +12,35 @@ local.
 
 ## Visão geral
 
-ERA5-ETL trata cada produto ERA5-family (`era5`, `era5-land`) como um
-**dataset plug-in independente**, faz download via CDS API quebrando
-automaticamente requisições grandes em pedaços (`RequestChunk`s), grava em
-**Parquet particionado por dia** (`date=YYYY-MM-DD/`), mantém um
-**manifesto** com o que já foi baixado, e expõe os dados via DuckDB, CLI e
-uma **SPA local** (FastAPI + React + Vite).
+ERA5-ETL trata cada produto (`era5`, `era5-land`, `inmet`) como um
+**dataset plug-in independente**. Cada `DatasetConfig` tem um
+`SOURCE_KIND` (`cds_grid` ou `inmet_zip`) e `pipeline/source_handlers.py`
+despacha o downloader/conversor/refresh corretos — sem `if dataset == …`
+espalhado. Tudo é gravado em **Parquet** e exposto via DuckDB, CLI e uma
+**SPA local** (FastAPI + React + Vite).
 
 ```
-              CDS API
-                 │
-        ┌────────▼────────┐
-        │ request_planner │  ─ quebra por área 2x2 → dias → variável
-        └────────┬────────┘
-                 │ RequestChunk[]
-        ┌────────▼────────┐
-        │  CDSDownloader  │  ─ consulta manifest, pula chunks prontos
-        └────────┬────────┘
-       NetCDF em _tmp_netcdf/<dataset>/
-                 │
-        ┌────────▼────────────────┐
-        │ NetCDFToParquetConverter│
-        └────────┬────────────────┘
-                 │
-   climate_data_store_db/<dataset>/
-     date=YYYY-MM-DD/<dataset>_<YYYY-MM-DD>_part-001.parquet
-     _manifest.json
-     <dataset>.duckdb
-                 │
-        ┌────────▼────────┐
-        │ CLI · Web UI    │
-        │ DuckDB · Python │
-        └─────────────────┘
+   CDS API (ERA5 / ERA5-LAND)            portal.inmet.gov.br (INMET)
+        │                                         │
+ ┌──────▼───────┐  área 2x2→dias→var       ┌───────▼──────────┐  1 ZIP/ano
+ │request_planner│                          │InmetPortalDownloader│ (1 CSV/estação)
+ └──────┬───────┘                          └───────┬──────────┘
+ ┌──────▼───────┐  pula chunks prontos      ┌──────▼───────────┐ latin-1, ;/,
+ │ CDSDownloader │  (manifest)              │ InmetToParquet…  │ 17 vars + metadados
+ └──────┬───────┘                          └──────┬───────────┘
+  NetCDF em _tmp_netcdf/<ds>/               CSVs em _tmp_netcdf/inmet/<ano>/
+ ┌──────▼────────────────┐                  (1 CSV → 1 Parquet)
+ │NetCDFToParquetConverter│                          │
+ └──────┬────────────────┘                           │
+        ▼                                             ▼
+ climate_data_store_db/era5[-land]/        climate_data_store_db/inmet/
+   date=YYYY-MM-DD/…part-001.parquet         station=<id>/<id>_<ano>.parquet
+   _manifest.json · _coverage.duckdb         _manifest.json · _stations.duckdb
+        └───────────────────┬─────────────────────────┘
+                  ┌─────────▼─────────┐
+                  │ CLI · Web UI      │  + VIEW era5_inmet
+                  │ DuckDB · Python   │  (INMET × 4 vizinhos de grade)
+                  └───────────────────┘
 ```
 
 ## Recursos
@@ -50,6 +49,22 @@ uma **SPA local** (FastAPI + React + Vite).
   `src/era5_etl/datasets/<nome>/` com `variables.yaml` próprio, registrado
   via `@DatasetRegistry.register`. Adicionar um novo dataset não exige tocar
   na CLI, na UI nem no planner.
+- **Fonte dirige o pipeline** — `DatasetConfig.SOURCE_KIND` (`cds_grid` |
+  `inmet_zip`) + `pipeline/source_handlers.py` selecionam
+  downloader/conversor/refresh. ERA5/ERA5-LAND vêm do CDS (NetCDF →
+  Parquet particionado por `date=`, índice de cobertura
+  `_coverage.duckdb`). INMET vem do portal (ZIP anual → 1 Parquet por
+  estação/ano em `station=<id>/`, índice de estações `_stations.duckdb`).
+- **INMET integrado** — `era5 pipeline --dataset inmet` baixa o ZIP anual
+  do portal do INMET, normaliza o CSV (latin-1, `;`/`,`, formato que
+  varia por ano), mapeia as 17 variáveis posicionalmente e grava o
+  Parquet com `date`/`hour_utc`/`latitude`/`longitude` no mesmo padrão do
+  ERA5. Cada Parquet carrega ainda os 4 vizinhos de grade ERA5/ERA5-LAND
+  + distâncias para comparação espacial. Pré-requisito: ERA5 **e**
+  ERA5-LAND precisam ter ao menos o mínimo baixado antes.
+- **VIEW `era5_inmet`** — alinha cada observação INMET aos 4 pontos de
+  grade vizinhos do ERA5/ERA5-LAND na mesma data/hora (CLI
+  `era5 era5-inmet`; também usada pela tela de séries temporais).
 - **Layout único de paths** — `storage/paths.py` é o ponto único de verdade:
   `climate_data_store_db/<dataset>/` para Parquet+manifest+DuckDB,
   `_tmp_netcdf/<dataset>/` para downloads brutos. Sem path-joining
@@ -62,8 +77,18 @@ uma **SPA local** (FastAPI + React + Vite).
   `(_manifest.json)` indexado por `chunk_id`. Tanto o download quanto o
   comando `era5 update` consultam o manifesto para pular trabalho já feito.
 - **Web UI local** — Vite + React + TypeScript + Tailwind + TanStack
-  Router/Query + Radix. Páginas: **Dashboard**, **Download wizard**,
-  **SQL query**, **Settings**. Servida pelo `era5 ui` (FastAPI).
+  Router/Query. Páginas: **Dashboard**, **Inventory** (mapa
+  multi-sistema sobreposto — cor/tamanho/opacidade/marcador por sistema,
+  pontos de grade ERA5/ERA5-LAND e estações INMET), **Download wizard**
+  (com fluxo dedicado para INMET), **Query** (SQL/DuckDB), **Time
+  Series** (notebook de gráficos Plotly), **Settings**. Servida pelo
+  `era5 ui` (FastAPI).
+- **Time Series** — `/timeseries`: notebook de células de gráfico
+  (Plotly). Por série: view + variável + ponto/região (selecionável no
+  mapa) + eixo Y/Y2; X = timestamp (data+hora UTC). Conversão de unidade
+  **só na visualização** (presets K↔°C/°F ou fórmula custom; dados
+  originais intactos), estatísticas por série (mín/máx/média/desvio/
+  variância/IQR) e linha de média opcional.
 - **Filtros geográficos IBGE** — `--municipio`, `--uf`,
   `--regiao-imediata`, `--regiao-intermediaria` resolvem o `area` a partir
   do shapefile IBGE empacotado.
@@ -72,9 +97,9 @@ uma **SPA local** (FastAPI + React + Vite).
   tamanho sem contactar o CDS.
 - **`--dataset all`** — roda CLI commands sobre `era5` e `era5-land`
   sequencialmente.
-- **Estritamente NetCDF4** — todas as requisições usam
-  `data_format="netcdf"`; o converter é a única coisa que lê o arquivo
-  bruto. Suporte a GRIB foi deliberadamente adiado.
+- **CDS estritamente NetCDF4** — toda requisição ao CDS usa
+  `data_format="netcdf"` (GRIB foi deliberadamente adiado). INMET vem
+  como CSV dentro de ZIP — caminho de ingestão próprio, sem CDS.
 
 ## Instalação
 
@@ -156,6 +181,36 @@ total em MB.
 era5 pipeline --dataset all --start-date 2024-01-01 --end-date 2024-01-31
 ```
 
+`all` inclui `era5`, `era5-land` e `inmet`. Comandos CDS-específicos
+(`update`/smart-diff) fazem **no-op** para `inmet` com mensagem clara.
+
+### INMET (estações do Brasil)
+
+INMET não é grade nem CDS: 1 ZIP por ano no portal, 1 CSV por estação.
+O download exige que ERA5 **e** ERA5-LAND já tenham o mínimo em disco
+(necessário para a comparação `era5_inmet` e as distâncias por estação).
+
+```bash
+# baixe primeiro o mínimo das grades
+era5 pipeline --dataset era5      --start-date 2024-01-01 --end-date 2024-01-01 --var 2m_temperature
+era5 pipeline --dataset era5-land --start-date 2024-01-01 --end-date 2024-01-01 --var 2m_temperature
+
+# depois o INMET (o intervalo de datas é traduzido para anos)
+era5 pipeline --dataset inmet --start-date 2000-01-01 --end-date 2026-12-31
+```
+
+### Comparação ERA5 × INMET
+
+```bash
+era5 era5-inmet --data-dir ./data \
+  -q "SELECT station_id, date, hour_utc, temp_ar,
+             era5_tl_temperature_2m, era5_land_tl_temperature_2m
+      FROM era5_inmet WHERE station_id = 'A001'"
+```
+
+Cria/consulta a VIEW `era5_inmet` (INMET juntado aos 4 vizinhos de grade
+do ERA5 e do ERA5-LAND, mesma data/hora). Sem `-q`, faz `SELECT *`.
+
 ### Atualização incremental
 
 `era5 update` calcula, por `(variável, ano-mês)`, o **diff de cobertura
@@ -169,7 +224,8 @@ era5 update --dataset era5-land --start-date 2020-01-01 --uf SP
 
 A próxima execução com `--uf RJ` (cuja bbox se sobrepõe à de SP) baixa
 **apenas a região disjunta**. Adicione `--dry-run` para listar os
-retângulos faltantes sem contactar o CDS.
+retângulos faltantes sem contactar o CDS. `update` é CDS-only — para
+`inmet` ele apenas avisa e não faz nada (reuso por ano é via manifesto).
 
 ### País e regiões IBGE
 
@@ -210,15 +266,15 @@ Lê cada partição `date=YYYY-MM-DD/`, colapsa linhas duplicadas por
 era5 status --dataset all
 ```
 
-Reporta, por dataset: número de arquivos Parquet, tamanho total, número de
-partições `date=`, primeira/última partição, e quantos chunks estão no
-manifesto.
+Reporta, por dataset: número de arquivos Parquet, tamanho total,
+partições (`date=` para grade, `station=` para INMET), primeira/última
+partição, e quantos registros estão no manifesto.
 
 ### Consulta SQL
 
 ```bash
 era5 query \
-  "SELECT date_trunc('day', valid_time) AS d, AVG(t2m) FROM era5_land GROUP BY 1 ORDER BY 1" \
+  "SELECT date, AVG(temperature_2m) FROM era5_land GROUP BY 1 ORDER BY 1" \
   --dataset era5-land --limit 50
 ```
 
@@ -259,10 +315,11 @@ a partir de `src/era5_etl/web/static/` (gerada no build).
 ### Comandos auxiliares
 
 ```bash
-era5 convert  --dataset era5-land            # só conversão NetCDF -> Parquet
-era5 download --dataset era5      --dry-run  # só plano de download
-era5 dedup    --dataset all                  # migração: dedupa parquets antigos
-era5 ibge     -o ./data/ibge_locais.parquet  # gera o Parquet IBGE
+era5 convert   --dataset era5-land           # só conversão (NetCDF/CSV -> Parquet)
+era5 download  --dataset inmet               # só download (ZIP do portal INMET)
+era5 dedup     --dataset all                 # migração: dedupa parquets antigos
+era5 era5-inmet -q "SELECT * FROM era5_inmet LIMIT 50"   # comparação ERA5×INMET
+era5 ibge      -o ./data/ibge_locais.parquet # gera o Parquet IBGE
 ```
 
 `era5 --help` ou `era5 <comando> --help` mostra todas as flags.
@@ -274,25 +331,33 @@ era5 ibge     -o ./data/ibge_locais.parquet  # gera o Parquet IBGE
 ├── climate_data_store_db/
 │   ├── era5/
 │   │   ├── date=2024-01-01/era5_2024-01-01_part-001.parquet
-│   │   ├── date=2024-01-02/era5_2024-01-02_part-001.parquet
 │   │   ├── ...
 │   │   ├── _manifest.json
+│   │   ├── _coverage.duckdb            # índice de cobertura (grade)
 │   │   └── era5.duckdb
-│   └── era5-land/
-│       ├── date=YYYY-MM-DD/era5-land_YYYY-MM-DD_part-001.parquet
-│       ├── _manifest.json
-│       └── era5-land.duckdb
-└── _tmp_netcdf/
-    ├── era5/<chunk_id>.nc
-    └── era5-land/<chunk_id>.nc
+│   ├── era5-land/
+│   │   ├── date=YYYY-MM-DD/era5-land_YYYY-MM-DD_part-001.parquet
+│   │   ├── _manifest.json · _coverage.duckdb · era5-land.duckdb
+│   ├── inmet/
+│   │   ├── station=A001/A001_2000.parquet   # 1 Parquet por estação/ano
+│   │   ├── station=A001/A001_2001.parquet
+│   │   ├── ...
+│   │   ├── _manifest.json
+│   │   ├── _stations.duckdb            # índice de estações (não grade)
+│   │   └── inmet.duckdb
+│   └── _tmp_netcdf/
+│       ├── era5/<chunk_id>.nc          # NetCDF bruto (descartável)
+│       └── inmet/<ano>/*.CSV           # CSVs extraídos (removidos pós-conversão)
 ```
 
 - Nomes das pastas são **literais** — `era5-land` mantém o hífen (idem
   CDS / `variables.yaml`).
 - O DuckDB fica colocado **dentro** do diretório do dataset, mantendo
   cada dataset autocontido.
-- `_tmp_netcdf/` é descartável; recriar o pipeline regenera tudo a
-  partir do CDS.
+- `_tmp_netcdf/` (dentro de `climate_data_store_db/`) é descartável;
+  recriar o pipeline rebaixa do CDS / portal INMET. Os índices
+  `_coverage.duckdb` / `_stations.duckdb` são estado derivado —
+  reconstruídos a partir do Parquet.
 
 ## Uso programático
 
@@ -329,10 +394,9 @@ conn = duckdb.connect(":memory:")
 mgr.create_duckdb_view(conn, "era5_land")
 
 df = conn.execute("""
-    SELECT date_trunc('day', valid_time) AS day,
-           AVG(t2m) AS avg_t2m
+    SELECT date, AVG(temperature_2m) AS avg_t2m
     FROM era5_land
-    WHERE valid_time BETWEEN '2024-01-01' AND '2024-01-31'
+    WHERE date BETWEEN '2024-01-01' AND '2024-01-31'
     GROUP BY 1 ORDER BY 1
 """).pl()
 ```
@@ -344,17 +408,23 @@ Stack:
 - **Vite + React 18 + TypeScript** (strict)
 - **Tailwind CSS** com tema inspirado em interfaces científicas
 - **TanStack Query** (estado servidor) + **TanStack Router** (roteamento)
-- **Radix UI** (dialog, select, tabs, tooltip)
-- **lucide-react** para ícones
+- **deck.gl + maplibre-gl** (mapas do inventário e do seletor de ponto)
+- **Plotly** (`plotly.js-dist-min` + `react-plotly.js`, carregado lazy
+  em chunk separado) para os gráficos de séries temporais
+- **apache-arrow** (decodifica respostas grandes), **monaco** (editor
+  SQL), **@dnd-kit** (reordenar abas), **sonner** (toasts),
+  **lucide-react** (ícones)
 
 Páginas:
 
-| Rota             | Função                                                                       |
-|------------------|------------------------------------------------------------------------------|
-| `/`              | Dashboard — cards por dataset com tamanho, partições, cobertura              |
-| `/download`      | Wizard de download (dataset → vars → área → datas → estimativa → run + SSE)  |
-| `/query`         | Editor SQL com preview Polars e export CSV/Parquet                           |
-| `/settings`      | Config do `data_dir` persistido em `~/.config/era5-etl/config.toml`          |
+| Rota          | Função                                                                       |
+|---------------|------------------------------------------------------------------------------|
+| `/dashboard`  | Cards por dataset com tamanho, partições, cobertura                          |
+| `/inventory`  | Mapa multi-sistema sobreposto — pontos de grade ERA5/ERA5-LAND e estações INMET; cor/tamanho/opacidade/marcador por sistema |
+| `/download`   | Wizard (dataset → vars → área → datas → estimativa → run + SSE); fluxo dedicado para INMET (anos do portal) |
+| `/query`      | Editor SQL DuckDB com preview e export CSV/Parquet                           |
+| `/timeseries` | Notebook de gráficos Plotly: séries multi-view, ponto/região via mapa, Y/Y2, conversão de unidade visual, estatísticas |
+| `/settings`   | Config do `data_dir` persistido em `~/.config/era5-etl/config.toml`          |
 
 ### Dev mode
 
@@ -388,27 +458,34 @@ src/era5_etl/
 ├── cli.py                       # Typer + Rich; despacha para módulos
 ├── config.py                    # PipelineConfig.create(), DownloadConfig, ...
 ├── datasets/                    # plug-ins
-│   ├── base.py                  # DatasetConfig abstrato
-│   ├── era5/                    # config.py + variables.yaml
-│   └── era5_land/               # config.py + variables.yaml
+│   ├── base.py                  # DatasetConfig (NAME, SOURCE_KIND, is_gridded)
+│   ├── era5/ · era5_land/       # config.py + variables.yaml (cds_grid)
+│   └── inmet/                   # config.py + variables.yaml (inmet_zip)
 ├── download/
 │   ├── request_planner.py       # plan_requests() -> RequestChunk[]
 │   ├── size_estimator.py        # estimate_request_size, split_area
-│   └── cds_downloader.py        # itera chunks + cdsapi
+│   ├── cds_downloader.py        # itera chunks + cdsapi
+│   └── inmet_portal.py          # scrape do portal + ZIP anual + extração
 ├── transform/
-│   └── netcdf_to_parquet.py     # xarray -> polars -> Parquet particionado
+│   ├── netcdf_to_parquet.py     # xarray -> polars -> Parquet (date=)
+│   └── inmet_to_parquet.py      # CSV latin-1 -> Parquet (station=)
 ├── storage/
 │   ├── paths.py                 # resolve_*_dir / resolve_*_path
 │   ├── manifest.py              # ChunkRecord, Manifest
 │   ├── parquet_manager.py       # escrita Parquet, view DuckDB
-│   └── duckdb_manager.py
+│   ├── coverage.py              # _coverage.duckdb (grade)
+│   ├── stations.py              # _stations.duckdb (INMET)
+│   └── comparison.py            # VIEW era5_inmet
 ├── pipeline/
-│   └── era5_pipeline.py         # Template Method (download → convert)
+│   ├── era5_pipeline.py         # Template Method (download → convert → refresh)
+│   └── source_handlers.py       # SOURCE_KIND → (downloader, conversor, refresh)
 ├── web/
 │   ├── server.py                # create_app(data_dir)
 │   ├── routes/                  # version, datasets, stats, settings,
-│   │                            # pipeline (estimate/run/SSE), query, export
-│   ├── runtime.py               # roda jobs de pipeline em background + SSE
+│   │                            # credentials, pipeline, query, query_store,
+│   │                            # regions, export, inventory, inmet, timeseries
+│   ├── timeseries_sql.py        # builder SELECT-only p/ séries temporais
+│   ├── runtime.py               # jobs de pipeline em background + SSE
 │   ├── user_config.py           # ~/.config/era5-etl/config.toml
 │   └── static/                  # SPA gerada (gitignored)
 ├── utils/
@@ -423,8 +500,9 @@ src/era5_etl/
    `Literal`. Adicionar dataset = `@DatasetRegistry.register`.
 2. **Toda decisão de path passa por `storage.paths`**. Nunca faça
    `base / "parquet" / dataset` na unha — chame `resolve_dataset_dir`.
-3. **Todo download é `netcdf`**. Se for adicionar GRIB, isso muda também
-   o converter, o estimador, e o manifesto.
+3. **Download CDS é sempre `netcdf`** (GRIB mudaria converter/estimador/
+   manifesto). Fontes não-CDS (INMET) têm downloader/conversor próprios
+   via `source_handlers`.
 4. **Size budget vem do planner**. `request_planner` é o lugar onde se
    negocia tamanho; downstream confia.
 5. **Manifesto é a fonte de verdade do "feito"**, não a presença do
@@ -434,10 +512,13 @@ src/era5_etl/
 
 1. Crie `src/era5_etl/datasets/<novo>/{__init__.py, config.py, variables.yaml}`.
 2. Subclasse `DatasetConfig` e decore com `@DatasetRegistry.register`,
-   setando `NAME`, `CDS_DATASET_ID`, `GRID_RESOLUTION_DEG`, e o
-   `_variables_yaml_path`.
+   setando `NAME`, `_variables_yaml_path` e — para uma fonte CDS de grade
+   — `CDS_DATASET_ID`/`GRID_RESOLUTION_DEG`. Para uma fonte não-grade,
+   defina `SOURCE_KIND` próprio (ex.: `inmet_zip`).
 3. Importe a sub-package em `era5_etl.datasets.__init__:ensure_loaded`.
-4. Adicione uma asserção em `tests/test_datasets_registry.py`.
+4. Se `SOURCE_KIND` for novo, registre o handler em
+   `pipeline/source_handlers.py` (downloader, conversor, refresh stage).
+5. Adicione uma asserção em `tests/test_datasets_registry.py`.
 
 CLI, Web UI, planner e manifesto pegam o novo nome automaticamente.
 
@@ -455,7 +536,7 @@ CLI, Web UI, planner e manifesto pegam o novo nome automaticamente.
 # Setup
 pip install -e ".[dev]"
 
-# Testes (178 testes; nenhum requer rede)
+# Testes (424 testes; nenhum requer rede)
 make test          # ou: py -3.12 -m pytest
 
 # Coverage HTML
@@ -477,7 +558,11 @@ Testes do request planner usam `max_request_bytes` artificialmente baixos
 para forçar todos os tiers de split (a flag é setada após a construção
 para passar do floor de 1 MiB do Pydantic).
 
-## Time-series (ARCO/Zarr) — quando NÃO usar este projeto
+## Download de série pontual (ARCO/Zarr) — quando NÃO usar este projeto
+
+> Esta seção é sobre o **endpoint ARCO do CDS** para baixar um ponto ao
+> longo de muitos anos — não confundir com a tela `/timeseries` (que
+> plota o que já está no Parquet local).
 
 O Copernicus mantém endpoints experimentais em formato
 **Analysis Ready Cloud Optimized (ARCO / Zarr)** otimizados para
@@ -576,6 +661,33 @@ era5 era5-inmet -q "
   WHERE station_id = 'A001' AND date = DATE '2000-10-05'
 "
 ```
+
+### Tela de séries temporais (`/timeseries`)
+
+Notebook de gráficos para analisar/correlacionar séries temporais entre
+ERA5, ERA5-LAND, INMET e a view `era5_inmet`. Backend:
+`POST /api/timeseries` (1 query capada por série; combina `date`+
+`hour_utc` num timestamp UTC; bucket `raw|hour|day|month` com
+auto-coarsen se exceder o limite de pontos) e `GET /api/timeseries/meta`
+(views, colunas numéricas, tipo de localização, faixa de datas).
+
+Por **célula de gráfico**: intervalo de datas (limitado à cobertura
+real), bucket, máx. de pontos. Por **série**: view + variável +
+agregação + eixo Y/Y2 + **ponto/região** (digitado ou clicado no mapa —
+coordenadas são "snapadas" para a resolução da grade) + **conversão de
+unidade só na visualização** (presets K↔°C/°F ou fórmula custom; os
+dados no Parquet não mudam) + **linha de média** opcional. Cada série
+mostra estatísticas (mín, máx, média, desvio-padrão, variância, IQR).
+Adicionar/duplicar/remover/reordenar células; estado persiste em
+`localStorage`.
+
+> **Atenção à unidade:** ERA5/ERA5-LAND já são gravados em **°C** pelo
+> pipeline (`convert_kelvin_to_celsius=True` por padrão — conversão feita
+> na escrita do Parquet, não na tela). Logo, para comparar temperatura
+> com o INMET (também °C) **não** aplique o preset K→°C. A conversão
+> visual serve para unidades que realmente diferem (pressão Pa↔mB,
+> precipitação m↔mm, radiação J/m²↔kJ/m²) ou se o Kelvin tiver sido
+> mantido (`--no` da flag no uso programático).
 
 ## Troubleshooting
 

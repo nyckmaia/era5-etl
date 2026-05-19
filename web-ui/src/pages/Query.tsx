@@ -259,7 +259,12 @@ export function QueryPage() {
 
       <div className="card flex min-h-0 flex-1 overflow-hidden p-0">
         <SchemaSidebar
-          datasets={datasets?.map((d) => d.name) ?? []}
+          datasets={[
+            ...(datasets?.map((d) => d.name) ?? []),
+            // era5_inmet is a derived cross-dataset view (not a registered
+            // dataset); show it so its columns are browsable/insertable.
+            ...(datasets && datasets.length ? ["era5_inmet"] : []),
+          ]}
           collapsed={leftCollapsed}
           onToggle={() => setLeftCollapsed((c) => !c)}
           onInsert={(text) =>
