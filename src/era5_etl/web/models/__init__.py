@@ -283,6 +283,9 @@ class UserObjectIn(BaseModel):
     name: str
     kind: str  # "view" | "macro"
     sql: str
+    #: Optional visual-builder snapshot (sources/columns/joins). When
+    #: present, the builder modal re-hydrates from it on edit.
+    builder_spec: BuildSpec | None = None
 
 
 class UserObjectOut(BaseModel):
@@ -290,6 +293,7 @@ class UserObjectOut(BaseModel):
     name: str
     kind: str
     sql: str
+    builder_spec: BuildSpec | None = None
     ok: bool = True
     error: str | None = None
     columns: list[SchemaColumn] = []

@@ -66,6 +66,45 @@ def test_build_sql_endpoint(client):
     assert 'abs(e."latitude" - i."latitude") < 0.0001' in r.json()["sql"]
 
 
+def test_builder_spec_roundtrip(client):
+    """The builder snapshot is persisted on create + returned by list/update."""
+    spec = {
+        "name": "v",
+        "join_type": "LEFT",
+        "sources": [{"view": "inmet", "alias": "i", "columns": ["a"]}],
+        "joins": [],
+    }
+    r = client.post(
+        "/api/user-views",
+        json={
+            "name": "v",
+            "kind": "view",
+            "sql": "CREATE OR REPLACE VIEW v AS SELECT 1 AS a",
+            "builder_spec": spec,
+        },
+    )
+    assert r.status_code == 200, r.text
+    obj = r.json()
+    assert obj["builder_spec"] is not None
+    assert obj["builder_spec"]["name"] == "v"
+
+    listed = client.get("/api/user-views").json()
+    assert listed[0]["builder_spec"]["sources"][0]["columns"] == ["a"]
+
+    # Editing without builder_spec wipes the snapshot (the SQL came from
+    # the SQL editor, not the builder).
+    r2 = client.put(
+        f"/api/user-views/{obj['id']}",
+        json={
+            "name": "v",
+            "kind": "view",
+            "sql": "CREATE OR REPLACE VIEW v AS SELECT 2 AS a",
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["builder_spec"] is None
+
+
 def test_preview_reports_error_without_raising(client):
     r = client.post(
         "/api/user-views/preview",

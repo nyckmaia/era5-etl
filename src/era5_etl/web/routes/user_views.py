@@ -87,6 +87,7 @@ def list_user_views(request: Request) -> list[UserObjectOut]:
                     name=r["name"],
                     kind=r["kind"],
                     sql=r["sql"],
+                    builder_spec=r.get("builder_spec"),
                     ok=r["ok"],
                     error=r["error"],
                     columns=cols,
@@ -104,9 +105,15 @@ def create_user_view(body: UserObjectIn, request: Request) -> UserObjectOut:
     cols = _validate_against_db(
         request.app.state.data_dir, body.name, body.kind, body.sql
     )
+    spec_dump = (
+        body.builder_spec.model_dump() if body.builder_spec else None
+    )
     try:
         obj = store.add_object(
-            name=body.name, kind=body.kind, sql=body.sql
+            name=body.name,
+            kind=body.kind,
+            sql=body.sql,
+            builder_spec=spec_dump,
         )
     except store.UserObjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -124,9 +131,16 @@ def update_user_view(
     cols = _validate_against_db(
         request.app.state.data_dir, body.name, body.kind, body.sql
     )
+    spec_dump = (
+        body.builder_spec.model_dump() if body.builder_spec else None
+    )
     try:
         obj = store.update_object(
-            obj_id, name=body.name, kind=body.kind, sql=body.sql
+            obj_id,
+            name=body.name,
+            kind=body.kind,
+            sql=body.sql,
+            builder_spec=spec_dump,
         )
     except store.UserObjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

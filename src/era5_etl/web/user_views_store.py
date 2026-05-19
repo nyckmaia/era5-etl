@@ -110,7 +110,11 @@ def validate_ddl(name: str, kind: str, sql: str) -> None:
 
 
 def add_object(
-    *, name: str, kind: Literal["view", "macro"], sql: str
+    *,
+    name: str,
+    kind: Literal["view", "macro"],
+    sql: str,
+    builder_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_ddl(name, kind, sql)
     now = int(time.time() * 1000)
@@ -119,6 +123,10 @@ def add_object(
         "name": name,
         "kind": kind,
         "sql": sql,
+        # Snapshot of the visual-builder selections that produced this SQL
+        # (``None`` when the object was saved via the SQL editor). The
+        # builder modal re-hydrates from it on edit.
+        "builder_spec": builder_spec,
         "created_ts": now,
         "updated_ts": now,
     }
@@ -132,7 +140,12 @@ def add_object(
 
 
 def update_object(
-    obj_id: str, *, name: str, kind: str, sql: str
+    obj_id: str,
+    *,
+    name: str,
+    kind: str,
+    sql: str,
+    builder_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validate_ddl(name, kind, sql)
     with _LOCK:
@@ -151,6 +164,7 @@ def update_object(
             name=name,
             kind=kind,
             sql=sql,
+            builder_spec=builder_spec,
             updated_ts=int(time.time() * 1000),
         )
         _save(data)
