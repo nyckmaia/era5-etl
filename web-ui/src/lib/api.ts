@@ -34,6 +34,8 @@ export interface StorageStats {
 export interface UserSettings {
   data_dir: string;
   default_dataset: string;
+  /** Server-side timeout (seconds) for /api/query. 0 disables. */
+  query_timeout_s: number;
 }
 
 export interface EstimateChunk {
@@ -377,7 +379,10 @@ export const api = {
       "/api/pipeline/run",
       { method: "POST", body: JSON.stringify(body) },
     ),
-  query: (body: { dataset?: string; sql: string; limit?: number }) =>
+  query: (
+    body: { dataset?: string; sql: string; limit?: number },
+    signal?: AbortSignal,
+  ) =>
     request<{
       columns: string[];
       column_types: string[];
@@ -385,7 +390,13 @@ export const api = {
       row_count: number;
       truncated: boolean;
       total_rows: number;
-    }>("/api/query", { method: "POST", body: JSON.stringify(body) }),
+    }>("/api/query", {
+      method: "POST",
+      body: JSON.stringify(body),
+      signal,
+    }),
+  cancelQuery: () =>
+    request<{ ok: boolean }>("/api/query/cancel", { method: "POST" }),
   querySchema: (dataset: string) =>
     request<QuerySchema>(
       `/api/query/schema?dataset=${encodeURIComponent(dataset)}`,

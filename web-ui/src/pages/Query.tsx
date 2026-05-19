@@ -8,6 +8,7 @@ import {
   Save,
   SlidersHorizontal,
   WandSparkles,
+  XCircle,
 } from "lucide-react";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -128,24 +129,52 @@ export function QueryPage() {
     queryFn: () => api.precision.get(focusedDataset),
   });
 
+  const abortRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
   const runQuery = useMutation({
     mutationFn: async (sqlArg?: string) => {
       const sql = sqlArg ?? activeTab?.sql;
       if (!sql) throw new Error("No active tab");
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      cancelledRef.current = false;
       const t0 = performance.now();
-      const res = await api.query({ sql, limit });
-      const elapsed = Math.round(performance.now() - t0);
-      await api.queryHistory.append(focusedView, {
-        sql,
-        rows: res.row_count,
-        elapsed_ms: elapsed,
-      });
-      qc.invalidateQueries({
-        queryKey: ["query", "history", focusedView],
-      });
-      return res;
+      try {
+        const res = await api.query({ sql, limit }, ctrl.signal);
+        const elapsed = Math.round(performance.now() - t0);
+        await api.queryHistory.append(focusedView, {
+          sql,
+          rows: res.row_count,
+          elapsed_ms: elapsed,
+        });
+        qc.invalidateQueries({
+          queryKey: ["query", "history", focusedView],
+        });
+        return res;
+      } finally {
+        abortRef.current = null;
+      }
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e) => {
+      const err = e as Error & { name?: string };
+      const msg = err.message ?? "";
+      // The client aborted (Cancelar button). Tell the server too so the
+      // running DuckDB query is actually interrupted, not just dropped.
+      if (err.name === "AbortError" || cancelledRef.current) {
+        api.cancelQuery().catch(() => {});
+        toast.info("Query cancelada");
+        return;
+      }
+      if (msg.startsWith("Tempo limite")) {
+        toast.warning(msg);
+        return;
+      }
+      if (msg.startsWith("Query cancelada")) {
+        toast.info(msg);
+        return;
+      }
+      toast.error(msg || "Erro ao executar a query");
+    },
     onSuccess: (r) =>
       r.truncated
         ? toast.warning(
@@ -393,6 +422,21 @@ export function QueryPage() {
                   <Save className="h-4 w-4" />
                   Salvar VIEW
                 </button>
+                {runQuery.isPending ? (
+                  <button
+                    type="button"
+                    className="btn-outline border-rose-300 text-rose-600 hover:bg-rose-50"
+                    onClick={() => {
+                      cancelledRef.current = true;
+                      api.cancelQuery().catch(() => {});
+                      abortRef.current?.abort();
+                    }}
+                    title="Interromper a query em execução"
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Cancelar
+                  </button>
+                ) : null}
                 <button
                   className="btn-primary"
                   onClick={formatAndRun}
