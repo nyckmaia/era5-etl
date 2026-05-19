@@ -268,32 +268,29 @@ export function RunProgress({
         </div>
 
         <div className="mt-5 space-y-4">
-          {/* 1º: requisição/arquivo NetCDF individual (em cima) */}
-          <Bar
-            icon={<Cloud className="h-4 w-4 text-amber-600" />}
-            label={
-              isStation
-                ? "Ano atual (ZIP do portal INMET)"
-                : "Requisição CDS atual (NetCDF individual)"
-            }
-            pct={phaseBarPct}
-            sub={
-              curPhase
-                ? (phaseSteps.find((s) => s.phase === curPhase)?.label ??
-                  curPhase)
-                : state.status === "completed"
-                  ? "Concluído"
-                  : startingUp
-                    ? isStation
-                      ? "Consultando o portal INMET…"
-                      : "Enviando requisição ao CDS…"
-                    : isStation
-                      ? "Aguardando o primeiro ano…"
+          {/* 1º: requisição/arquivo NetCDF individual (em cima).
+              INMET baixa o ZIP direto (sem submitting/queued/running),
+              então esta barra não tem o que mostrar -- ocultada para
+              fontes de estação; mantida para ERA5/ERA5-LAND. */}
+          {!isStation && (
+            <Bar
+              icon={<Cloud className="h-4 w-4 text-amber-600" />}
+              label="Requisição CDS atual (NetCDF individual)"
+              pct={phaseBarPct}
+              sub={
+                curPhase
+                  ? (phaseSteps.find((s) => s.phase === curPhase)?.label ??
+                    curPhase)
+                  : state.status === "completed"
+                    ? "Concluído"
+                    : startingUp
+                      ? "Enviando requisição ao CDS…"
                       : "Aguardando primeira requisição…"
-            }
-            tone={state.status === "failed" ? "fail" : "phase"}
-            pulse={startingUp}
-          />
+              }
+              tone={state.status === "failed" ? "fail" : "phase"}
+              pulse={startingUp}
+            />
+          )}
           {/* 2º: grupo (chunks / anos) */}
           <Bar
             icon={<FileStack className="h-4 w-4 text-ocean-600" />}
