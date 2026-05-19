@@ -5,6 +5,7 @@ import {
   Database,
   Settings as SettingsIcon,
   Globe2,
+  LineChart,
   MapPin,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,6 +21,7 @@ const NAV = [
   { to: "/inventory", label: "Inventory", icon: MapPin },
   { to: "/download", label: "Download", icon: CloudDownload },
   { to: "/query", label: "Query", icon: Database },
+  { to: "/timeseries", label: "Time Series", icon: LineChart },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ] as const;
 

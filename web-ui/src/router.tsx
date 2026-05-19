@@ -12,6 +12,7 @@ import { DownloadWizardPage } from "./pages/DownloadWizard";
 import { InventoryPage } from "./pages/Inventory";
 import { QueryPage } from "./pages/Query";
 import { SettingsPage } from "./pages/Settings";
+import { TimeseriesPage } from "./pages/Timeseries";
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -71,6 +72,12 @@ const queryRoute = createRoute({
   component: QueryPage,
 });
 
+const timeseriesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/timeseries",
+  component: TimeseriesPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -83,5 +90,6 @@ export const routeTree = rootRoute.addChildren([
   inventoryRoute,
   downloadRoute,
   queryRoute,
+  timeseriesRoute,
   settingsRoute,
 ]);

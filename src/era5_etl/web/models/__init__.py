@@ -254,6 +254,79 @@ class QuerySchemaOut(BaseModel):
     columns: list[SchemaColumn]
 
 
+# --- Time-series charting (notebook page) -----------------------------
+
+
+class TSLocationIn(BaseModel):
+    """Where to sample a series. Grid views use lat/lon; station views
+    use station_id/uf. ``kind`` selects point vs region."""
+
+    kind: Literal["point", "region"]
+    # grid point
+    lat: float | None = None
+    lon: float | None = None
+    # grid region (bbox)
+    south: float | None = None
+    north: float | None = None
+    west: float | None = None
+    east: float | None = None
+    # station point / region
+    station_id: str | None = None
+    uf: str | None = None
+    station_ids: list[str] | None = None
+
+
+class TSSeriesIn(BaseModel):
+    view: str  # era5 | era5_land | inmet | era5_inmet
+    y_column: str
+    agg: Literal["avg", "min", "max", "sum"] = "avg"
+    location: TSLocationIn
+    axis: Literal["y", "y2"] = "y"
+    name: str | None = None
+
+
+class TimeseriesIn(BaseModel):
+    date_from: str  # YYYY-MM-DD
+    date_to: str
+    bucket: Literal["raw", "hour", "day", "month"] = "raw"
+    max_points: Annotated[int, Field(ge=100, le=200_000)] = 20_000
+    series: list[TSSeriesIn] = Field(min_length=1, max_length=12)
+
+
+class TSSeriesOut(BaseModel):
+    name: str
+    view: str
+    y_column: str
+    agg: str
+    axis: Literal["y", "y2"]
+    x: list[str]  # ISO-8601 UTC timestamps
+    y: list[float | None]
+    n_points: int
+    bucket_used: str
+    downsampled: bool
+    location_label: str
+    error: str | None = None
+
+
+class TimeseriesOut(BaseModel):
+    series: list[TSSeriesOut]
+    bucket_requested: str
+    truncated: bool  # any series coarsened/downsampled
+
+
+class TSViewMetaOut(BaseModel):
+    view: str
+    location_kind: Literal["grid", "station"]
+    numeric_columns: list[SchemaColumn]
+    date_min: str | None = None
+    date_max: str | None = None
+    grid_resolution: float | None = None  # for lat/lon snapping; null = station
+
+
+class TimeseriesMetaOut(BaseModel):
+    views: list[TSViewMetaOut]
+
+
 class QueryHistoryEntry(BaseModel):
     id: str
     sql: str
@@ -352,4 +425,11 @@ __all__ = [
     "CredentialStatusOut",
     "CredentialsIn",
     "CredentialTestOut",
+    "TSLocationIn",
+    "TSSeriesIn",
+    "TimeseriesIn",
+    "TSSeriesOut",
+    "TimeseriesOut",
+    "TSViewMetaOut",
+    "TimeseriesMetaOut",
 ]

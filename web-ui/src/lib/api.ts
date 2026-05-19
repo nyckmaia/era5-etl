@@ -250,6 +250,66 @@ async function requestArrowOrJson<T>(url: string): Promise<T[]> {
   return (await r.json()) as T[];
 }
 
+// --- Time series -----------------------------------------------------
+
+export interface TSViewMeta {
+  view: string;
+  location_kind: "grid" | "station";
+  numeric_columns: { name: string; type: string }[];
+  date_min: string | null;
+  date_max: string | null;
+  grid_resolution: number | null;
+}
+export interface TimeseriesMeta {
+  views: TSViewMeta[];
+}
+export interface TSLocation {
+  kind: "point" | "region";
+  lat?: number | null;
+  lon?: number | null;
+  south?: number | null;
+  north?: number | null;
+  west?: number | null;
+  east?: number | null;
+  station_id?: string | null;
+  uf?: string | null;
+  station_ids?: string[] | null;
+}
+export interface TSSeriesConfig {
+  view: string;
+  y_column: string;
+  agg: "avg" | "min" | "max" | "sum";
+  location: TSLocation;
+  axis: "y" | "y2";
+  name?: string | null;
+}
+export interface TimeseriesRequest {
+  date_from: string;
+  date_to: string;
+  bucket: "raw" | "hour" | "day" | "month";
+  max_points: number;
+  series: TSSeriesConfig[];
+}
+export interface TSSeriesResult {
+  name: string;
+  view: string;
+  y_column: string;
+  agg: string;
+  axis: "y" | "y2";
+  x: string[];
+  y: (number | null)[];
+  n_points: number;
+  bucket_used: string;
+  downsampled: boolean;
+  location_label: string;
+  error: string | null;
+}
+export interface TimeseriesResponse {
+  series: TSSeriesResult[];
+  bucket_requested: string;
+  truncated: boolean;
+}
+
 export const api = {
   version: () => request<{ version: string }>("/api/version"),
   datasets: () => request<DatasetInfo[]>("/api/datasets"),
@@ -484,5 +544,14 @@ export const api = {
           }),
         },
       ),
+  },
+
+  timeseries: {
+    meta: () => request<TimeseriesMeta>("/api/timeseries/meta"),
+    run: (body: TimeseriesRequest) =>
+      request<TimeseriesResponse>("/api/timeseries", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   },
 };
