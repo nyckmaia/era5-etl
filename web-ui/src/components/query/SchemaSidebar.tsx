@@ -1,9 +1,16 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Database,
   FunctionSquare,
+  Loader2,
   Pencil,
   Plus,
   PanelLeftClose,
@@ -11,7 +18,7 @@ import {
   Table2,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { api, type UserObject } from "@/lib/api";
@@ -37,9 +44,18 @@ function ColumnList({
 }) {
   return (
     <ul className="ml-4 mt-0.5 border-l border-ink-100 pl-2">
-      {cols.length === 0 ? (
+      {loading ? (
+        Array.from({ length: 4 }).map((_, i) => (
+          <li key={i} className="px-1 py-0.5">
+            <div
+              className="h-2.5 animate-pulse rounded bg-ink-100"
+              style={{ width: `${70 - i * 12}%` }}
+            />
+          </li>
+        ))
+      ) : cols.length === 0 ? (
         <li className="px-1 py-0.5 text-[11px] italic text-ink-400">
-          {loading ? "…" : "sem dados"}
+          sem dados
         </li>
       ) : (
         cols.map((c) => (
@@ -91,9 +107,20 @@ function ViewNode({
         )}
         <Table2 className="h-3.5 w-3.5 shrink-0 text-ocean-500" />
         <span className="truncate">{view}</span>
-        <span className="ml-auto text-[10px] text-ink-400">
-          {cols.length}
-        </span>
+        {q.isLoading ? (
+          <Loader2 className="ml-auto h-3 w-3 shrink-0 animate-spin text-ocean-400" />
+        ) : q.isError ? (
+          <span
+            className="ml-auto shrink-0 text-[10px] font-medium text-rose-500"
+            title="Falha ao carregar o schema"
+          >
+            erro
+          </span>
+        ) : (
+          <span className="ml-auto text-[10px] text-ink-400">
+            {cols.length}
+          </span>
+        )}
       </button>
       {open ? (
         <ColumnList cols={cols} loading={q.isLoading} onInsert={onInsert} />
@@ -185,6 +212,38 @@ export function SchemaSidebar({
   onNewView,
   onEditView,
 }: Props) {
+  // Aggregate the per-view schema loads (same query key/fn as ViewNode,
+  // so React Query dedupes — no double fetch). Drives the progress
+  // indicator and the one-time "all loaded" notice.
+  const schemaQs = useQueries({
+    queries: datasets.map((d) => ({
+      queryKey: ["query-schema", d],
+      queryFn: () => api.querySchema(d),
+    })),
+  });
+  const total = datasets.length;
+  const settled = schemaQs.filter((q) => q.isSuccess || q.isError).length;
+  const okCount = schemaQs.filter((q) => q.isSuccess).length;
+  const loading = total > 0 && settled < total;
+  const allDone = total > 0 && settled === total;
+
+  const [showDone, setShowDone] = useState(false);
+  const notified = useRef(false);
+  useEffect(() => {
+    if (allDone && !notified.current) {
+      notified.current = true;
+      toast.success(
+        `${okCount} de ${total} view${total === 1 ? "" : "s"} carregada${
+          total === 1 ? "" : "s"
+        }`,
+      );
+      setShowDone(true);
+      const t = setTimeout(() => setShowDone(false), 4000);
+      return () => clearTimeout(t);
+    }
+    if (!allDone) notified.current = false;
+  }, [allDone, okCount, total]);
+
   if (collapsed) {
     return (
       <button
@@ -220,6 +279,31 @@ export function SchemaSidebar({
         <p className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
           <Database className="h-3 w-3" /> Sistema
         </p>
+
+        {loading ? (
+          <div className="mb-2 px-1">
+            <div className="flex items-center gap-1 text-[10px] text-ink-500">
+              <Loader2 className="h-3 w-3 animate-spin text-ocean-500" />
+              Carregando views… {settled}/{total}
+            </div>
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-ink-100">
+              <div
+                className="h-full rounded-full bg-ocean-500 transition-all duration-300"
+                style={{
+                  width: `${total ? (settled / total) * 100 : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : showDone ? (
+          <div className="mb-2 flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 transition-opacity">
+            <CheckCircle2 className="h-3 w-3" />
+            {okCount === total
+              ? `Todas as ${total} views carregadas`
+              : `${okCount}/${total} views carregadas`}
+          </div>
+        ) : null}
+
         {datasets.map((d) => (
           <ViewNode key={d} dataset={d} onInsert={onInsert} />
         ))}
