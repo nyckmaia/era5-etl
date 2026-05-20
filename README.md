@@ -1,161 +1,162 @@
 # ERA5-ETL
 
-Pipeline para download, processamento e análise de dados climáticos —
-**ERA5** e **ERA5-Land** do Copernicus Climate Data Store (CDS) e
-**INMET** (estações meteorológicas do Brasil) — com CLI, API Python e
-interface web local (mapa de inventário, wizard de download, SQL e
-gráficos de séries temporais).
+Pipeline for downloading, processing, and analyzing climate data —
+**ERA5** and **ERA5-Land** from the Copernicus Climate Data Store (CDS) and
+**INMET** (Brazilian weather stations) — with a CLI, Python API, and
+local web UI (inventory map, download wizard, SQL, and time-series
+charts).
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 
-## Visão geral
+## Overview
 
-ERA5-ETL trata cada produto (`era5`, `era5-land`, `inmet`) como um
-**dataset plug-in independente**. Cada `DatasetConfig` tem um
-`SOURCE_KIND` (`cds_grid` ou `inmet_zip`) e `pipeline/source_handlers.py`
-despacha o downloader/conversor/refresh corretos — sem `if dataset == …`
-espalhado. Tudo é gravado em **Parquet** e exposto via DuckDB, CLI e uma
-**SPA local** (FastAPI + React + Vite).
+ERA5-ETL treats each product (`era5`, `era5-land`, `inmet`) as an
+**independent plug-in dataset**. Each `DatasetConfig` has a
+`SOURCE_KIND` (`cds_grid` or `inmet_zip`) and `pipeline/source_handlers.py`
+dispatches the correct downloader/converter/refresh — with no
+`if dataset == …` scattered across the codebase. Everything is written to
+**Parquet** and exposed via DuckDB, the CLI, and a **local SPA**
+(FastAPI + React + Vite).
 
 ```
    CDS API (ERA5 / ERA5-LAND)            portal.inmet.gov.br (INMET)
         │                                         │
- ┌──────▼───────┐  área 2x2→dias→var       ┌───────▼──────────┐  1 ZIP/ano
- │request_planner│                          │InmetPortalDownloader│ (1 CSV/estação)
+ ┌──────▼───────┐  area 2x2→days→var       ┌───────▼──────────┐  1 ZIP/year
+ │request_planner│                          │InmetPortalDownloader│ (1 CSV/station)
  └──────┬───────┘                          └───────┬──────────┘
- ┌──────▼───────┐  pula chunks prontos      ┌──────▼───────────┐ latin-1, ;/,
- │ CDSDownloader │  (manifest)              │ InmetToParquet…  │ 17 vars + metadados
+ ┌──────▼───────┐  skip ready chunks        ┌──────▼───────────┐ latin-1, ;/,
+ │ CDSDownloader │  (manifest)              │ InmetToParquet…  │ 17 vars + metadata
  └──────┬───────┘                          └──────┬───────────┘
-  NetCDF em _tmp_netcdf/<ds>/               CSVs em _tmp_netcdf/inmet/<ano>/
+  NetCDF in _tmp_netcdf/<ds>/               CSVs in _tmp_netcdf/inmet/<year>/
  ┌──────▼────────────────┐                  (1 CSV → 1 Parquet)
  │NetCDFToParquetConverter│                          │
  └──────┬────────────────┘                           │
         ▼                                             ▼
  climate_data_store_db/era5[-land]/        climate_data_store_db/inmet/
-   date=YYYY-MM-DD/…part-001.parquet         station=<id>/<id>_<ano>.parquet
+   date=YYYY-MM-DD/…part-001.parquet         station=<id>/<id>_<year>.parquet
    _manifest.json · _coverage.duckdb         _manifest.json · _stations.duckdb
         └───────────────────┬─────────────────────────┘
                   ┌─────────▼─────────┐
-                  │ CLI · Web UI      │  + VIEWs/MACROs do usuário
-                  │ DuckDB · Python   │  (criadas na tela /query)
+                  │ CLI · Web UI      │  + user VIEWs/MACROs
+                  │ DuckDB · Python   │  (created on the /query page)
                   └───────────────────┘
 ```
 
-## Recursos
+## Features
 
-- **Datasets como plug-ins** — cada um em
-  `src/era5_etl/datasets/<nome>/` com `variables.yaml` próprio, registrado
-  via `@DatasetRegistry.register`. Adicionar um novo dataset não exige tocar
-  na CLI, na UI nem no planner.
-- **Fonte dirige o pipeline** — `DatasetConfig.SOURCE_KIND` (`cds_grid` |
-  `inmet_zip`) + `pipeline/source_handlers.py` selecionam
-  downloader/conversor/refresh. ERA5/ERA5-LAND vêm do CDS (NetCDF →
-  Parquet particionado por `date=`, índice de cobertura
-  `_coverage.duckdb`). INMET vem do portal (ZIP anual → 1 Parquet por
-  estação/ano em `station=<id>/`, índice de estações `_stations.duckdb`).
-- **INMET integrado** — `era5 pipeline --dataset inmet` baixa o ZIP anual
-  do portal do INMET, normaliza o CSV (latin-1, `;`/`,`, formato que
-  varia por ano), mapeia as 17 variáveis posicionalmente e grava o
-  Parquet com `date`/`hour_utc`/`latitude`/`longitude` no mesmo padrão do
-  ERA5. Cada Parquet carrega ainda os 4 vizinhos de grade ERA5/ERA5-LAND
-  + distâncias para comparação espacial. Pré-requisito: ERA5 **e**
-  ERA5-LAND precisam ter ao menos o mínimo baixado antes.
-- **VIEWs/MACROs definidas pelo usuário** — na tela `/query` o usuário
-  cria suas próprias VIEWs/MACROs combinando as views base (ERA5,
-  ERA5-LAND, INMET) pelo editor SQL ("Salvar VIEW") ou pelo builder
-  visual de colunas/JOINs (com join por epsilon para coordenadas). As
-  definições são persistidas como SQL e reaplicadas a cada consulta;
-  aparecem no menu SCHEMA. Não há mais a VIEW `era5_inmet` gerada em
-  Python — ela sobrevive como um template de 1 clique
-  (`era5-inmet-compare`) que o usuário revisa e salva.
-- **Layout único de paths** — `storage/paths.py` é o ponto único de verdade:
-  `climate_data_store_db/<dataset>/` para Parquet+manifest+DuckDB,
-  `_tmp_netcdf/<dataset>/` para downloads brutos. Sem path-joining
-  espalhado.
-- **Request planner hierárquico** — `download/request_planner.py` divide
-  requisições no cascata fixa **área 2x2 → blocos de dias → por variável**,
-  cada chunk caindo dentro do `max_request_bytes`. Levanta
-  `DownloadSizeError` em vez de mandar uma requisição que será rejeitada.
-- **Manifesto por dataset** — `storage/manifest.py` mantém um JSON
-  `(_manifest.json)` indexado por `chunk_id`. Tanto o download quanto o
-  comando `era5 update` consultam o manifesto para pular trabalho já feito.
-- **Web UI local** — Vite + React + TypeScript + Tailwind + TanStack
-  Router/Query. Páginas: **Dashboard**, **Inventory** (mapa
-  multi-sistema sobreposto — cor/tamanho/opacidade/marcador por sistema,
-  pontos de grade ERA5/ERA5-LAND e estações INMET), **Download wizard**
-  (com fluxo dedicado para INMET), **Query** (SQL/DuckDB), **Time
-  Series** (notebook de gráficos Plotly), **Settings**. Servida pelo
+- **Datasets as plug-ins** — each one lives in
+  `src/era5_etl/datasets/<name>/` with its own `variables.yaml`, registered
+  via `@DatasetRegistry.register`. Adding a new dataset requires no changes
+  to the CLI, UI, or planner.
+- **Source drives the pipeline** — `DatasetConfig.SOURCE_KIND` (`cds_grid` |
+  `inmet_zip`) + `pipeline/source_handlers.py` select the
+  downloader/converter/refresh. ERA5/ERA5-LAND come from the CDS
+  (NetCDF → Parquet partitioned by `date=`, coverage index in
+  `_coverage.duckdb`). INMET comes from the portal (yearly ZIP → 1 Parquet
+  per station/year in `station=<id>/`, station index in `_stations.duckdb`).
+- **INMET integrated** — `era5 pipeline --dataset inmet` downloads the
+  yearly ZIP from the INMET portal, normalizes the CSV (latin-1, `;`/`,`,
+  format that varies per year), maps the 17 variables positionally, and
+  writes Parquet with `date`/`hour_utc`/`latitude`/`longitude` following
+  the ERA5 convention. Each Parquet also carries the 4 ERA5/ERA5-LAND
+  grid neighbours + distances for spatial comparison. Prerequisite: both
+  ERA5 **and** ERA5-LAND must have at least the minimum data downloaded
+  beforehand.
+- **User-defined VIEWs/MACROs** — on the `/query` page, the user creates
+  their own VIEWs/MACROs combining the base views (ERA5, ERA5-LAND,
+  INMET) via the SQL editor ("Save VIEW") or the visual builder
+  (columns/JOINs with epsilon-based coordinate joins). Definitions are
+  persisted as SQL and replayed on every query; they show up in the
+  SCHEMA menu. There is no longer an `era5_inmet` VIEW generated in
+  Python — it survives as a one-click template
+  (`era5-inmet-compare`) that the user reviews and saves.
+- **Unified path layout** — `storage/paths.py` is the single source of
+  truth: `climate_data_store_db/<dataset>/` for Parquet+manifest+DuckDB,
+  `_tmp_netcdf/<dataset>/` for raw downloads. No scattered path-joining.
+- **Hierarchical request planner** — `download/request_planner.py` splits
+  requests with a fixed cascade: **area 2x2 → day blocks → per variable**,
+  with each chunk fitting under `max_request_bytes`. Raises
+  `DownloadSizeError` rather than issuing a request that would be rejected.
+- **Per-dataset manifest** — `storage/manifest.py` keeps a JSON
+  (`_manifest.json`) indexed by `chunk_id`. Both the download and the
+  `era5 update` command consult the manifest to skip work already done.
+- **Local Web UI** — Vite + React + TypeScript + Tailwind + TanStack
+  Router/Query. Pages: **Dashboard**, **Inventory** (overlaid
+  multi-system map — color/size/opacity/marker per system,
+  ERA5/ERA5-LAND grid points, and INMET stations), **Download Wizard**
+  (with a dedicated flow for INMET), **Query** (SQL/DuckDB), **Time
+  Series** (Plotly chart notebook), **Settings**. Served by
   `era5 ui` (FastAPI).
-- **Time Series** — `/timeseries`: notebook de células de gráfico
-  (Plotly). Por série: view + variável + ponto/região (selecionável no
-  mapa) + eixo Y/Y2; X = timestamp (data+hora UTC). Conversão de unidade
-  **só na visualização** (presets K↔°C/°F ou fórmula custom; dados
-  originais intactos), estatísticas por série (mín/máx/média/desvio/
-  variância/IQR) e linha de média opcional.
-- **Filtros geográficos IBGE** — `--municipio`, `--uf`,
-  `--regiao-imediata`, `--regiao-intermediaria` resolvem o `area` a partir
-  do shapefile IBGE empacotado.
-- **Dry-run em todo lugar** — `era5 pipeline --dry-run` e
-  `era5 download --dry-run` imprimem o plano de chunks + estimativa de
-  tamanho sem contactar o CDS.
-- **`--dataset all`** — roda CLI commands sobre `era5` e `era5-land`
-  sequencialmente.
-- **CDS estritamente NetCDF4** — toda requisição ao CDS usa
-  `data_format="netcdf"` (GRIB foi deliberadamente adiado). INMET vem
-  como CSV dentro de ZIP — caminho de ingestão próprio, sem CDS.
+- **Time Series** — `/timeseries`: chart-cell notebook (Plotly). Per
+  series: view + variable + point/region (selectable on the map) +
+  Y/Y2 axis; X = timestamp (date + UTC hour). Unit conversion
+  **visualization-only** (K↔°C/°F presets or custom formula; raw data
+  untouched), per-series statistics (min/max/mean/std/variance/IQR), and
+  optional mean line.
+- **IBGE geographic filters** — `--municipio`, `--uf`,
+  `--regiao-imediata`, `--regiao-intermediaria` resolve `area` from the
+  bundled IBGE shapefile.
+- **Dry-run everywhere** — `era5 pipeline --dry-run` and
+  `era5 download --dry-run` print the chunk plan + size estimate without
+  contacting the CDS.
+- **`--dataset all`** — runs CLI commands against `era5` and `era5-land`
+  sequentially.
+- **CDS strictly NetCDF4** — every CDS request uses
+  `data_format="netcdf"` (GRIB was deliberately deferred). INMET arrives
+  as CSV inside a ZIP — its own ingestion path, no CDS involved.
 
-## Instalação
+## Installation
 
-### Pré-requisitos
+### Prerequisites
 
-- **Python 3.11+** (recomendado 3.12).
-- Conta no [Copernicus CDS](https://cds.climate.copernicus.eu) com chave
-  de API ativa.
-- **Para a Web UI:** `bun` (recomendado) ou `pnpm`/`npm`. O hook de build
-  do Hatch detecta automaticamente o runner disponível; sem nenhum, o
-  bundle SPA é pulado e a UI fica indisponível no wheel
-  (mas as APIs HTTP continuam funcionando).
+- **Python 3.11+** (3.12 recommended).
+- A [Copernicus CDS](https://cds.climate.copernicus.eu) account with an
+  active API key.
+- **For the Web UI:** `bun` (recommended) or `pnpm`/`npm`. The Hatch
+  build hook auto-detects the available runner; with none, the SPA
+  bundle is skipped and the UI is unavailable in the wheel (but the HTTP
+  APIs still work).
 
-### A partir do código fonte
+### From source
 
 ```bash
-git clone https://github.com/seu-usuario/era5-etl.git
+git clone https://github.com/your-user/era5-etl.git
 cd era5-etl
 pip install -e ".[dev]"
 ```
 
-Em ambiente Windows com Python 3.12 isolado:
+On Windows with an isolated Python 3.12:
 
 ```powershell
 py -3.12 -m pip install -e ".[dev]"
 ```
 
-### Credenciais CDS
+### CDS credentials
 
-1. Crie um arquivo `~/.cdsapirc` (Linux/macOS) ou `%USERPROFILE%\.cdsapirc`
+1. Create a `~/.cdsapirc` file (Linux/macOS) or `%USERPROFILE%\.cdsapirc`
    (Windows):
 
 ```ini
 url: https://cds.climate.copernicus.eu/api
-key: <SEU-UID>:<SUA-API-KEY>
+key: <YOUR-UID>:<YOUR-API-KEY>
 ```
 
-2. Aceite os termos do dataset que vai usar na página do produto
-   (ex.: ERA5-Land) antes do primeiro download.
+2. Accept the dataset terms on the product page (e.g., ERA5-Land) before
+   your first download.
 
-## Uso rápido (CLI)
+## Quick start (CLI)
 
-O comando principal é `era5` (alias: `era5-etl`).
+The main command is `era5` (alias: `era5-etl`).
 
-### Inspecionar variáveis disponíveis
+### Inspect available variables
 
 ```bash
 era5 variables --dataset era5-land
 ```
 
-### Pipeline completo (download + convert)
+### Full pipeline (download + convert)
 
 ```bash
 era5 pipeline \
@@ -167,99 +168,101 @@ era5 pipeline \
   --var total_precipitation
 ```
 
-Cobertura geográfica padrão: bounding box do Brasil. Use `--municipio`,
-`--uf`, `--regiao-imediata` ou `--regiao-intermediaria` para recortar.
+Default geographic coverage: Brazil's bounding box. Use `--municipio`,
+`--uf`, `--regiao-imediata`, or `--regiao-intermediaria` to restrict it.
 
-### Dry-run (planejar sem baixar)
+### Dry-run (plan without downloading)
 
 ```bash
 era5 pipeline --dataset era5-land \
   --start-date 2024-01-01 --end-date 2024-12-31 --dry-run
 ```
 
-Imprime a lista de `chunk_id`s, dias cobertos, área (N,W,S,E) e estimativa
-total em MB.
+Prints the list of `chunk_id`s, days covered, area (N,W,S,E), and total
+estimated size in MB.
 
-### Rodar para todos os datasets
+### Run for all datasets
 
 ```bash
 era5 pipeline --dataset all --start-date 2024-01-01 --end-date 2024-01-31
 ```
 
-`all` inclui `era5`, `era5-land` e `inmet`. Comandos CDS-específicos
-(`update`/smart-diff) fazem **no-op** para `inmet` com mensagem clara.
+`all` includes `era5`, `era5-land`, and `inmet`. CDS-specific commands
+(`update`/smart-diff) are a **no-op** for `inmet` with a clear message.
 
-### INMET (estações do Brasil)
+### INMET (Brazilian weather stations)
 
-INMET não é grade nem CDS: 1 ZIP por ano no portal, 1 CSV por estação.
-O download exige que ERA5 **e** ERA5-LAND já tenham o mínimo em disco
-(necessário para a comparação INMET × grade e as distâncias por estação).
+INMET is neither a grid nor CDS: 1 ZIP per year from the portal, 1 CSV
+per station. The download requires that ERA5 **and** ERA5-LAND already
+have the minimum on disk (needed for the INMET × grid comparison and the
+per-station distances).
 
 ```bash
-# baixe primeiro o mínimo das grades
+# first download the grid minimum
 era5 pipeline --dataset era5      --start-date 2024-01-01 --end-date 2024-01-01 --var 2m_temperature
 era5 pipeline --dataset era5-land --start-date 2024-01-01 --end-date 2024-01-01 --var 2m_temperature
 
-# depois o INMET (o intervalo de datas é traduzido para anos)
+# then INMET (the date range is translated to years)
 era5 pipeline --dataset inmet --start-date 2000-01-01 --end-date 2026-12-31
 ```
 
-### Comparação ERA5 × INMET
+### ERA5 × INMET comparison
 
-Não há mais um comando `era5 era5-inmet`. A comparação é criada pelo
-usuário na tela `/query`: abra o template **era5_inmet** (aba Templates),
-revise o SQL e clique em **Salvar VIEW**, ou monte-a pelo builder visual
-(JOIN por epsilon nas coordenadas). Depois é só consultar normalmente,
-ex.: `SELECT * FROM era5_inmet WHERE station_id = 'A001'`.
+There is no longer an `era5 era5-inmet` command. The comparison is
+created by the user on the `/query` page: open the **era5_inmet**
+template (Templates tab), review the SQL, and click **Save VIEW**, or
+build it via the visual builder (epsilon-based JOIN on coordinates).
+Then query it normally, e.g., `SELECT * FROM era5_inmet WHERE station_id = 'A001'`.
 
-### Atualização incremental
+### Incremental update
 
-`era5 update` calcula, por `(variável, ano-mês)`, o **diff de cobertura
-em nível de célula** entre a área pedida e o que o manifesto registra como
-já baixado, e só faz requisição CDS para os retângulos faltantes — pronto
-para crontab:
+`era5 update` computes, per `(variable, year-month)`, the **cell-level
+coverage diff** between the requested area and what the manifest records
+as already downloaded, and only issues a CDS request for the missing
+rectangles — crontab-ready:
 
 ```bash
 era5 update --dataset era5-land --start-date 2020-01-01 --uf SP
 ```
 
-A próxima execução com `--uf RJ` (cuja bbox se sobrepõe à de SP) baixa
-**apenas a região disjunta**. Adicione `--dry-run` para listar os
-retângulos faltantes sem contactar o CDS. `update` é CDS-only — para
-`inmet` ele apenas avisa e não faz nada (reuso por ano é via manifesto).
+The next run with `--uf RJ` (whose bbox overlaps SP's) downloads
+**only the disjoint region**. Add `--dry-run` to list the missing
+rectangles without contacting the CDS. `update` is CDS-only — for
+`inmet` it simply warns and does nothing (per-year reuse is via the
+manifest).
 
-### País e regiões IBGE
+### Country and IBGE regions
 
-`--pais` é a flag de primeiro nível para escopo geográfico (default
-`Brasil`). Sem mais nenhuma flag, devolve a bbox do país:
+`--pais` is the top-level flag for geographic scope (default:
+`Brasil`). With no other flags, it returns the country's bbox:
 
 ```bash
 era5 pipeline --pais Brasil --start-date 2024-01-01 --end-date 2024-01-31
 ```
 
-Combinado com flags de subregião IBGE, restringe dentro do país:
+Combined with IBGE subregion flags, it restricts inside the country:
 
 ```bash
-era5 pipeline --pais Brasil --uf SP   # bbox de SP
-era5 pipeline --pais Brasil --municipio Campinas --uf SP  # municipio + UF (desambigua)
+era5 pipeline --pais Brasil --uf SP   # SP bbox
+era5 pipeline --pais Brasil --municipio Campinas --uf SP  # municipio + UF (disambiguates)
 ```
 
-As flags `--municipio`, `--regiao-imediata`, `--regiao-intermediaria`,
-`--uf` são mutuamente exclusivas (exceto `--municipio + --uf`). Países
-não suportados levantam erro — adicione uma linha em
-`src/era5_etl/_data/ibge/pais.csv` para habilitar.
+The flags `--municipio`, `--regiao-imediata`, `--regiao-intermediaria`,
+`--uf` are mutually exclusive (except `--municipio + --uf`). Unsupported
+countries raise an error — add a line to
+`src/era5_etl/_data/ibge/pais.csv` to enable.
 
-### Dedup de dados pré-existentes
+### Deduping pre-existing data
 
-Para datasets criados antes da v0.3.0 (que podia gravar arquivos
-sobrepostos numa mesma partição):
+For datasets created before v0.3.0 (which could write overlapping files
+within the same partition):
 
 ```bash
 era5 dedup --dataset all
 ```
 
-Lê cada partição `date=YYYY-MM-DD/`, colapsa linhas duplicadas por
-`(latitude, longitude, hour_utc)`, e regrava. Idempotente.
+Reads each `date=YYYY-MM-DD/` partition, collapses duplicate rows by
+`(latitude, longitude, hour_utc)`, and rewrites. Idempotent.
 
 ### Status
 
@@ -267,11 +270,11 @@ Lê cada partição `date=YYYY-MM-DD/`, colapsa linhas duplicadas por
 era5 status --dataset all
 ```
 
-Reporta, por dataset: número de arquivos Parquet, tamanho total,
-partições (`date=` para grade, `station=` para INMET), primeira/última
-partição, e quantos registros estão no manifesto.
+Reports, per dataset: number of Parquet files, total size, partitions
+(`date=` for grid, `station=` for INMET), first/last partition, and how
+many records are in the manifest.
 
-### Consulta SQL
+### SQL query
 
 ```bash
 era5 query \
@@ -279,21 +282,21 @@ era5 query \
   --dataset era5-land --limit 50
 ```
 
-A view DuckDB (`<dataset>` (hífens viram `_`: `era5-land` → view `era5_land`)) é criada sob demanda apontando para o
-diretório Parquet do dataset.
+The DuckDB view (`<dataset>` (hyphens become underscores: `era5-land` → view `era5_land`)) is created on demand, pointing to the
+dataset's Parquet directory.
 
-**Pruning automático em duas camadas:**
+**Two-layer automatic pruning:**
 
-1. **Diretório Hive** — `WHERE date BETWEEN ...` poda partições antes
-   de abrir qualquer arquivo (a coluna `date` está no nome da pasta).
-2. **Row-group statistics** — `WHERE latitude BETWEEN ...` aproveita o
-   sort interno `(latitude, longitude, hour_utc)` aplicado na escrita.
-   Min/max de cada row-group ficam apertados → DuckDB pula
-   row-groups inteiros que não intersectam o filtro espacial. **Não há
-   necessidade de colunas Hive auxiliares** como `lat_bucket` ou
-   `lon_bucket`; a query é natural sobre `latitude`/`longitude` reais.
+1. **Hive directory** — `WHERE date BETWEEN ...` prunes partitions
+   before opening any file (the `date` column is in the folder name).
+2. **Row-group statistics** — `WHERE latitude BETWEEN ...` leverages the
+   internal `(latitude, longitude, hour_utc)` sort applied on write.
+   Per-row-group min/max are tight → DuckDB skips entire row groups
+   that don't intersect the spatial filter. **No auxiliary Hive
+   columns** (such as `lat_bucket` or `lon_bucket`) are needed; the
+   query is natural over real `latitude`/`longitude`.
 
-Exemplo de query natural que aproveita as duas camadas:
+Example of a natural query that leverages both layers:
 
 ```sql
 SELECT *
@@ -310,21 +313,21 @@ WHERE date BETWEEN '2024-06-01' AND '2024-08-31'   -- partition pruning
 era5 ui --data-dir ./data --port 8788
 ```
 
-Abre o navegador em `http://127.0.0.1:8788/`. A SPA é servida pelo FastAPI
-a partir de `src/era5_etl/web/static/` (gerada no build).
+Opens the browser at `http://127.0.0.1:8788/`. The SPA is served by
+FastAPI from `src/era5_etl/web/static/` (generated at build time).
 
-### Comandos auxiliares
+### Auxiliary commands
 
 ```bash
-era5 convert   --dataset era5-land           # só conversão (NetCDF/CSV -> Parquet)
-era5 download  --dataset inmet               # só download (ZIP do portal INMET)
-era5 dedup     --dataset all                 # migração: dedupa parquets antigos
-era5 ibge      -o ./data/ibge_locais.parquet # gera o Parquet IBGE
+era5 convert   --dataset era5-land           # convert only (NetCDF/CSV -> Parquet)
+era5 download  --dataset inmet               # download only (INMET portal ZIP)
+era5 dedup     --dataset all                 # migration: dedupe old parquets
+era5 ibge      -o ./data/ibge_locais.parquet # generate the IBGE Parquet
 ```
 
-`era5 --help` ou `era5 <comando> --help` mostra todas as flags.
+`era5 --help` or `era5 <command> --help` lists every flag.
 
-## Layout em disco
+## On-disk layout
 
 ```
 <data_dir>/
@@ -333,33 +336,33 @@ era5 ibge      -o ./data/ibge_locais.parquet # gera o Parquet IBGE
 │   │   ├── date=2024-01-01/era5_2024-01-01_part-001.parquet
 │   │   ├── ...
 │   │   ├── _manifest.json
-│   │   ├── _coverage.duckdb            # índice de cobertura (grade)
+│   │   ├── _coverage.duckdb            # coverage index (grid)
 │   │   └── era5.duckdb
 │   ├── era5-land/
 │   │   ├── date=YYYY-MM-DD/era5-land_YYYY-MM-DD_part-001.parquet
 │   │   ├── _manifest.json · _coverage.duckdb · era5-land.duckdb
 │   ├── inmet/
-│   │   ├── station=A001/A001_2000.parquet   # 1 Parquet por estação/ano
+│   │   ├── station=A001/A001_2000.parquet   # 1 Parquet per station/year
 │   │   ├── station=A001/A001_2001.parquet
 │   │   ├── ...
 │   │   ├── _manifest.json
-│   │   ├── _stations.duckdb            # índice de estações (não grade)
+│   │   ├── _stations.duckdb            # station index (not grid)
 │   │   └── inmet.duckdb
 │   └── _tmp_netcdf/
-│       ├── era5/<chunk_id>.nc          # NetCDF bruto (descartável)
-│       └── inmet/<ano>/*.CSV           # CSVs extraídos (removidos pós-conversão)
+│       ├── era5/<chunk_id>.nc          # raw NetCDF (disposable)
+│       └── inmet/<year>/*.CSV          # extracted CSVs (removed after conversion)
 ```
 
-- Nomes das pastas são **literais** — `era5-land` mantém o hífen (idem
-  CDS / `variables.yaml`).
-- O DuckDB fica colocado **dentro** do diretório do dataset, mantendo
-  cada dataset autocontido.
-- `_tmp_netcdf/` (dentro de `climate_data_store_db/`) é descartável;
-  recriar o pipeline rebaixa do CDS / portal INMET. Os índices
-  `_coverage.duckdb` / `_stations.duckdb` são estado derivado —
-  reconstruídos a partir do Parquet.
+- Folder names are **literal** — `era5-land` keeps the hyphen (same
+  as CDS / `variables.yaml`).
+- The DuckDB file lives **inside** the dataset directory, keeping each
+  dataset self-contained.
+- `_tmp_netcdf/` (inside `climate_data_store_db/`) is disposable;
+  re-running the pipeline re-downloads from the CDS / INMET portal.
+  The `_coverage.duckdb` / `_stations.duckdb` indexes are derived state
+  — rebuilt from Parquet.
 
-## Uso programático
+## Programmatic usage
 
 ```python
 from pathlib import Path
@@ -378,12 +381,12 @@ context = ERA5Pipeline(config).run()
 print(context.get_metadata("converted_count"))
 ```
 
-`PipelineConfig.create()` é o único caminho sancionado para montar config:
-ele resolve paths via `storage.paths`, puxa variáveis default do
-`variables.yaml` do dataset, e amarra `download.output_dir`, `storage`,
-`database.db_path` consistentemente.
+`PipelineConfig.create()` is the only sanctioned way to assemble config:
+it resolves paths via `storage.paths`, pulls default variables from the
+dataset's `variables.yaml`, and consistently wires `download.output_dir`,
+`storage`, and `database.db_path`.
 
-### Consultando direto via DuckDB
+### Querying directly via DuckDB
 
 ```python
 import duckdb
@@ -406,56 +409,56 @@ df = conn.execute("""
 Stack:
 
 - **Vite + React 18 + TypeScript** (strict)
-- **Tailwind CSS** com tema inspirado em interfaces científicas
-- **TanStack Query** (estado servidor) + **TanStack Router** (roteamento)
-- **deck.gl + maplibre-gl** (mapas do inventário e do seletor de ponto)
-- **Plotly** (`plotly.js-dist-min` + `react-plotly.js`, carregado lazy
-  em chunk separado) para os gráficos de séries temporais
-- **apache-arrow** (decodifica respostas grandes), **monaco** (editor
-  SQL), **@dnd-kit** (reordenar abas), **sonner** (toasts),
-  **lucide-react** (ícones)
+- **Tailwind CSS** with a theme inspired by scientific interfaces
+- **TanStack Query** (server state) + **TanStack Router** (routing)
+- **deck.gl + maplibre-gl** (inventory maps and point picker)
+- **Plotly** (`plotly.js-dist-min` + `react-plotly.js`, lazy-loaded in
+  a separate chunk) for time-series charts
+- **apache-arrow** (decodes large responses), **monaco** (SQL editor),
+  **@dnd-kit** (reorder tabs), **sonner** (toasts),
+  **lucide-react** (icons)
 
-Páginas:
+Pages:
 
-| Rota          | Função                                                                       |
-|---------------|------------------------------------------------------------------------------|
-| `/dashboard`  | Cards por dataset com tamanho, partições, cobertura                          |
-| `/inventory`  | Mapa multi-sistema sobreposto — pontos de grade ERA5/ERA5-LAND e estações INMET; cor/tamanho/opacidade/marcador por sistema |
-| `/download`   | Wizard (dataset → vars → área → datas → estimativa → run + SSE); fluxo dedicado para INMET (anos do portal) |
-| `/query`      | Editor SQL DuckDB com preview e export CSV/Parquet                           |
-| `/timeseries` | Notebook de gráficos Plotly: séries multi-view, ponto/região via mapa, Y/Y2, conversão de unidade visual, estatísticas |
-| `/settings`   | Config do `data_dir` persistido em `~/.config/era5-etl/config.toml`          |
+| Route         | Purpose                                                                       |
+|---------------|-------------------------------------------------------------------------------|
+| `/dashboard`  | Per-dataset cards with size, partitions, coverage                             |
+| `/inventory`  | Overlaid multi-system map — ERA5/ERA5-LAND grid points and INMET stations; color/size/opacity/marker per system |
+| `/download`   | Wizard (dataset → vars → area → dates → estimate → run + SSE); dedicated flow for INMET (portal years) |
+| `/query`      | DuckDB SQL editor with preview and CSV/Parquet export                         |
+| `/timeseries` | Plotly chart notebook: multi-view series, point/region via map, Y/Y2, visual unit conversion, statistics |
+| `/settings`   | `data_dir` config persisted to `~/.config/era5-etl/config.toml`               |
 
 ### Dev mode
 
-Backend e frontend em paralelo:
+Backend and frontend in parallel:
 
 ```bash
-# Terminal 1 — FastAPI em :8788
+# Terminal 1 — FastAPI on :8788
 make api-dev
-# (ou) py -3.12 -m uvicorn era5_etl.web.server:create_app --factory --reload --port 8788
+# (or) py -3.12 -m uvicorn era5_etl.web.server:create_app --factory --reload --port 8788
 
-# Terminal 2 — Vite em :5173 com proxy /api -> :8788
+# Terminal 2 — Vite on :5173 with proxy /api -> :8788
 make ui-dev
-# (ou) cd web-ui && bun run dev
+# (or) cd web-ui && bun run dev
 ```
 
-### Build da SPA
+### SPA build
 
 ```bash
 make ui-build           # bun install && bun run build
-# saída: src/era5_etl/web/static/
+# output: src/era5_etl/web/static/
 ```
 
-Quando o pacote Python é construído (`pip install .` / `hatch build`), o
-hook `hatch_build.py` roda esse build automaticamente. Defina
-`ERA5_ETL_SKIP_UI_BUILD=1` para pular (CI sem Node/Bun).
+When the Python package is built (`pip install .` / `hatch build`), the
+`hatch_build.py` hook runs this build automatically. Set
+`ERA5_ETL_SKIP_UI_BUILD=1` to skip it (CI without Node/Bun).
 
-## Arquitetura
+## Architecture
 
 ```
 src/era5_etl/
-├── cli.py                       # Typer + Rich; despacha para módulos
+├── cli.py                       # Typer + Rich; dispatches to modules
 ├── config.py                    # PipelineConfig.create(), DownloadConfig, ...
 ├── datasets/                    # plug-ins
 │   ├── base.py                  # DatasetConfig (NAME, SOURCE_KIND, is_gridded)
@@ -464,81 +467,81 @@ src/era5_etl/
 ├── download/
 │   ├── request_planner.py       # plan_requests() -> RequestChunk[]
 │   ├── size_estimator.py        # estimate_request_size, split_area
-│   ├── cds_downloader.py        # itera chunks + cdsapi
-│   └── inmet_portal.py          # scrape do portal + ZIP anual + extração
+│   ├── cds_downloader.py        # iterates chunks + cdsapi
+│   └── inmet_portal.py          # portal scrape + yearly ZIP + extraction
 ├── transform/
 │   ├── netcdf_to_parquet.py     # xarray -> polars -> Parquet (date=)
 │   └── inmet_to_parquet.py      # CSV latin-1 -> Parquet (station=)
 ├── storage/
 │   ├── paths.py                 # resolve_*_dir / resolve_*_path
 │   ├── manifest.py              # ChunkRecord, Manifest
-│   ├── parquet_manager.py       # escrita Parquet, view DuckDB
-│   ├── coverage.py              # _coverage.duckdb (grade)
+│   ├── parquet_manager.py       # Parquet writing, DuckDB view
+│   ├── coverage.py              # _coverage.duckdb (grid)
 │   └── stations.py              # _stations.duckdb (INMET)
 ├── pipeline/
 │   ├── era5_pipeline.py         # Template Method (download → convert → refresh)
-│   └── source_handlers.py       # SOURCE_KIND → (downloader, conversor, refresh)
+│   └── source_handlers.py       # SOURCE_KIND → (downloader, converter, refresh)
 ├── web/
 │   ├── server.py                # create_app(data_dir)
 │   ├── routes/                  # version, datasets, stats, settings,
 │   │                            # credentials, pipeline, query, query_store,
 │   │                            # regions, export, inventory, inmet, timeseries
-│   ├── timeseries_sql.py        # builder SELECT-only p/ séries temporais
-│   ├── runtime.py               # jobs de pipeline em background + SSE
+│   ├── timeseries_sql.py        # SELECT-only builder for time series
+│   ├── runtime.py               # background pipeline jobs + SSE
 │   ├── user_config.py           # ~/.config/era5-etl/config.toml
-│   └── static/                  # SPA gerada (gitignored)
+│   └── static/                  # generated SPA (gitignored)
 ├── utils/
 │   ├── variables.py             # list_variables() via registry
-│   └── ibge_loader.py           # bbox por município/UF/região
-└── _data/                       # IBGE CSV/shape empacotados
+│   └── ibge_loader.py           # bbox by municipio/UF/region
+└── _data/                       # bundled IBGE CSV/shapefile
 ```
 
-### Invariantes que importa preservar
+### Invariants worth preserving
 
-1. **`DownloadConfig.dataset` é validado pelo registry**, não por
-   `Literal`. Adicionar dataset = `@DatasetRegistry.register`.
-2. **Toda decisão de path passa por `storage.paths`**. Nunca faça
-   `base / "parquet" / dataset` na unha — chame `resolve_dataset_dir`.
-3. **Download CDS é sempre `netcdf`** (GRIB mudaria converter/estimador/
-   manifesto). Fontes não-CDS (INMET) têm downloader/conversor próprios
-   via `source_handlers`.
-4. **Size budget vem do planner**. `request_planner` é o lugar onde se
-   negocia tamanho; downstream confia.
-5. **Manifesto é a fonte de verdade do "feito"**, não a presença do
-   arquivo Parquet — re-runs com `--override` o reescrevem.
+1. **`DownloadConfig.dataset` is validated by the registry**, not by
+   `Literal`. Adding a dataset = `@DatasetRegistry.register`.
+2. **Every path decision goes through `storage.paths`.** Never write
+   `base / "parquet" / dataset` by hand — call `resolve_dataset_dir`.
+3. **CDS downloads are always `netcdf`** (GRIB would change
+   converter/estimator/manifest). Non-CDS sources (INMET) have their own
+   downloader/converter via `source_handlers`.
+4. **The size budget comes from the planner.** `request_planner` is
+   where size is negotiated; downstream trusts it.
+5. **The manifest is the source of truth for "done"**, not the
+   presence of a Parquet file — re-runs with `--override` rewrite it.
 
-## Adicionando um novo dataset
+## Adding a new dataset
 
-1. Crie `src/era5_etl/datasets/<novo>/{__init__.py, config.py, variables.yaml}`.
-2. Subclasse `DatasetConfig` e decore com `@DatasetRegistry.register`,
-   setando `NAME`, `_variables_yaml_path` e — para uma fonte CDS de grade
-   — `CDS_DATASET_ID`/`GRID_RESOLUTION_DEG`. Para uma fonte não-grade,
-   defina `SOURCE_KIND` próprio (ex.: `inmet_zip`).
-3. Importe a sub-package em `era5_etl.datasets.__init__:ensure_loaded`.
-4. Se `SOURCE_KIND` for novo, registre o handler em
-   `pipeline/source_handlers.py` (downloader, conversor, refresh stage).
-5. Adicione uma asserção em `tests/test_datasets_registry.py`.
+1. Create `src/era5_etl/datasets/<new>/{__init__.py, config.py, variables.yaml}`.
+2. Subclass `DatasetConfig` and decorate with `@DatasetRegistry.register`,
+   setting `NAME`, `_variables_yaml_path`, and — for a CDS grid source —
+   `CDS_DATASET_ID`/`GRID_RESOLUTION_DEG`. For a non-grid source,
+   set your own `SOURCE_KIND` (e.g., `inmet_zip`).
+3. Import the sub-package from `era5_etl.datasets.__init__:ensure_loaded`.
+4. If `SOURCE_KIND` is new, register the handler in
+   `pipeline/source_handlers.py` (downloader, converter, refresh stage).
+5. Add an assertion in `tests/test_datasets_registry.py`.
 
-CLI, Web UI, planner e manifesto pegam o novo nome automaticamente.
+The CLI, Web UI, planner, and manifest pick up the new name automatically.
 
-## Versionamento
+## Versioning
 
-- **`VERSION`** é a fonte única de verdade.
-- `hatch_build.py` materializa o conteúdo em
-  `src/era5_etl/__version__.py` no build (não edite à mão).
-- `web-ui/package.json` é atualizado manualmente para refletir releases
-  maiores (sem impacto funcional, mas exposto no SPA).
+- **`VERSION`** is the single source of truth.
+- `hatch_build.py` materializes its content into
+  `src/era5_etl/__version__.py` at build time (don't edit by hand).
+- `web-ui/package.json` is updated manually to reflect major releases
+  (no functional impact, but exposed in the SPA).
 
-## Desenvolvimento
+## Development
 
 ```bash
 # Setup
 pip install -e ".[dev]"
 
-# Testes (424 testes; nenhum requer rede)
-make test          # ou: py -3.12 -m pytest
+# Tests (424 tests; none require network)
+make test          # or: py -3.12 -m pytest
 
-# Coverage HTML
+# HTML coverage
 py -3.12 -m pytest --cov-report=html
 
 # Lint / type-check
@@ -548,41 +551,41 @@ make typecheck     # mypy src/era5_etl
 # Format
 ruff format .
 
-# Rodar API + UI em modo dev (paralelo)
+# Run API + UI in dev mode (parallel)
 make dev
 ```
 
-Testes da Web UI usam o `TestClient` do FastAPI — sem rede.
-Testes do request planner usam `max_request_bytes` artificialmente baixos
-para forçar todos os tiers de split (a flag é setada após a construção
-para passar do floor de 1 MiB do Pydantic).
+Web UI tests use FastAPI's `TestClient` — no network required.
+The request planner tests use artificially low `max_request_bytes`
+to force every split tier (the field is set after construction to bypass
+Pydantic's 1-MiB floor).
 
-## Download de série pontual (ARCO/Zarr) — quando NÃO usar este projeto
+## Single-point time-series download (ARCO/Zarr) — when NOT to use this project
 
-> Esta seção é sobre o **endpoint ARCO do CDS** para baixar um ponto ao
-> longo de muitos anos — não confundir com a tela `/timeseries` (que
-> plota o que já está no Parquet local).
+> This section is about the **CDS ARCO endpoint** for downloading a single
+> point over many years — not to be confused with the `/timeseries`
+> page (which plots what is already in local Parquet).
 
-O Copernicus mantém endpoints experimentais em formato
-**Analysis Ready Cloud Optimized (ARCO / Zarr)** otimizados para
-**single-point time-series** ao longo de períodos muito longos:
+Copernicus maintains experimental endpoints in
+**Analysis Ready Cloud Optimized (ARCO / Zarr)** format optimized for
+**single-point time series** over very long periods:
 
 - `reanalysis-era5-land-timeseries`
 - `reanalysis-era5-single-levels-timeseries`
 
-São o caminho mais eficiente quando o caso de uso é:
-> "extrair uma ou poucas variáveis em **um único ponto da grade** ao longo
-> de **muitos anos**" (sem precisar do retângulo todo).
+They are the most efficient path when the use case is:
+> "extract one or a few variables at **a single grid point** over
+> **many years**" (without needing the whole rectangle).
 
-Para esse caso, vá direto via `cdsapi` — este projeto não cobre o
-endpoint ARCO porque o pipeline é otimizado para downloads **por área**
-com particionamento Parquet diário (formato e schema diferentes). O
-`cdsapi` por default loga uma nota sobre o endpoint ARCO em todas as
-requisições; o ERA5-ETL silencia essa mensagem
-(`install_cdsapi_log_filter`) para reduzir ruído. Re-habilitar se
-necessário: remover o filter do `logging.getLogger("cdsapi")`.
+For that case, go directly via `cdsapi` — this project does not cover
+the ARCO endpoint because the pipeline is optimized for **area-based**
+downloads with daily Parquet partitioning (different format and schema).
+By default `cdsapi` logs a note about the ARCO endpoint on every request;
+ERA5-ETL silences that message (`install_cdsapi_log_filter`) to reduce
+noise. To re-enable it: remove the filter from
+`logging.getLogger("cdsapi")`.
 
-Exemplo mínimo (fora do escopo deste pacote):
+Minimal example (out of scope for this package):
 
 ```python
 import cdsapi
@@ -591,7 +594,7 @@ c.retrieve(
     "reanalysis-era5-land-timeseries",
     {
         "variable": "2m_temperature",
-        "location": {"latitude": -23.55, "longitude": -46.63},  # ponto único
+        "location": {"latitude": -23.55, "longitude": -46.63},  # single point
         "date": ["2000-01-01/2024-12-31"],
         "data_format": "netcdf",
     },
@@ -599,55 +602,56 @@ c.retrieve(
 )
 ```
 
-## INMET × ERA5/ERA5-LAND — unidades de medida
+## INMET × ERA5/ERA5-LAND — units of measure
 
-INMET é uma fonte **de estações** (não-grade): ZIP anual do portal, 1 CSV
-por estação, gravado como `inmet/station=<código>/<código>_<ano>.parquet`.
-As **unidades diferem** das do ERA5/ERA5-LAND e precisam ser harmonizadas
-antes de qualquer comparação numérica:
+INMET is a **station-based** source (non-grid): yearly ZIP from the
+portal, 1 CSV per station, written as
+`inmet/station=<code>/<code>_<year>.parquet`. The **units differ** from
+ERA5/ERA5-LAND and need to be harmonized before any numerical comparison:
 
-| Grandeza | ERA5 / ERA5-LAND (nativo CDS) | INMET | Conversão / observação |
+| Quantity | ERA5 / ERA5-LAND (native CDS) | INMET | Conversion / note |
 |---|---|---|---|
-| Temperatura do ar (2 m) | **K** — `temperature_2m` | **°C** — `temp_ar` | `°C = K − 273.15`. O transform converte por padrão (`convert_kelvin_to_celsius=True`) → o Parquet ERA5 já sai em °C |
-| Ponto de orvalho (2 m) | **K** — `dewpoint_2m` | **°C** — `temp_orvalho` | idem (K → °C) |
-| Pressão atmosférica | **Pa** — `surface_pressure` (e `msl_pressure`, só ERA5 SL) | **hPa = mB** — `pressao_estacao`/`pressao_max`/`pressao_min` | `1 hPa = 1 mB = 100 Pa` → `Pa = mB × 100` |
-| Precipitação | **m**, acumulada — `total_precipitation` | **mm**, total horário — `precipitacao_total` | `1 m = 1000 mm`; semântica difere: ERA5 é acumulado desde o passo anterior |
-| Vento | componentes **U/V em m/s** — `wind_u_10m`/`wind_v_10m` | **velocidade m/s** + rajada + direção (°) — `vento_velocidade`/`vento_rajada_max`/`vento_direcao` | velocidade ERA5 `= √(u²+v²)`; o transform deriva `wind_speed` por padrão (`calculate_wind_speed=True`) |
-| Umidade relativa | **%** — `relative_humidity` (só ERA5 SL) | **%** — `umidade_relativa`/`umidade_rel_max`/`umidade_rel_min` | mesma unidade |
-| Radiação solar global | **J/m²**, acumulada — `solar_radiation` (ERA5 SL) | **kJ/m²** — `radiacao_global` | `1 kJ/m² = 1000 J/m²`; acumulação difere |
-| Radiação térmica | **J/m²** — `thermal_radiation` (ERA5 SL) | — | INMET não mede |
-| Cobertura de nuvens | **fração 0–1** — `cloud_cover` (ERA5 SL) | — | INMET não mede |
-| Evaporação | **m** — `evaporation` (ERA5 SL) | — | INMET não mede |
-| Temperatura de pele/solo | **K** — `skin_temperature`, `soil_temperature_level_1..4` | — | só ERA5-LAND tem perfil de solo |
-| Umidade do solo | **m³/m³** — `volumetric_soil_water_layer_1..4` | — | só ERA5-LAND |
-| Tempo | **hora UTC** — `hour_utc` | **hora UTC** — `hour_utc` | ambos UTC — **sem ajuste de fuso** |
+| Air temperature (2 m) | **K** — `temperature_2m` | **°C** — `temp_ar` | `°C = K − 273.15`. The transform converts by default (`convert_kelvin_to_celsius=True`) → ERA5 Parquet is already written in °C |
+| Dew point (2 m) | **K** — `dewpoint_2m` | **°C** — `temp_orvalho` | same (K → °C) |
+| Atmospheric pressure | **Pa** — `surface_pressure` (and `msl_pressure`, ERA5 SL only) | **hPa = mB** — `pressao_estacao`/`pressao_max`/`pressao_min` | `1 hPa = 1 mB = 100 Pa` → `Pa = mB × 100` |
+| Precipitation | **m**, accumulated — `total_precipitation` | **mm**, hourly total — `precipitacao_total` | `1 m = 1000 mm`; semantics differ: ERA5 is accumulated since the previous step |
+| Wind | **U/V components in m/s** — `wind_u_10m`/`wind_v_10m` | **speed m/s** + gust + direction (°) — `vento_velocidade`/`vento_rajada_max`/`vento_direcao` | ERA5 speed `= √(u²+v²)`; the transform derives `wind_speed` by default (`calculate_wind_speed=True`) |
+| Relative humidity | **%** — `relative_humidity` (ERA5 SL only) | **%** — `umidade_relativa`/`umidade_rel_max`/`umidade_rel_min` | same unit |
+| Global solar radiation | **J/m²**, accumulated — `solar_radiation` (ERA5 SL) | **kJ/m²** — `radiacao_global` | `1 kJ/m² = 1000 J/m²`; accumulation differs |
+| Thermal radiation | **J/m²** — `thermal_radiation` (ERA5 SL) | — | INMET does not measure |
+| Cloud cover | **fraction 0–1** — `cloud_cover` (ERA5 SL) | — | INMET does not measure |
+| Evaporation | **m** — `evaporation` (ERA5 SL) | — | INMET does not measure |
+| Skin/soil temperature | **K** — `skin_temperature`, `soil_temperature_level_1..4` | — | only ERA5-LAND has a soil profile |
+| Soil moisture | **m³/m³** — `volumetric_soil_water_layer_1..4` | — | ERA5-LAND only |
+| Time | **UTC hour** — `hour_utc` | **UTC hour** — `hour_utc` | both UTC — **no timezone adjustment** |
 
-> As "unidades nativas" são o que o CDS entrega. As flags em
+> The "native units" are what the CDS delivers. The flags in
 > `TransformConfig` (`convert_kelvin_to_celsius`, `calculate_wind_speed`)
-> mudam o que efetivamente vai para o Parquet ERA5 (por padrão: °C e
-> `wind_speed` derivado). INMET é gravado nas unidades originais do portal.
+> change what actually ends up in the ERA5 Parquet (defaults: °C and
+> derived `wind_speed`). INMET is written in the portal's original units.
 
-### Vizinhos de grade por estação (sem snap a 1 ponto)
+### Grid neighbours per station (no snap to a single point)
 
-Cada Parquet do INMET carrega, por estação, a **célula de grade
-envolvente** de cada produto e a distância (km, haversine) da estação aos
-**4 vértices** dessa célula — em vez de arredondar para o ponto mais
-próximo. Colunas: `era5_lat_top/lat_bottom/lon_left/lon_right` +
-`dist_era5_top_left/top_right/bottom_left/bottom_right` (idem
-`era5_land_*`). Isso permite interpolação espacial (IDW/bilinear) na hora
-de comparar, em vez de assumir o ponto mais próximo. O Parquet é gravado
-ordenado por `(date, hour_utc)` para pruning de row-group no DuckDB.
+Each INMET Parquet carries, per station, the **enclosing grid cell**
+of each product and the distance (km, haversine) from the station to the
+**4 vertices** of that cell — instead of rounding to the nearest point.
+Columns: `era5_lat_top/lat_bottom/lon_left/lon_right` +
+`dist_era5_top_left/top_right/bottom_left/bottom_right` (same for
+`era5_land_*`). This enables spatial interpolation (IDW/bilinear) at
+comparison time, rather than assuming the nearest point. The Parquet is
+written sorted by `(date, hour_utc)` for DuckDB row-group pruning.
 
-### VIEW `era5_inmet` (definida pelo usuário)
+### `era5_inmet` VIEW (user-defined)
 
-`era5_inmet` não é mais gerada em Python. Para criá-la, abra a tela
-`/query`, carregue o template **era5_inmet** (`era5-inmet-compare`, aba
-Templates), revise o SQL e clique em **Salvar VIEW** — ou monte-a no
-builder visual. Ela alinha cada observação de estação INMET com os **4
-pontos de grade vizinhos** do ERA5 e do ERA5-LAND na **mesma data e hora
-(UTC)** via join por epsilon nas coordenadas (`abs(a-b) < 1e-4`, pois
-coords Float32 nunca são exatamente iguais). Depois de salva, aparece no
-menu SCHEMA e é consultável como qualquer view:
+`era5_inmet` is no longer generated in Python. To create it, open the
+`/query` page, load the **era5_inmet** template (`era5-inmet-compare`,
+Templates tab), review the SQL, and click **Save VIEW** — or build it in
+the visual builder. It aligns each INMET station observation with the
+**4 neighbour grid points** of ERA5 and ERA5-LAND at the **same date and
+hour (UTC)** via an epsilon-based coordinate join
+(`abs(a-b) < 1e-4`, since Float32 coords are never exactly equal).
+Once saved, it appears in the SCHEMA menu and can be queried like any
+view:
 
 ```sql
 SELECT station_id, date, hour_utc,
@@ -660,70 +664,69 @@ FROM era5_inmet
 WHERE station_id = 'A001' AND date = DATE '2000-10-05';
 ```
 
-### Tela de séries temporais (`/timeseries`)
+### Time-series screen (`/timeseries`)
 
-Notebook de gráficos para analisar/correlacionar séries temporais entre
-ERA5, ERA5-LAND, INMET e quaisquer VIEWs do usuário (uma view chamada
-`era5_inmet`, se criada, é tratada como fonte por estação). Backend:
-`POST /api/timeseries` (1 query capada por série; combina `date`+
-`hour_utc` num timestamp UTC; bucket `raw|hour|day|month` com
-auto-coarsen se exceder o limite de pontos) e `GET /api/timeseries/meta`
-(views, colunas numéricas, tipo de localização, faixa de datas).
+Chart notebook for analyzing/correlating time series across ERA5,
+ERA5-LAND, INMET, and any user VIEWs (a view named `era5_inmet`, if
+created, is treated as a per-station source). Backend:
+`POST /api/timeseries` (1 capped query per series; combines `date` +
+`hour_utc` into a UTC timestamp; bucket `raw|hour|day|month` with
+auto-coarsen if the point limit is exceeded) and `GET /api/timeseries/meta`
+(views, numeric columns, location type, date range).
 
-Por **célula de gráfico**: intervalo de datas (limitado à cobertura
-real), bucket, máx. de pontos. Por **série**: view + variável +
-agregação + eixo Y/Y2 + **ponto/região** (digitado ou clicado no mapa —
-coordenadas são "snapadas" para a resolução da grade) + **conversão de
-unidade só na visualização** (presets K↔°C/°F ou fórmula custom; os
-dados no Parquet não mudam) + **linha de média** opcional. Cada série
-mostra estatísticas (mín, máx, média, desvio-padrão, variância, IQR).
-Adicionar/duplicar/remover/reordenar células; estado persiste em
-`localStorage`.
+Per **chart cell**: date range (capped to actual coverage), bucket,
+max points. Per **series**: view + variable + aggregation + Y/Y2 axis +
+**point/region** (typed or clicked on the map — coordinates are
+"snapped" to the grid resolution) + **visualization-only unit
+conversion** (K↔°C/°F presets or custom formula; the Parquet data does
+not change) + optional **mean line**. Each series shows statistics
+(min, max, mean, std, variance, IQR). Add/duplicate/remove/reorder
+cells; state persists in `localStorage`.
 
-> **Atenção à unidade:** ERA5/ERA5-LAND já são gravados em **°C** pelo
-> pipeline (`convert_kelvin_to_celsius=True` por padrão — conversão feita
-> na escrita do Parquet, não na tela). Logo, para comparar temperatura
-> com o INMET (também °C) **não** aplique o preset K→°C. A conversão
-> visual serve para unidades que realmente diferem (pressão Pa↔mB,
-> precipitação m↔mm, radiação J/m²↔kJ/m²) ou se o Kelvin tiver sido
-> mantido (`--no` da flag no uso programático).
+> **Watch the units:** ERA5/ERA5-LAND are already written in **°C** by
+> the pipeline (`convert_kelvin_to_celsius=True` by default —
+> conversion done at Parquet write time, not on the screen). So, to
+> compare temperature with INMET (also °C), **do not** apply the K→°C
+> preset. Visual conversion is for units that actually differ
+> (pressure Pa↔mB, precipitation m↔mm, radiation J/m²↔kJ/m²) or if
+> Kelvin was kept (the `--no` flag in programmatic use).
 
 ## Troubleshooting
 
 ### `Unknown dataset 'era5land'`
 
-Use o nome canônico **com hífen**: `era5-land`. O hífen é literal em CDS
-API, no diretório, e na YAML.
+Use the canonical name **with hyphen**: `era5-land`. The hyphen is
+literal in the CDS API, the directory, and the YAML.
 
 ### `DownloadSizeError`
 
-Aconteceu mesmo após o planner ter quebrado a requisição até o mínimo
-(1 var × 1 dia × 1 ponto da grade). Aumente `max_request_bytes` ou reduza
-o `area`/`hours`.
+Happened even after the planner split the request down to the minimum
+(1 var × 1 day × 1 grid point). Increase `max_request_bytes` or reduce
+`area`/`hours`.
 
-### `era5 ui` abre mas só vê JSON / `404`
+### `era5 ui` opens but only shows JSON / `404`
 
-A SPA não foi construída. Rode `make ui-build` ou faça `pip install .`
-(que dispara o hook do Hatch). Garanta que `src/era5_etl/web/static/index.html`
-exista.
+The SPA was not built. Run `make ui-build` or `pip install .`
+(which triggers the Hatch hook). Make sure
+`src/era5_etl/web/static/index.html` exists.
 
-### `bun: command not found` no build
+### `bun: command not found` at build time
 
-Use `pnpm` ou `npm` — o hook detecta o primeiro disponível. Ou
-`ERA5_ETL_SKIP_UI_BUILD=1 pip install .` para instalar sem a SPA (CLI e
-API HTTP continuam funcionando).
+Use `pnpm` or `npm` — the hook detects the first one available. Or
+`ERA5_ETL_SKIP_UI_BUILD=1 pip install .` to install without the SPA
+(CLI and HTTP API keep working).
 
-### CDS retorna `Your request is queued`
+### CDS returns `Your request is queued`
 
-Comportamento normal — pedidos grandes esperam fila do Copernicus. O
-downloader faz long-poll com retry exponencial (`max_retries`,
+Normal behavior — large requests wait in the Copernicus queue. The
+downloader long-polls with exponential retry (`max_retries`,
 `retry_delay`).
 
-## Licença
+## License
 
-Apache License 2.0 — veja [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](LICENSE).
 
-## Recursos externos
+## External resources
 
 - [Copernicus CDS](https://cds.climate.copernicus.eu)
 - [ERA5 documentation](https://confluence.ecmwf.int/display/CKB/ERA5)
