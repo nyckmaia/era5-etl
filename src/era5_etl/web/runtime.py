@@ -42,6 +42,11 @@ class ProgressEvent:
       ``phase`` cycles through submitting -> queued -> running ->
       downloading -> completed, optionally with byte-progress in
       ``bytes_downloaded`` / ``bytes_total``.
+
+    Pipeline-level phase fields (``pipeline_phase``, ``phase_index``,
+    ``phase_total``) describe multi-phase runs — e.g. the INMET flow that
+    auto-bootstraps ERA5 and ERA5-LAND before fetching INMET. ``None``/1/1
+    on single-phase runs; the UI hides the phase chip in that case.
     """
 
     stage: str
@@ -59,6 +64,10 @@ class ProgressEvent:
     # ``stage == "convert"`` events; ``None`` on download/chunk events.
     files_done: int | None = None
     files_total: int | None = None
+    # Multi-phase orchestration (INMET flow).
+    pipeline_phase: str | None = None
+    phase_index: int | None = None
+    phase_total: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,14 +77,14 @@ class PipelineRuntime:
     """In-process registry of running pipelines, keyed by run id."""
 
     def __init__(self) -> None:
-        self._runs: dict[str, "PipelineRun"] = {}
+        self._runs: dict[str, PipelineRun] = {}
         self._lock = threading.Lock()
 
-    def register(self, run_id: str, run: "PipelineRun") -> None:
+    def register(self, run_id: str, run: PipelineRun) -> None:
         with self._lock:
             self._runs[run_id] = run
 
-    def get(self, run_id: str) -> "PipelineRun | None":
+    def get(self, run_id: str) -> PipelineRun | None:
         with self._lock:
             return self._runs.get(run_id)
 
@@ -101,6 +110,25 @@ class PipelineRun:
         self.error: str | None = None
         self._queue: queue.Queue[Any] = queue.Queue()
         self._lock = threading.Lock()
+        # Multi-phase orchestration state (INMET auto-bootstrap flow).
+        # ``pipeline_phase`` is the stable label of the active sub-pipeline
+        # (``bootstrap-era5``, ``bootstrap-era5-land``, ``inmet``); index/
+        # total describe its position in the queue. Single-phase runs leave
+        # these at None/1/1 — emit_chunk_event simply attaches whatever is
+        # set, so a regular ERA5 run looks identical to before.
+        self.pipeline_phase: str | None = None
+        self.phase_index: int = 1
+        self.phase_total: int = 1
+
+    # ---- phase orchestration ---------------------------------------------
+
+    def set_phase(self, name: str, index: int, total: int) -> None:
+        """Mark the start of a sub-pipeline phase. Subsequent ``emit*``
+        calls stamp events with this label until the next ``set_phase``."""
+        with self._lock:
+            self.pipeline_phase = name
+            self.phase_index = index
+            self.phase_total = total
 
     # ---- producer (called from pipeline thread) ---------------------------
 
@@ -116,6 +144,9 @@ class PipelineRun:
             stage_progress=stage_progress,
             message=message,
             global_progress=global_progress,
+            pipeline_phase=self.pipeline_phase,
+            phase_index=self.phase_index,
+            phase_total=self.phase_total,
         )
         self._queue.put(event)
 
@@ -140,6 +171,26 @@ class PipelineRun:
                     global_progress=frac,
                     files_done=done,
                     files_total=total,
+                    pipeline_phase=self.pipeline_phase,
+                    phase_index=self.phase_index,
+                    phase_total=self.phase_total,
+                )
+            )
+            return
+        if payload.get("stage") == "finalizing":
+            # Post-convert / pre-completion housekeeping: refresh indexes,
+            # create DuckDB views. The UI uses this to render a "Finalizando…"
+            # banner so the user doesn't think the run hung between the
+            # convert bar reaching 100% and the success card.
+            self._queue.put(
+                ProgressEvent(
+                    stage="finalizing",
+                    stage_progress=1.0,
+                    message=str(payload.get("message", "")),
+                    global_progress=1.0,
+                    pipeline_phase=self.pipeline_phase,
+                    phase_index=self.phase_index,
+                    phase_total=self.phase_total,
                 )
             )
             return
@@ -162,6 +213,9 @@ class PipelineRun:
             phase=payload.get("phase"),
             bytes_downloaded=payload.get("bytes_downloaded"),
             bytes_total=payload.get("bytes_total"),
+            pipeline_phase=self.pipeline_phase,
+            phase_index=self.phase_index,
+            phase_total=self.phase_total,
         )
         self._queue.put(event)
 
@@ -182,7 +236,7 @@ class PipelineRun:
 
     # ---- consumer (used by SSE handler) -----------------------------------
 
-    def stream(self) -> "Iterator[dict[str, Any]]":
+    def stream(self) -> Iterator[dict[str, Any]]:
         """Yield events as they arrive until the run completes.
 
         ``data`` MUST be a JSON string: ``sse_starlette`` writes the SSE

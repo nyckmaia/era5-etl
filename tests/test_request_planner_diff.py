@@ -8,7 +8,6 @@ to ``plan_requests``; when everything is covered the result is empty.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -16,7 +15,6 @@ import pytest
 
 from era5_etl.config import DownloadConfig
 from era5_etl.download.request_planner import (
-    RequestChunk,
     _hours_to_mask,
     plan_requests,
     plan_with_diff,
@@ -94,7 +92,7 @@ def _coverage_df(
 
 
 def _populate_coverage(
-    tmp_path: "Path",
+    tmp_path: Path,
     dataset: str,
     df: pl.DataFrame,
 ) -> None:
@@ -108,7 +106,7 @@ def _populate_coverage(
 # ---------------------------------------------------------------------------
 
 
-def test_full_coverage_returns_empty(tmp_path: "Path") -> None:
+def test_full_coverage_returns_empty(tmp_path: Path) -> None:
     """Every requested cell is already in the coverage index -> []."""
     cfg = _make_cfg(
         # snap_area_to_grid([-10.0, -50.0, -10.2, -49.9], 0.1) == same input
@@ -135,7 +133,7 @@ def test_full_coverage_returns_empty(tmp_path: "Path") -> None:
     assert chunks == []
 
 
-def test_zero_coverage_returns_full_plan(tmp_path: "Path") -> None:
+def test_zero_coverage_returns_full_plan(tmp_path: Path) -> None:
     """When the coverage index exists but has nothing relevant, fall back to
     the plain plan_requests output (byte-equal chunk_ids).
     """
@@ -165,7 +163,7 @@ def test_zero_coverage_returns_full_plan(tmp_path: "Path") -> None:
     assert [c.days for c in diff_chunks] == [c.days for c in plain_chunks]
 
 
-def test_partial_coverage_skips_covered_cells(tmp_path: "Path") -> None:
+def test_partial_coverage_skips_covered_cells(tmp_path: Path) -> None:
     """Half the requested cells already covered -> only the uncovered half is
     planned. Verify by inspecting returned areas.
     """
@@ -195,11 +193,11 @@ def test_partial_coverage_skips_covered_cells(tmp_path: "Path") -> None:
     assert len(chunks) >= 1
     # All chunks should sit in the northern half (S >= -10.1).
     for c in chunks:
-        n, w, s, e = c.area
+        _n, _w, s, _e = c.area
         assert s >= -10.1 - 1e-9, f"chunk {c.chunk_id} south boundary {s} is too far south"
 
 
-def test_partial_hour_coverage(tmp_path: "Path") -> None:
+def test_partial_hour_coverage(tmp_path: Path) -> None:
     """Same (cell, date, var) but only hour 12 covered. Request asks for
     hours [0, 12] -> resulting chunk's hours = ["00:00"] only.
     """
@@ -227,7 +225,7 @@ def test_partial_hour_coverage(tmp_path: "Path") -> None:
     assert chunks[0].hours == ("00:00",)
 
 
-def test_non_contiguous_missing_cells(tmp_path: "Path") -> None:
+def test_non_contiguous_missing_cells(tmp_path: Path) -> None:
     """A 3x3 grid with only the center missing -> single chunk; a 3x3 grid
     with two opposite corners missing -> two chunks (one per component).
     """
@@ -268,7 +266,7 @@ def test_non_contiguous_missing_cells(tmp_path: "Path") -> None:
     )
 
 
-def test_multi_variable_diff(tmp_path: "Path") -> None:
+def test_multi_variable_diff(tmp_path: Path) -> None:
     """Two variables; coverage has var1 fully + var2 partial -> result only has var2."""
     cfg = _make_cfg(
         variables=["2m_temperature", "surface_pressure"],
@@ -307,7 +305,7 @@ def test_multi_variable_diff(tmp_path: "Path") -> None:
         assert c.hours == ("12:00",)
 
 
-def test_split_to_fit_still_applied(tmp_path: "Path") -> None:
+def test_split_to_fit_still_applied(tmp_path: Path) -> None:
     """A large missing region exceeding the size budget must be split."""
     # Wide area with all 24 hours and a 31-day month -> needs splitting.
     cfg = _make_cfg(
@@ -334,7 +332,7 @@ def test_split_to_fit_still_applied(tmp_path: "Path") -> None:
     )
 
 
-def test_plan_with_diff_no_coverage_db(tmp_path: "Path") -> None:
+def test_plan_with_diff_no_coverage_db(tmp_path: Path) -> None:
     """No ``_coverage.duckdb`` on disk -> identical to plan_requests."""
     cfg = _make_cfg(
         area=[-10.0, -50.0, -10.2, -49.9],
@@ -423,7 +421,7 @@ def test_build_request_cells_rejects_oversized_fast() -> None:
 
 
 def test_plan_with_diff_huge_request_falls_back_to_plan_requests(
-    tmp_path: "Path",
+    tmp_path: Path,
 ) -> None:
     """A request too large to diff must NOT crash; it falls back to the
     size-bounded chunk plan (byte-equal to plan_requests).

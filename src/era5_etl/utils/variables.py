@@ -84,10 +84,7 @@ def list_variables(dataset: str | None = None) -> pl.DataFrame:
     """
     rows: list[dict[str, Any]] = []
 
-    if dataset is not None:
-        configs = (DatasetRegistry.get(dataset),)
-    else:
-        configs = DatasetRegistry.all()
+    configs = (DatasetRegistry.get(dataset),) if dataset is not None else DatasetRegistry.all()
 
     # When listing all datasets we want one row per api_name with merged
     # provenance, so we walk by api_name -> set(datasets).

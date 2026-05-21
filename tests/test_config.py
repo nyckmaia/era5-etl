@@ -223,3 +223,36 @@ def test_pipeline_config_fixture(pipeline_config: PipelineConfig):
     assert isinstance(pipeline_config.transform, TransformConfig)
     assert isinstance(pipeline_config.storage, StorageConfig)
     assert isinstance(pipeline_config.database, DatabaseConfig)
+
+
+def test_pipeline_config_clip_regions_round_trip(tmp_path: Path):
+    config = PipelineConfig.create(
+        base_dir=tmp_path,
+        dataset="era5",
+        clip_regions=["SP", "RJ"],
+    )
+    assert config.transform.clip_regions == ["SP", "RJ"]
+
+
+def test_pipeline_config_clip_regions_default_is_none(tmp_path: Path):
+    config = PipelineConfig.create(base_dir=tmp_path, dataset="era5")
+    assert config.transform.clip_regions is None
+
+
+def test_pipeline_config_clip_regions_rejected_for_inmet(tmp_path: Path):
+    """INMET is a station source and has no grid membership table."""
+    with pytest.raises(ValueError, match="only supported for gridded"):
+        PipelineConfig.create(
+            base_dir=tmp_path,
+            dataset="inmet",
+            clip_regions=["SP"],
+        )
+
+
+def test_pipeline_config_clip_regions_rejected_for_unknown_uf(tmp_path: Path):
+    with pytest.raises(ValueError, match="Unknown region"):
+        PipelineConfig.create(
+            base_dir=tmp_path,
+            dataset="era5",
+            clip_regions=["XX"],
+        )

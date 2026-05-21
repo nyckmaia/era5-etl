@@ -30,6 +30,25 @@ class VariableSpec:
     description: str
     unit: str
     datasets: tuple[str, ...]
+    #: Group ids the variable appears under in the wizard (CDS-style
+    #: sections). A variable may belong to multiple groups (e.g. ``2m
+    #: temperature`` is in both "Popular" and "Temperature and pressure").
+    #: Empty tuple means "ungrouped" — the wizard renders such datasets
+    #: as a flat list.
+    groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class VariableGroup:
+    """A wizard section grouping related variables.
+
+    Mirrors the CDS web form's section layout. The list of groups (in
+    display order) lives at the top of each dataset's ``variables.yaml``.
+    """
+
+    id: str
+    label: str
+    order: int
 
 
 class DatasetConfig(ABC):
@@ -99,8 +118,23 @@ class DatasetConfig(ABC):
                 description=v.get("description", ""),
                 unit=v.get("unit", ""),
                 datasets=(self.NAME,),
+                groups=tuple(v.get("groups", ())),
             )
             for v in raw
+        )
+
+    @cached_property
+    def variable_groups(self) -> tuple[VariableGroup, ...]:
+        """Wizard sections for this dataset, in display order.
+
+        Empty when the YAML has no ``groups:`` key (older datasets like
+        ERA5-LAND keep a flat variable list). The UI falls back to a
+        flat render in that case.
+        """
+        raw = self._yaml_data.get("groups", [])
+        return tuple(
+            VariableGroup(id=g["id"], label=g["label"], order=i)
+            for i, g in enumerate(raw)
         )
 
     @cached_property

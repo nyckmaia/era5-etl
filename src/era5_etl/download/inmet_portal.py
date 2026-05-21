@@ -16,6 +16,7 @@ diff; per-year reuse is handled via the manifest instead.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import re
@@ -23,7 +24,7 @@ import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from bs4 import BeautifulSoup
@@ -113,18 +114,32 @@ def scrape_available_years(
 
 
 def _grid_has_parquet(base_dir: str | Path, dataset: str) -> bool:
+    """Whether the ERA5/ERA5-LAND prerequisite for INMET is satisfied.
+
+    Two signals count as satisfied (M02): the bootstrap grid parquet at
+    ``<base>/climate_data_store_db/_grids/<dataset>_grid.parquet`` (written
+    by ``BootstrapGridPipeline`` in the web orchestrator) OR any parquet
+    inside the per-dataset folder (left by the user running
+    ``era5 pipeline --dataset <name> ...`` from the CLI). Either is enough
+    for INMET to stamp each station with its 4 enclosing grid corners.
+    """
+    from era5_etl.storage.grid_index import grid_parquet_path
+
+    if grid_parquet_path(base_dir, dataset).exists():
+        return True
     d = resolve_dataset_dir(base_dir, dataset)
     return d.exists() and any(d.rglob("*.parquet"))
 
 
 def ensure_grid_prerequisites(base_dir: str | Path) -> None:
-    """Require minimal ERA5 **and** ERA5-LAND parquet before INMET.
+    """Require minimal ERA5 **and** ERA5-LAND data before INMET.
 
     INMET is only ingested to be compared against the reanalysis grids
-    (the ``era5_inmet`` view + per-station grid-neighbour distances). At
+    (the ``era5_inmet`` view + per-station 4 enclosing grid corners). At
     least the bare minimum (1 variable × 1 day × 1 hour) of *each* grid
-    must already be on disk. Raises :class:`DownloadError` listing what to
-    download first.
+    must already be on disk — either as a bootstrap grid parquet (web
+    flow) or as actual data in the per-dataset folder (CLI flow). Raises
+    :class:`DownloadError` listing what to download first.
     """
     missing = [d for d in _REQUIRED_GRIDS if not _grid_has_parquet(base_dir, d)]
     if not missing:
@@ -137,7 +152,7 @@ def ensure_grid_prerequisites(base_dir: str | Path) -> None:
     raise DownloadError(
         "INMET requires ERA5 and ERA5-LAND to have at least minimal data "
         f"downloaded first (needed for the era5_inmet comparison and the "
-        f"per-station grid-neighbour distances). Missing: "
+        f"per-station grid-neighbour lookup). Missing: "
         f"{', '.join(missing)}.\nDownload the minimum first, e.g.:\n{cmds}"
     )
 
@@ -171,13 +186,13 @@ class InmetPortalDownloader:
         if self.on_event is not None:
             try:
                 self.on_event({"stage": "download", **payload})
-            except Exception:  # noqa: BLE001 -- UI callback must never break ETL
+            except Exception:
                 logger.debug("on_event callback raised", exc_info=True)
 
     # Map an INMET per-year status to the chunk ``phase`` the web
     # progress UI understands (so each year drives the same bars/list the
     # CDS path uses -- there is no submitting/queued for a portal ZIP).
-    _STATUS_PHASE = {
+    _STATUS_PHASE: ClassVar[dict[str, str]] = {
         "downloading": "downloading",
         "completed": "completed",
         "skipped": "completed",
@@ -213,8 +228,8 @@ class InmetPortalDownloader:
 
     def download(
         self,
-        apply_diff: bool = False,  # noqa: ARG002 -- parity with CDSDownloader
-        base_dir: str | Path | None = None,  # noqa: ARG002
+        apply_diff: bool = False,
+        base_dir: str | Path | None = None,
     ) -> list[Path]:
         """Download every requested year's ZIP and extract its CSVs.
 
@@ -254,7 +269,7 @@ class InmetPortalDownloader:
             available = self._scrape_available_files()
         except DownloadError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise DownloadError(f"Failed to scrape INMET portal: {e}") from e
 
         by_year = {f["year"]: f for f in available}
@@ -300,7 +315,7 @@ class InmetPortalDownloader:
                     f"Ano {year}: {n_csv} CSV(s) de estação extraído(s)",
                 )
                 out_dirs.append(year_dir)
-            except Exception as e:  # noqa: BLE001 -- one bad year shouldn't abort the rest
+            except Exception as e:
                 logger.error("INMET: failed year %d: %s", year, e)
                 self._emit_year(
                     year, idx, total, "failed", f"Ano {year} falhou: {e}"
@@ -386,7 +401,5 @@ class InmetPortalDownloader:
 
     def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
         if getattr(self, "_owns_client", False):
-            try:
+            with contextlib.suppress(Exception):
                 self.client.close()
-            except Exception:
-                pass

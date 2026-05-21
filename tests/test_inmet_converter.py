@@ -61,18 +61,10 @@ _NEIGHBOUR_COLS = [
     "era5_lat_bottom",
     "era5_lon_left",
     "era5_lon_right",
-    "dist_era5_top_left",
-    "dist_era5_top_right",
-    "dist_era5_bottom_left",
-    "dist_era5_bottom_right",
     "era5_land_lat_top",
     "era5_land_lat_bottom",
     "era5_land_lon_left",
     "era5_land_lon_right",
-    "dist_era5_land_top_left",
-    "dist_era5_land_top_right",
-    "dist_era5_land_bottom_left",
-    "dist_era5_land_bottom_right",
 ]
 
 _META_COLS = [
@@ -233,7 +225,7 @@ def test_convert_directory_reports_errors(converter, tmp_path):
     assert (converter.output_dir / "station=A001" / "A001_2000.parquet").exists()
 
 
-def test_grid_neighbours_and_distances(converter, tmp_path):
+def test_grid_neighbours(converter, tmp_path):
     csv = _write(
         tmp_path,
         "INMET_CO_DF_A001_BRASILIA_07-05-2000_A_31-12-2000.CSV",
@@ -254,17 +246,13 @@ def test_grid_neighbours_and_distances(converter, tmp_path):
     assert r["era5_land_lon_left"] == pytest.approx(-48.0, abs=1e-3)
     assert r["era5_land_lon_right"] == pytest.approx(-47.9, abs=1e-3)
 
-    # All 8 distances present, positive, and the nearest corner is the one
-    # whose lat/lon edges the station is closest to. Sanity: every distance
-    # is < the ERA5 cell diagonal (~38 km) / well-formed.
-    for c in _NEIGHBOUR_COLS:
-        if c.startswith("dist_"):
-            assert r[c] is not None and r[c] > 0
-    # ERA5-LAND cell is finer (0.1°) -> its corners are closer than ERA5's.
-    assert max(
-        r["dist_era5_land_top_left"],
-        r["dist_era5_land_bottom_right"],
-    ) < max(r["dist_era5_top_left"], r["dist_era5_bottom_right"])
+
+def test_neighbour_col_names_count():
+    """4 edges × 2 grids = 8 neighbour columns (no distances)."""
+    from era5_etl.transform.inmet_to_parquet import NEIGHBOUR_COL_NAMES
+
+    assert len(NEIGHBOUR_COL_NAMES) == 8
+    assert not any(c.startswith("dist_") for c in NEIGHBOUR_COL_NAMES)
 
 
 def test_parquet_sorted_by_date_hour(converter, tmp_path):
@@ -281,7 +269,7 @@ def test_parquet_sorted_by_date_hour(converter, tmp_path):
     )
     csv = _write(tmp_path, "INMET_CO_DF_A001_X_01-01-2000_A_31-12-2000.CSV", body)
     df = pl.read_parquet(converter.convert_file(csv))
-    keys = list(zip(df["date"].to_list(), df["hour_utc"].to_list()))
+    keys = list(zip(df["date"].to_list(), df["hour_utc"].to_list(), strict=False))
     assert keys == sorted(keys), f"parquet not sorted by (date, hour_utc): {keys}"
 
 

@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import {
@@ -26,7 +27,6 @@ import { cn, formatBytes } from "@/lib/format";
 // Mirror src/era5_etl/storage/paths.py:STORAGE_ROOT_DIRNAME.
 const STORAGE_ROOT_DIRNAME = "climate_data_store_db";
 
-/** Append the storage-root subfolder to a path the user just picked. */
 function withStorageRoot(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   if (!trimmed) return trimmed;
@@ -41,14 +41,14 @@ function withStorageRoot(path: string): string {
 }
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-3xl font-semibold tracking-tight text-ink-800">Settings</h1>
-        <p className="mt-1 text-ink-500">
-          Configure where ERA5-ETL stores data and how it talks to the
-          Copernicus CDS.
-        </p>
+        <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
+          {t("pageSettings.title")}
+        </h1>
+        <p className="mt-1 text-ink-500">{t("pageSettings.subtitle")}</p>
       </header>
 
       <DataDirectorySection />
@@ -60,11 +60,8 @@ export function SettingsPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Danger zone — wipe a dataset's on-disk data
-// ---------------------------------------------------------------------------
-
 function DangerZoneSection() {
+  const { t } = useTranslation();
   const { data: datasets } = useQuery({
     queryKey: ["datasets"],
     queryFn: api.datasets,
@@ -75,13 +72,11 @@ function DangerZoneSection() {
       <div className="flex items-start gap-3">
         <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
         <div>
-          <h2 className="text-lg font-medium text-rose-900">Zona de perigo</h2>
+          <h2 className="text-lg font-medium text-rose-900">
+            {t("pageSettings.danger.title")}
+          </h2>
           <p className="mt-1 text-sm text-rose-700">
-            Apagar os dados de um sistema remove{" "}
-            <strong>permanentemente</strong> todo o conteúdo da sua pasta
-            (partições Parquet, manifesto, índice de cobertura e os arquivos
-            DuckDB) e os NetCDF temporários. <strong>Não há como desfazer</strong>{" "}
-            — os dados terão que ser baixados novamente da CDS.
+            {t("pageSettings.danger.body")}
           </p>
         </div>
       </div>
@@ -96,6 +91,7 @@ function DangerZoneSection() {
 }
 
 function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [confirmText, setConfirmText] = useState("");
   const { data: stats } = useQuery({
@@ -109,14 +105,18 @@ function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
       setConfirmText("");
       if (res.deleted) {
         toast.success(
-          `Dados de ${dataset.name.toUpperCase()} apagados — ${formatBytes(
-            res.freed_bytes,
-          )} liberados.`,
+          t("pageSettings.danger.deleteSuccess", {
+            name: dataset.name.toUpperCase(),
+            size: formatBytes(res.freed_bytes),
+          }),
         );
       } else {
-        toast.info(`Nenhum dado em disco para ${dataset.name.toUpperCase()}.`);
+        toast.info(
+          t("pageSettings.danger.deleteEmpty", {
+            name: dataset.name.toUpperCase(),
+          }),
+        );
       }
-      // The dataset's storage is gone: refresh everything derived from it.
       qc.invalidateQueries({ queryKey: ["stats", dataset.name] });
       qc.invalidateQueries({ queryKey: ["datasets"] });
       qc.invalidateQueries({ queryKey: ["inventory-grid-points"] });
@@ -128,7 +128,9 @@ function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
   const armed = confirmText.trim() === dataset.name;
   const sizeLabel =
     stats != null
-      ? `${formatBytes(stats.total_size_bytes)} · ${stats.parquet_files} arquivo(s)`
+      ? `${formatBytes(stats.total_size_bytes)} · ${stats.parquet_files} ${t(
+          "common.files",
+        )}`
       : "—";
 
   return (
@@ -138,15 +140,21 @@ function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
           <div className="font-medium text-ink-900">
             {dataset.name.toUpperCase()}
           </div>
-          <div className="text-xs text-ink-500">Em disco: {sizeLabel}</div>
+          <div className="text-xs text-ink-500">
+            {t("pageSettings.danger.onDisk", { size: sizeLabel })}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <input
             className="input w-56 text-sm"
-            placeholder={`Digite "${dataset.name}" para confirmar`}
+            placeholder={t("pageSettings.danger.confirmPlaceholder", {
+              name: dataset.name,
+            })}
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
-            aria-label={`Confirmar exclusão de ${dataset.name}`}
+            aria-label={t("pageSettings.danger.ariaLabel", {
+              name: dataset.name,
+            })}
           />
           <button
             type="button"
@@ -164,7 +172,7 @@ function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
             ) : (
               <Trash2 className="h-4 w-4" />
             )}
-            Apagar definitivamente
+            {t("pageSettings.danger.deleteButton")}
           </button>
         </div>
       </div>
@@ -172,11 +180,8 @@ function DeleteDatasetRow({ dataset }: { dataset: DatasetInfo }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Display precision
-// ---------------------------------------------------------------------------
-
 function PrecisionSection() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: datasets } = useQuery({
     queryKey: ["datasets"],
@@ -238,17 +243,17 @@ function PrecisionSection() {
   return (
     <section className="card space-y-5 p-6">
       <div>
-        <h2 className="text-lg font-medium text-ink-900">Precisão de exibição</h2>
+        <h2 className="text-lg font-medium text-ink-900">
+          {t("pageSettings.precision.title")}
+        </h2>
         <p className="mt-1 text-sm text-ink-500">
-          Define quantas casas decimais (e o método) são usadas ao exibir
-          colunas <code>float</code> nos resultados de consulta. Apenas
-          afeta a visualização — os dados em Parquet não são alterados.
+          {t("pageSettings.precision.body")}
         </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-xs uppercase tracking-wide text-ink-500">
-          Dataset
+          {t("pageSettings.precision.datasetLabel")}
         </label>
         <div className="flex gap-2">
           {datasetNames.map((name) => (
@@ -275,7 +280,7 @@ function PrecisionSection() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-xs uppercase tracking-wide text-ink-500">
-                Casas decimais (padrão)
+                {t("pageSettings.precision.defaultDecimals")}
               </label>
               <input
                 type="number"
@@ -295,7 +300,7 @@ function PrecisionSection() {
             </div>
             <div>
               <label className="block text-xs uppercase tracking-wide text-ink-500">
-                Método (padrão)
+                {t("pageSettings.precision.defaultMethod")}
               </label>
               <select
                 value={draft.default_method}
@@ -317,10 +322,18 @@ function PrecisionSection() {
             <table className="w-full text-xs">
               <thead className="bg-ink-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Coluna</th>
-                  <th className="px-3 py-2 text-left font-medium">Tipo</th>
-                  <th className="px-3 py-2 text-left font-medium">Casas decimais</th>
-                  <th className="px-3 py-2 text-left font-medium">Método</th>
+                  <th className="px-3 py-2 text-left font-medium">
+                    {t("pageSettings.precision.tableHeader.column")}
+                  </th>
+                  <th className="px-3 py-2 text-left font-medium">
+                    {t("pageSettings.precision.tableHeader.type")}
+                  </th>
+                  <th className="px-3 py-2 text-left font-medium">
+                    {t("pageSettings.precision.tableHeader.decimals")}
+                  </th>
+                  <th className="px-3 py-2 text-left font-medium">
+                    {t("pageSettings.precision.tableHeader.method")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -338,7 +351,9 @@ function PrecisionSection() {
                               type="number"
                               min={0}
                               max={12}
-                              placeholder="usa o padrão"
+                              placeholder={t(
+                                "pageSettings.precision.usesDefault",
+                              )}
                               value={override ? override.decimals : ""}
                               onChange={(e) => {
                                 if (e.target.value === "") {
@@ -368,7 +383,9 @@ function PrecisionSection() {
                               }}
                               className="input w-32 text-xs"
                             >
-                              <option value="">usa o padrão</option>
+                              <option value="">
+                                {t("pageSettings.precision.usesDefault")}
+                              </option>
                               <option value="round">round</option>
                               <option value="truncate">truncate</option>
                             </select>
@@ -378,7 +395,7 @@ function PrecisionSection() {
                         <td
                           className="px-3 py-1.5 text-ink-300"
                           colSpan={2}
-                          title="Arredondamento só se aplica a colunas float"
+                          title={t("pageSettings.precision.floatOnly")}
                         >
                           —
                         </td>
@@ -392,7 +409,7 @@ function PrecisionSection() {
                       className="px-3 py-4 text-center text-ink-400"
                       colSpan={4}
                     >
-                      Sem colunas ainda (nenhum Parquet para este dataset).
+                      {t("pageSettings.precision.noColumns")}
                     </td>
                   </tr>
                 )}
@@ -406,7 +423,7 @@ function PrecisionSection() {
                 tone="success"
                 icon={<CheckCircle2 className="h-4 w-4" />}
               >
-                Precisão salva.
+                {t("pageSettings.precision.saved")}
               </Badge>
             )}
             <button
@@ -419,7 +436,7 @@ function PrecisionSection() {
               ) : (
                 <Save className="h-4 w-4" />
               )}
-              Salvar precisão
+              {t("pageSettings.precision.saveButton")}
             </button>
           </div>
         </>
@@ -428,11 +445,8 @@ function PrecisionSection() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Data directory
-// ---------------------------------------------------------------------------
-
 function DataDirectorySection() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: settings, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -442,7 +456,6 @@ function DataDirectorySection() {
 
   useEffect(() => {
     if (settings?.data_dir) {
-      // Always show the appended form, even if the backend stored the parent.
       setDataDir(withStorageRoot(settings.data_dir));
     }
   }, [settings]);
@@ -463,28 +476,26 @@ function DataDirectorySection() {
   return (
     <section className="card space-y-5 p-6">
       <div>
-        <h2 className="text-lg font-medium text-ink-900">Data directory</h2>
+        <h2 className="text-lg font-medium text-ink-900">
+          {t("pageSettings.dataDir.title")}
+        </h2>
         <p className="mt-1 text-sm text-ink-500">
-          The path below points to the storage root --
-          <code className="mx-1 rounded bg-ink-100 px-1 font-mono text-[11px]">
-            {STORAGE_ROOT_DIRNAME}/
-          </code>
-          -- where all Parquet partitions, DuckDB files and the manifest live.
-          When you click <strong>Pick</strong>, ERA5-ETL appends this subfolder
-          to your choice so the path you save is the actual data root.
+          {t("pageSettings.dataDir.body", { root: STORAGE_ROOT_DIRNAME })}
         </p>
       </div>
 
       <div>
         <label className="text-xs uppercase tracking-wide text-ink-500">
-          Storage root path
+          {t("pageSettings.dataDir.pathLabel")}
         </label>
         <div className="mt-1 flex gap-2">
           <input
             className="input font-mono"
             value={dataDir}
             onChange={(e) => setDataDir(e.target.value)}
-            placeholder={`/path/to/data/${STORAGE_ROOT_DIRNAME}`}
+            placeholder={t("pageSettings.dataDir.placeholder", {
+              root: STORAGE_ROOT_DIRNAME,
+            })}
           />
           <button
             className="btn-outline whitespace-nowrap"
@@ -496,13 +507,11 @@ function DataDirectorySection() {
             ) : (
               <Folder className="h-4 w-4" />
             )}
-            Pick
+            {t("pageSettings.dataDir.pick")}
           </button>
         </div>
         <p className="mt-2 text-[11px] text-ink-400">
-          Tip: pick the folder where you want your data; ERA5-ETL adds{" "}
-          <code className="font-mono">/{STORAGE_ROOT_DIRNAME}</code>{" "}
-          automatically so the structure is explicit.
+          {t("pageSettings.dataDir.tip", { root: STORAGE_ROOT_DIRNAME })}
         </p>
       </div>
 
@@ -517,18 +526,15 @@ function DataDirectorySection() {
           ) : (
             <Save className="h-4 w-4" />
           )}
-          Save settings
+          {t("pageSettings.dataDir.saveButton")}
         </button>
       </div>
     </section>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Query timeout
-// ---------------------------------------------------------------------------
-
 function QueryTimeoutSection() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: settings, isLoading } = useQuery({
     queryKey: ["settings"],
@@ -546,7 +552,7 @@ function QueryTimeoutSection() {
     onSuccess: () => {
       setDirty(false);
       qc.invalidateQueries({ queryKey: ["settings"] });
-      toast.success("Tempo limite salvo");
+      toast.success(t("pageSettings.queryTimeout.saved"));
     },
     onError: (e) => toast.error((e as Error).message),
   });
@@ -558,20 +564,18 @@ function QueryTimeoutSection() {
   return (
     <section className="card space-y-4 p-6">
       <div>
-        <h2 className="text-lg font-medium text-ink-900">Tempo limite da query</h2>
+        <h2 className="text-lg font-medium text-ink-900">
+          {t("pageSettings.queryTimeout.title")}
+        </h2>
         <p className="mt-1 text-sm text-ink-500">
-          Encerra automaticamente uma consulta da tela{" "}
-          <code className="rounded bg-ink-100 px-1 font-mono text-[11px]">/query</code>{" "}
-          que demore mais que o limite abaixo. O usuário também pode cancelar a
-          qualquer momento clicando em <strong>Cancelar</strong> ao lado do botão
-          Run query. Use <strong>0</strong> para desativar o timer (sem limite).
+          {t("pageSettings.queryTimeout.body")}
         </p>
       </div>
 
       <div className="flex items-end gap-3">
         <label className="flex-1 max-w-xs">
           <span className="text-xs uppercase tracking-wide text-ink-500">
-            Segundos
+            {t("pageSettings.queryTimeout.seconds")}
           </span>
           <input
             type="number"
@@ -600,23 +604,20 @@ function QueryTimeoutSection() {
           ) : (
             <Save className="h-4 w-4" />
           )}
-          Salvar
+          {t("pageSettings.queryTimeout.saveButton")}
         </button>
       </div>
       {invalid ? (
         <p className="text-[11px] text-rose-500">
-          Use um inteiro entre 0 e 3600 (0 = sem limite).
+          {t("pageSettings.queryTimeout.invalid")}
         </p>
       ) : null}
     </section>
   );
 }
 
-// ---------------------------------------------------------------------------
-// CDS credentials
-// ---------------------------------------------------------------------------
-
 function CredentialsSection() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: status, isLoading } = useQuery({
     queryKey: ["credentials"],
@@ -624,7 +625,9 @@ function CredentialsSection() {
   });
   const [url, setUrl] = useState("https://cds.climate.copernicus.eu/api");
   const [key, setKey] = useState("");
-  const [testResult, setTestResult] = useState<CredentialTestResult | null>(null);
+  const [testResult, setTestResult] = useState<CredentialTestResult | null>(
+    null,
+  );
 
   useEffect(() => {
     if (status?.url) setUrl(status.url);
@@ -651,48 +654,44 @@ function CredentialsSection() {
           <KeyRound className="h-5 w-5" />
         </div>
         <div>
-          <h2 className="text-lg font-medium text-ink-900">CDS credentials</h2>
+          <h2 className="text-lg font-medium text-ink-900">
+            {t("pageSettings.credentials.title")}
+          </h2>
           <p className="mt-1 text-sm text-ink-500">
-            ERA5 data is served by the Copernicus Climate Data Store. Your
-            Personal Access Token is saved to{" "}
-            <code className="rounded bg-ink-100 px-1 font-mono text-[11px]">
-              {status?.file_path ?? "~/.cdsapirc"}
-            </code>{" "}
-            on this machine -- not sent anywhere else.
+            {t("pageSettings.credentials.body", {
+              path: status?.file_path ?? "~/.cdsapirc",
+            })}
           </p>
         </div>
       </div>
 
-      {!isLoading && status && (
-        <CredentialStatusBadge status={status} />
-      )}
+      {!isLoading && status && <CredentialStatusBadge status={status} />}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <ol className="space-y-3 text-sm text-ink-600">
           <Step n={1}>
-            Sign in to{" "}
+            {t("onboarding.credentials.steps.signIn")}{" "}
             <ExtLink href="https://cds.climate.copernicus.eu/">
               cds.climate.copernicus.eu
             </ExtLink>
             .
           </Step>
-          <Step n={2}>
-            Accept the terms once on each dataset page (ERA5, ERA5-Land).
-          </Step>
+          <Step n={2}>{t("onboarding.credentials.steps.accept")}</Step>
           <Step n={3}>
-            Open your{" "}
+            {t("onboarding.credentials.steps.copyToken")}{" "}
             <ExtLink href="https://cds.climate.copernicus.eu/profile">
               profile
             </ExtLink>{" "}
-            and copy the <strong>Personal Access Token</strong>.
+            {t("onboarding.credentials.steps.copyTokenSuffix")}{" "}
+            <strong>Personal Access Token</strong>.
           </Step>
-          <Step n={4}>Paste it on the right and click Save.</Step>
+          <Step n={4}>{t("onboarding.credentials.steps.paste")}</Step>
         </ol>
 
         <div className="space-y-3">
           <div>
             <label className="block text-xs uppercase tracking-wide text-ink-500">
-              API URL
+              {t("onboarding.credentials.apiUrl")}
             </label>
             <input
               type="text"
@@ -703,14 +702,16 @@ function CredentialsSection() {
           </div>
           <div>
             <label className="block text-xs uppercase tracking-wide text-ink-500">
-              Personal Access Token
+              {t("onboarding.credentials.token")}
             </label>
             <input
               type="password"
               value={key}
               onChange={(e) => setKey(e.target.value)}
               placeholder={
-                status?.has_credentials ? "(already saved -- paste to replace)" : ""
+                status?.has_credentials
+                  ? t("onboarding.credentials.tokenPlaceholderReplace")
+                  : ""
               }
               autoComplete="off"
               spellCheck={false}
@@ -729,7 +730,7 @@ function CredentialsSection() {
               ) : (
                 <Save className="h-4 w-4" />
               )}
-              Save credentials
+              {t("onboarding.credentials.saveButton")}
             </button>
             <button
               className="btn-outline"
@@ -741,7 +742,7 @@ function CredentialsSection() {
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              Test
+              {t("onboarding.credentials.testButton")}
             </button>
           </div>
 
@@ -772,31 +773,27 @@ function CredentialStatusBadge({
 }: {
   status: { has_credentials: boolean; source: string; url: string | null };
 }) {
+  const { t } = useTranslation();
   if (!status.has_credentials) {
     return (
       <Badge tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        No CDS credentials found yet. Downloads will fail until you save your
-        token below.
+        {t("pageSettings.credentials.noCreds")}
       </Badge>
     );
   }
   if (status.source === "env") {
     return (
       <Badge tone="info" icon={<CheckCircle2 className="h-4 w-4" />}>
-        Using credentials from environment variables. Saving here writes
-        ~/.cdsapirc but the env vars still take precedence.
+        {t("pageSettings.credentials.sourceEnv")}
       </Badge>
     );
   }
   return (
     <Badge tone="success" icon={<CheckCircle2 className="h-4 w-4" />}>
-      Credentials present at {status.url}. Use <em>Test</em> to verify
-      connectivity, or paste a new key to replace.
+      {t("pageSettings.credentials.present", { url: status.url ?? "" })}
     </Badge>
   );
 }
-
-// ---------------------------------------------------------------------------
 
 function Step({ n, children }: { n: number; children: React.ReactNode }) {
   return (
@@ -809,7 +806,13 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
   );
 }
 
-function ExtLink({ href, children }: { href: string; children: React.ReactNode }) {
+function ExtLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
   return (
     <a
       href={href}

@@ -148,6 +148,15 @@ class TransformConfig(BaseModel):
         default=None,
         description="Maximum number of worker processes for parallel conversion (None=auto)",
     )
+    clip_regions: list[str] | None = Field(
+        default=None,
+        description=(
+            "Brazilian UF sigla(s) (e.g. ['SP', 'RJ']) or ['BR']. When set, "
+            "grid points outside the polygon (with half-cell buffer) are dropped "
+            "before writing Parquet. Gridded CDS datasets only. See "
+            ":mod:`era5_etl.regions.membership` for the pre-computed lookup."
+        ),
+    )
 
 
 class StorageConfig(BaseModel):
@@ -232,7 +241,8 @@ class PipelineConfig(BaseModel):
         keep_temp_files: bool = False,
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
         years: list[int] | None = None,
-    ) -> "PipelineConfig":
+        clip_regions: list[str] | None = None,
+    ) -> PipelineConfig:
         """Assemble a full ``PipelineConfig`` from a ``base_dir`` and options.
 
         On-disk layout::
@@ -243,6 +253,10 @@ class PipelineConfig(BaseModel):
                 _tmp_netcdf/
                   <dataset>/                  -> raw NetCDF (temporary; removed
                                                  after a successful conversion)
+
+        ``clip_regions`` activates polygon clipping at conversion time.
+        Only gridded datasets (``cds_grid``) support clipping; passing
+        regions for a station source (e.g. INMET) raises ``ValueError``.
         """
         base = resolve_base_dir(base_dir)
         netcdf_dir = resolve_netcdf_temp_dir(base, dataset)
@@ -251,6 +265,18 @@ class PipelineConfig(BaseModel):
         # Default variables come from the dataset's own YAML if none provided.
         if variables is None:
             variables = list(DatasetRegistry.get(dataset).default_variables)
+
+        if clip_regions:
+            ds_cfg = DatasetRegistry.get(dataset)
+            if not ds_cfg.is_gridded:
+                raise ValueError(
+                    f"clip_regions={clip_regions!r} is only supported for "
+                    f"gridded CDS datasets; {dataset!r} is a "
+                    f"{ds_cfg.SOURCE_KIND!r} source."
+                )
+            from era5_etl.regions.membership import validate_regions
+
+            validate_regions(dataset, clip_regions)
 
         return cls(
             download=DownloadConfig(
@@ -264,7 +290,7 @@ class PipelineConfig(BaseModel):
                 years=years,
                 override=override,
             ),
-            transform=TransformConfig(override=override),
+            transform=TransformConfig(override=override, clip_regions=clip_regions),
             storage=StorageConfig(
                 database_dir=base,
                 parquet_compression=compression,

@@ -29,7 +29,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from era5_etl.storage import parquet_manager as pm_module
-from era5_etl.storage.coverage import COVERAGE_DB_FILENAME, CoverageIndex
+from era5_etl.storage.coverage import COVERAGE_DB_FILENAME
 from era5_etl.storage.parquet_manager import (
     PARQUET_TILE_DEG,
     ParquetManager,
@@ -201,7 +201,7 @@ def test_tile_sort_preserves_dedup_within_partition(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 
 
-def test_merge_does_NOT_create_coverage_db(tmp_path: Path) -> None:
+def test_merge_does_not_create_coverage_db(tmp_path: Path) -> None:
     """Inverse of the v0.6.0-phase-2 hook: writes must NOT touch
     ``_coverage.duckdb`` anymore. Coverage is updated by the pipeline-level
     ``RefreshCoverageStage`` after parallel conversion completes, so the
@@ -243,7 +243,7 @@ def test_concurrent_writes_to_same_partition_serialise(tmp_path: Path) -> None:
     def _worker(df: pl.DataFrame) -> None:
         try:
             merge_into_partitioned_parquet(df, parquet_dir)
-        except Exception as exc:  # noqa: BLE001 -- collected for the assertion below
+        except Exception as exc:
             errors.append(exc)
 
     t_a = threading.Thread(target=_worker, args=(df_a,))

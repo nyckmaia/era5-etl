@@ -111,7 +111,7 @@ def grid_points(
         description="UTC hour(s) 0-23 to filter on. Repeat for multiple; "
         "a cell is kept only if a row has ALL selected hours. Omit for all.",
     ),
-    format: Literal["json", "arrow", "auto"] = Query(  # noqa: A002 - matches public API
+    format: Literal["json", "arrow", "auto"] = Query(
         "auto", description="Response format. 'auto' = arrow if rows > 5000."
     ),
 ):

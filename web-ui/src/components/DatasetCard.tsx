@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CloudDownload, Database, HardDrive, Layers } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { api } from "@/lib/api";
 import { formatBytes, formatNumber } from "@/lib/format";
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function DatasetCard({ dataset, label, description }: Props) {
+  const { t } = useTranslation();
   const { data, isLoading } = useQuery({
     queryKey: ["stats", dataset],
     queryFn: () => api.stats(dataset),
@@ -35,26 +37,26 @@ export function DatasetCard({ dataset, label, description }: Props) {
       <dl className="grid grid-cols-3 gap-4 border-t border-ink-100 pt-5">
         <Metric
           icon={Layers}
-          label="Partitions"
+          label={t("datasetCard.partitions")}
           value={isLoading ? "—" : formatNumber(data?.partitions.length ?? 0)}
         />
         <Metric
           icon={Database}
-          label="Files"
+          label={t("datasetCard.parquetFiles")}
           value={isLoading ? "—" : formatNumber(data?.parquet_files ?? 0)}
         />
         <Metric
           icon={HardDrive}
-          label="On disk"
+          label={t("datasetCard.totalSize")}
           value={isLoading ? "—" : formatBytes(data?.total_size_bytes ?? 0)}
         />
       </dl>
       {data?.partitions.length ? (
         <p className="text-xs text-ink-400">
-          Coverage: {data.partitions[0]} → {data.partitions[data.partitions.length - 1]}
+          {data.partitions[0]} → {data.partitions[data.partitions.length - 1]}
         </p>
       ) : (
-        <p className="text-xs italic text-ink-400">No data downloaded yet.</p>
+        <p className="text-xs italic text-ink-400">{t("datasetCard.noData")}</p>
       )}
       <div className="flex gap-3 border-t border-ink-100 pt-4">
         <Link
@@ -63,7 +65,7 @@ export function DatasetCard({ dataset, label, description }: Props) {
           className="btn-outline flex-1 justify-center"
         >
           <CloudDownload className="h-4 w-4" />
-          UPDATE
+          {t("layout.nav.download").toUpperCase()}
         </Link>
         <Link
           to="/query"
@@ -71,7 +73,7 @@ export function DatasetCard({ dataset, label, description }: Props) {
           className="btn-primary flex-1 justify-center"
         >
           <Database className="h-4 w-4" />
-          QUERY
+          {t("layout.nav.query").toUpperCase()}
         </Link>
       </div>
     </div>

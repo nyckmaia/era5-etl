@@ -247,7 +247,7 @@ def _try_day_split(slice_: _Slice, config: DownloadConfig) -> list[_Slice]:
         if _fits(worst, config):
             # Rename labels using the actual block range for nicer chunk_ids.
             renamed: list[_Slice] = []
-            for i, c in enumerate(candidates, start=1):
+            for _i, c in enumerate(candidates, start=1):
                 first, last = c.days[0], c.days[-1]
                 c.days_label = f"d{first:02d}-{last:02d}"
                 renamed.append(c)
@@ -489,7 +489,7 @@ def _grid_axis(low: float, high: float, resolution: float) -> np.ndarray:
     """
     if high <= low:
         return np.array([low + resolution / 2.0], dtype=float)
-    n_cells = int(round((high - low) / resolution))
+    n_cells = round((high - low) / resolution)
     if n_cells <= 0:
         return np.array([low + resolution / 2.0], dtype=float)
     centers = low + resolution / 2.0 + np.arange(n_cells) * resolution
@@ -767,10 +767,15 @@ def plan_with_diff(
     chunks: list[RequestChunk] = []
     grouped = missing_df.group_by(["year", "month", "variable"], maintain_order=True)
     for (year, month, variable), group in grouped:
+        # Polars' ``group_by`` keys are typed ``object`` because the
+        # group-key tuple is heterogeneous; cast to the concrete types
+        # we know the schema produces.
+        year_int = int(year)  # type: ignore[call-overload]
+        month_int = int(month)  # type: ignore[call-overload]
         chunks.extend(
             _chunks_for_group(
-                year=int(year),
-                month=int(month),
+                year=year_int,
+                month=month_int,
                 variable=str(variable),
                 group=group,
                 config=config,
@@ -810,18 +815,18 @@ def _chunks_for_group(
     # rounding to a key would miss. Instead, compute the offset from the
     # bbox south/west edge and round to the nearest cell.
     def _lat_idx(v: float) -> int:
-        idx = int(round((v - s - resolution / 2.0) / resolution))
+        idx = round((v - s - resolution / 2.0) / resolution)
         return idx if 0 <= idx < lats.size else -1
 
     def _lon_idx(v: float) -> int:
-        idx = int(round((v - w - resolution / 2.0) / resolution))
+        idx = round((v - w - resolution / 2.0) / resolution)
         return idx if 0 <= idx < lons.size else -1
 
     # Mark every (lat, lon) that has at least one missing cell in this group.
     presence = np.zeros((lats.size, lons.size), dtype=bool)
     cell_lats = group["latitude"].to_numpy()
     cell_lons = group["longitude"].to_numpy()
-    for la, lo in zip(cell_lats, cell_lons):
+    for la, lo in zip(cell_lats, cell_lons, strict=False):
         i = _lat_idx(float(la))
         j = _lon_idx(float(lo))
         if i >= 0 and j >= 0:
@@ -851,13 +856,13 @@ def _chunks_for_group(
         bbox = _bbox_from_cells(comp_lats, comp_lons, resolution)
 
         # Cells in this component.
-        idx_pairs = set(zip(comp_lat_idx.tolist(), comp_lon_idx.tolist()))
+        idx_pairs = set(zip(comp_lat_idx.tolist(), comp_lon_idx.tolist(), strict=False))
         # Filter group rows to this component.
         mask = [
             (int(li), int(lj)) in idx_pairs
             for li, lj in zip(
                 group_with_idx["_lat_idx"].to_list(),
-                group_with_idx["_lon_idx"].to_list(),
+                group_with_idx["_lon_idx"].to_list(), strict=False,
             )
         ]
         sub = group_with_idx.filter(pl.Series(mask))

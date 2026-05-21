@@ -183,7 +183,7 @@ def _read_partition_payload(
     for p in files:
         try:
             parts.append(pl.read_parquet(p))
-        except Exception as exc:  # noqa: BLE001 -- any unreadable file is quarantined
+        except Exception as exc:
             log.warning(
                 "Skipping unreadable partition file %s (will be replaced on "
                 "merge): %s",
@@ -404,7 +404,7 @@ class ParquetManager:
             from era5_etl.datasets import DatasetRegistry
 
             return not DatasetRegistry.get(self.dataset).is_gridded
-        except Exception:  # noqa: BLE001 -- unknown name -> grid default
+        except Exception:
             return False
 
     def create_duckdb_view(

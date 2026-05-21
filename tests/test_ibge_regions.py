@@ -1,7 +1,7 @@
 """Tests for IBGE region lookup."""
 
-import pytest
 import polars as pl
+import pytest
 
 from era5_etl.utils.ibge_regions import (
     RegionType,
@@ -53,7 +53,7 @@ class TestLookupRegionBbox:
     def test_lookup_uf(self):
         bbox = lookup_region_bbox(RegionType.UF, "MT")
         assert len(bbox) == 4
-        north, west, south, east = bbox
+        north, _west, south, _east = bbox
         assert north > south
 
     def test_lookup_case_insensitive(self):

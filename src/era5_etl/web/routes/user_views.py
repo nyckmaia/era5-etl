@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/user-views", tags=["user-views"])
 def _columns_for(conn, name: str) -> list[SchemaColumn]:
     schema = (
         conn.execute(
-            f'SELECT * FROM "{name}" LIMIT 0'  # noqa: S608 -- validated ident
+            f'SELECT * FROM "{name}" LIMIT 0'
         )
         .fetch_arrow_table()
         .schema

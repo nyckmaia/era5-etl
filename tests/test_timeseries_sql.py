@@ -9,8 +9,8 @@ import pytest
 
 from era5_etl.web.timeseries_sql import (
     BUCKET_ORDER,
-    build_series_sql,
     bucket_expr,
+    build_series_sql,
     location_where,
     run_series_with_cap,
     ts_expr,

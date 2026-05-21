@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 
@@ -107,10 +108,8 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
     def _make_timer():
         def _on_timeout() -> None:
             timer_fired["v"] = True
-            try:
+            with contextlib.suppress(Exception):
                 eng.conn.interrupt()
-            except Exception:  # noqa: BLE001
-                pass
 
         t = (
             threading.Timer(timeout_s, _on_timeout)
@@ -141,7 +140,12 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
     # ------------------------------------------------------------------
     ddl_m = _DDL_NAME_RE.match(_strip_leading_comments(body.sql))
     if ddl_m:
-        kind = ddl_m.group(1).lower()
+        # ``_DDL_NAME_RE`` only matches VIEW / MACRO, so the lowered token
+        # is one of the two literals expected by ``uvs.add_object`` —
+        # narrow the type explicitly for mypy.
+        from typing import Literal, cast
+
+        kind = cast("Literal['view', 'macro']", ddl_m.group(1).lower())
         name = ddl_m.group(2) or ddl_m.group(3)
         try:
             uvs.validate_ddl(name, kind, body.sql)
@@ -211,7 +215,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
     # The full result is already materialized, so the true row count is
     # known exactly (no extra COUNT(*) probe needed). Expose it so the UI
     # can show "showing X of Y (truncated)".
-    total_rows = int(len(df))
+    total_rows = len(df)
     truncated = total_rows > body.limit
     if truncated:
         df = df.head(body.limit)
@@ -222,7 +226,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
         columns=list(df.columns),
         column_types=schema_python_types(arrow_schema),
         rows=df.astype(object).where(df.notnull(), None).values.tolist(),
-        row_count=int(len(df)),
+        row_count=len(df),
         truncated=truncated,
         total_rows=total_rows,
     )
@@ -260,7 +264,7 @@ def query_schema(dataset: str, request: Request) -> QuerySchemaOut:
             if view not in registered:
                 return QuerySchemaOut(view=view, columns=[])
             schema = conn.execute(
-                f'SELECT * FROM "{view}" LIMIT 0'  # noqa: S608 -- sanitized
+                f'SELECT * FROM "{view}" LIMIT 0'
             ).fetch_arrow_table().schema
     except duckdb.Error as exc:
         raise HTTPException(

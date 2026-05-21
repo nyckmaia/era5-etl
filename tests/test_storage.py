@@ -1,6 +1,5 @@
 """Tests for storage components."""
 
-from datetime import date
 from pathlib import Path
 
 import polars as pl

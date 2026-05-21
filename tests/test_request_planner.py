@@ -133,7 +133,12 @@ def test_returned_chunks_are_frozen():
     cfg = _make()
     chunk = plan_requests(cfg)[0]
     assert isinstance(chunk, RequestChunk)
-    with pytest.raises(Exception):
+    # Frozen dataclasses raise FrozenInstanceError on assignment; pydantic
+    # models raise ValidationError. Catch either to stay independent of
+    # the underlying immutability mechanism.
+    from dataclasses import FrozenInstanceError
+
+    with pytest.raises((FrozenInstanceError, AttributeError, TypeError)):
         chunk.year = 2025  # type: ignore[misc]
 
 

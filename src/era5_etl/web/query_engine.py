@@ -16,7 +16,7 @@ time, so newly downloaded files are still picked up without rebuilding.
 from __future__ import annotations
 
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -53,13 +53,12 @@ class _Engine:
         ``interrupt()`` is documented as thread-safe.
         """
         self.cancel_requested = True
-        try:
+        with suppress(Exception):
             self.conn.interrupt()
-        except Exception:  # noqa: BLE001 -- best-effort interrupt
-            pass
 
     def _ensure_base(self) -> None:
         still_missing: set[str] = set()
+        newly_registered: list[str] = []
         for name in self._missing:
             mgr = ParquetManager(self.data_dir, name)
             if not mgr.exists():
@@ -67,7 +66,17 @@ class _Engine:
                 continue
             mgr.create_duckdb_view(self.conn, view_name_for(name))
             self.base_views.add(view_name_for(name))
+            newly_registered.append(name)
         self._missing = still_missing
+        # If a base view just became available (e.g. the user downloaded
+        # ERA5-LAND after seeing a broken user VIEW that depends on it),
+        # invalidate the user-view cache so :meth:`_ensure_user` replays
+        # the stored DDL against the now-larger catalog. Without this the
+        # ``ok``/``error`` status sticks at the moment the view was
+        # FIRST registered and stays WARN even after the dependency is
+        # downloaded.
+        if newly_registered:
+            self._user_sig = None
 
     def _ensure_user(self) -> None:
         objs = sorted(uvs.list_objects(), key=lambda x: x["created_ts"])
@@ -77,16 +86,14 @@ class _Engine:
         current = {o["name"] for o in objs}
         for stale in self._user_names - current:
             for kind in ("VIEW", "MACRO"):
-                try:
+                with suppress(duckdb.Error):
                     self.conn.execute(f'DROP {kind} IF EXISTS "{stale}"')
-                except duckdb.Error:
-                    pass
         results: list[dict[str, Any]] = []
         for o in objs:
             try:
                 self.conn.execute(o["sql"])
                 results.append({**o, "ok": True, "error": None})
-            except Exception as exc:  # noqa: BLE001 -- surfaced, not raised
+            except Exception as exc:
                 results.append({**o, "ok": False, "error": str(exc)})
         self._user_names = current
         self._user_sig = sig
@@ -163,7 +170,5 @@ def validate_conn(data_dir: str | Path):
         try:
             yield eng.conn
         finally:
-            try:
+            with suppress(duckdb.Error):
                 eng.conn.execute("ROLLBACK")
-            except duckdb.Error:
-                pass

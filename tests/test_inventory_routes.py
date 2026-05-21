@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import polars as pl
@@ -24,10 +23,6 @@ from fastapi.testclient import TestClient
 
 from era5_etl.storage.coverage import CoverageIndex
 from era5_etl.web.server import create_app
-
-if TYPE_CHECKING:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -399,7 +394,7 @@ def test_run_endpoint_accepts_apply_diff(client: TestClient):
     captured: dict = {}
 
     class _DummyCtx:
-        def set_progress_callback(self, cb):  # noqa: ARG002
+        def set_progress_callback(self, cb):
             return None
 
     class _DummyPipe:
@@ -437,7 +432,7 @@ def test_run_endpoint_apply_diff_defaults_true(client: TestClient):
     captured: dict = {}
 
     class _DummyCtx:
-        def set_progress_callback(self, cb):  # noqa: ARG002
+        def set_progress_callback(self, cb):
             return None
 
     class _DummyPipe:

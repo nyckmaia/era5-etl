@@ -11,13 +11,9 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tomllib
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
 import tomli_w
 
@@ -140,8 +136,8 @@ def set_dataset_precision(dataset: str, payload: dict) -> UserConfig:
 __all__ = [
     "UserConfig",
     "config_path",
+    "field",  # re-exported so tests can introspect dataclass fields
     "load_user_config",
     "save_user_config",
     "update_user_config",
-    "field",  # re-exported so tests can introspect dataclass fields
 ]

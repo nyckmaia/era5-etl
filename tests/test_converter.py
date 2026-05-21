@@ -35,7 +35,7 @@ def test_converter_rename_variables(converter: NetCDFToParquetConverter):
             "d2m": (["time", "latitude", "longitude"], np.random.rand(10, 5, 5)),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]"),
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 5),
             "longitude": np.linspace(-50, -40, 5),
         },
@@ -59,7 +59,7 @@ def test_converter_convert_temperature(converter: NetCDFToParquetConverter):
             ),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]"),
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 5),
             "longitude": np.linspace(-50, -40, 5),
         },
@@ -84,7 +84,7 @@ def test_converter_no_conversion_without_kelvin_units(converter: NetCDFToParquet
             ),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]"),
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 5),
             "longitude": np.linspace(-50, -40, 5),
         },
@@ -115,7 +115,7 @@ def test_converter_calculate_wind_speed(converter: NetCDFToParquetConverter):
             ),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]"),
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 5),
             "longitude": np.linspace(-50, -40, 5),
         },
@@ -140,7 +140,7 @@ def test_converter_dataset_to_dataframe(converter: NetCDFToParquetConverter):
             ),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]"),
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 3),
             "longitude": np.linspace(-50, -40, 3),
         },
@@ -346,3 +346,75 @@ def test_latlon_decimals_property():
 
     assert DatasetRegistry.get("era5").latlon_decimals == 2
     assert DatasetRegistry.get("era5-land").latlon_decimals == 1
+
+
+# ----- Region clipping ----------------------------------------------------
+
+
+def _frame_for_clip(latlons: list[tuple[float, float]]) -> pl.DataFrame:
+    """Build a tiny converter-shaped frame with the given lat/lon pairs."""
+    return pl.DataFrame(
+        {
+            "latitude": pl.Series([lat for lat, _ in latlons], dtype=pl.Float32),
+            "longitude": pl.Series([lon for _, lon in latlons], dtype=pl.Float32),
+            "t2m": pl.Series([1.0] * len(latlons), dtype=pl.Float64),
+        }
+    )
+
+
+def test_clip_to_regions_noop_when_disabled(tmp_path: Path):
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(),  # clip_regions=None
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset="era5",
+    )
+    df = _frame_for_clip([(-23.5, -46.5), (10.0, 10.0)])
+    out = conv._clip_to_regions(df)
+    assert out.height == df.height
+    assert out.equals(df)
+
+
+def test_clip_to_regions_drops_points_outside_sp(tmp_path: Path):
+    """A point in Sao Paulo stays; one in the Atlantic ocean is dropped."""
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(clip_regions=["SP"]),
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset="era5",
+    )
+    # Inside SP: city of Sao Paulo is roughly at (-23.5, -46.5);
+    # snapped to ERA5 grid (2dp, 0.25-aligned) -> (-23.5, -46.5).
+    # Outside SP: deep in the Atlantic (-23.5, -30.0).
+    df = _frame_for_clip([(-23.5, -46.5), (-23.5, -30.0)])
+    out = conv._clip_to_regions(df)
+    assert out.height == 1
+    assert float(out["latitude"][0]) == pytest.approx(-23.5)
+    assert float(out["longitude"][0]) == pytest.approx(-46.5)
+
+
+def test_clip_to_regions_union_keeps_both_states(tmp_path: Path):
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(clip_regions=["SP", "RJ"]),
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset="era5",
+    )
+    # Picked from the actual SP/RJ membership cells (era5, 0.25 deg).
+    # SP cell: (-23.5, -46.5); RJ cell: (-22.5, -42.5); ocean: (-23.5, -30.0)
+    df = _frame_for_clip([(-23.5, -46.5), (-22.5, -42.5), (-23.5, -30.0)])
+    out = conv._clip_to_regions(df)
+    assert out.height == 2
+
+
+def test_clip_to_regions_noop_without_dataset(tmp_path: Path):
+    """Synthetic-frame path (dataset=None) must skip the clip even if configured."""
+    conv = NetCDFToParquetConverter(
+        transform_config=TransformConfig(clip_regions=["SP"]),
+        storage_config=StorageConfig(database_dir=tmp_path),
+        output_dir=tmp_path / "p",
+        dataset=None,
+    )
+    df = _frame_for_clip([(-23.5, -46.5), (10.0, 10.0)])
+    out = conv._clip_to_regions(df)
+    assert out.height == df.height

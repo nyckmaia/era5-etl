@@ -9,6 +9,7 @@ on failure, and rewrites ZIP responses to plain NetCDF.
 from __future__ import annotations
 
 import calendar
+import contextlib
 import logging
 import os
 import shutil
@@ -19,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import cdsapi
-from tqdm import tqdm
 
 from era5_etl.config import DownloadConfig
 from era5_etl.download.cds_log_capture import CDSEventCapture
@@ -43,7 +43,7 @@ class CDSDownloader:
         self,
         config: DownloadConfig,
         manifest: Manifest | None = None,
-        on_event: "Callable[[dict[str, Any]], None] | None" = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.config = config
         self.manifest = manifest
@@ -76,7 +76,7 @@ class CDSDownloader:
     def download(
         self,
         apply_diff: bool = False,
-        base_dir: "Path | str | None" = None,
+        base_dir: Path | str | None = None,
     ) -> list[Path]:
         """Download every chunk planned for the current configuration.
 
@@ -231,10 +231,8 @@ class CDSDownloader:
         if self.manifest is not None:
             record = ChunkRecord.from_request_chunk(chunk)
             record.netcdf_filename = output_file.name
-            try:
+            with contextlib.suppress(OSError):
                 record.size_bytes = output_file.stat().st_size
-            except OSError:
-                pass
             self.manifest.record(record)
             self.manifest.save()
         return output_file

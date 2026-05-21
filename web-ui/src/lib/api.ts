@@ -7,6 +7,15 @@ export interface DatasetVariable {
   full_name: string;
   description: string;
   unit: string;
+  /** Wizard section ids this variable belongs to. Empty for datasets that
+   *  use a flat variable list (ERA5-LAND today). */
+  groups?: string[];
+}
+
+export interface VariableGroup {
+  id: string;
+  label: string;
+  order: number;
 }
 
 export interface DatasetInfo {
@@ -20,6 +29,11 @@ export interface DatasetInfo {
   // any cached/older payload shape.
   source_kind?: string;
   is_gridded?: boolean;
+  /** Wizard sections in display order. Empty list = flat layout. */
+  variable_groups?: VariableGroup[];
+  /** True iff the user has at least one parquet for this dataset.
+   *  The bootstrap grid parquet under ``_grids/`` does NOT flip this. */
+  has_data?: boolean;
 }
 
 export interface StorageStats {
@@ -376,6 +390,7 @@ export const api = {
     area: [number, number, number, number];
     hours: string[];
     max_request_bytes?: number;
+    clip_regions?: string[] | null;
   }) => request<EstimateResult>("/api/pipeline/estimate", { method: "POST", body: JSON.stringify(body) }),
   startRun: (body: {
     dataset: string;
@@ -384,6 +399,7 @@ export const api = {
     end_date?: string | null;
     area: [number, number, number, number];
     hours: string[];
+    clip_regions?: string[] | null;
   }) =>
     request<{ run_id: string; dataset: string; status: string }>(
       "/api/pipeline/run",
@@ -437,6 +453,10 @@ export const api = {
   },
   regions: {
     uf: () => request<UfBbox[]>("/api/regions/uf"),
+    clipAvailable: (dataset: string) =>
+      request<{ regions: string[] }>(
+        `/api/regions/clip-available?dataset=${encodeURIComponent(dataset)}`,
+      ),
   },
   queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
   userViews: {
@@ -587,6 +607,7 @@ export const api = {
     area: [number, number, number, number];
     hours: string[];
     apply_diff: boolean;
+    clip_regions?: string[] | null;
   }) =>
     request<{ run_id: string; dataset: string; status: string }>(
       "/api/pipeline/run",
@@ -595,15 +616,11 @@ export const api = {
 
   // INMET (station source) dedicated flow. The ERA5 wizard's
   // estimate/diff/area/variables don't apply: pick years + run.
+  // The /api/pipeline/run orchestrator auto-bootstraps ERA5/ERA5-LAND
+  // when they are missing — the SPA does NOT need to gate on a
+  // prerequisite call any more.
   inmet: {
     years: () => request<{ years: number[] }>("/api/inmet/years"),
-    prerequisite: () =>
-      request<{
-        era5: boolean;
-        era5_land: boolean;
-        ok: boolean;
-        missing: string[];
-      }>("/api/inmet/prerequisite"),
     run: (years: number[]) =>
       request<{ run_id: string; dataset: string; status: string }>(
         "/api/pipeline/run",

@@ -12,8 +12,14 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.datasets import DatasetRegistry
+from era5_etl.storage.parquet_manager import ParquetManager
 from era5_etl.storage.paths import resolve_dataset_dir, resolve_netcdf_temp_dir
-from era5_etl.web.models import DatasetDeleteOut, DatasetOut, DatasetVariableOut
+from era5_etl.web.models import (
+    DatasetDeleteOut,
+    DatasetOut,
+    DatasetVariableOut,
+    VariableGroupOut,
+)
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -27,8 +33,9 @@ def _dir_size_bytes(path: Path) -> int:
     )
 
 
-def _to_out(name: str) -> DatasetOut:
+def _to_out(name: str, base_dir: Path) -> DatasetOut:
     cfg = DatasetRegistry.get(name)
+    has_data = ParquetManager(base_dir, name).exists()
     return DatasetOut(
         name=cfg.NAME,
         cds_dataset_id=cfg.CDS_DATASET_ID,
@@ -44,22 +51,30 @@ def _to_out(name: str) -> DatasetOut:
                 full_name=v.full_name,
                 description=v.description,
                 unit=v.unit,
+                groups=list(v.groups),
             )
             for v in cfg.variables
         ],
+        variable_groups=[
+            VariableGroupOut(id=g.id, label=g.label, order=g.order)
+            for g in cfg.variable_groups
+        ],
+        has_data=has_data,
     )
 
 
 @router.get("", response_model=list[DatasetOut])
-def list_datasets() -> list[DatasetOut]:
-    return [_to_out(name) for name in DatasetRegistry.names()]
+def list_datasets(request: Request) -> list[DatasetOut]:
+    base_dir: Path = request.app.state.data_dir
+    return [_to_out(name, base_dir) for name in DatasetRegistry.names()]
 
 
 @router.get("/{name}", response_model=DatasetOut)
-def get_dataset(name: str) -> DatasetOut:
+def get_dataset(name: str, request: Request) -> DatasetOut:
     if name not in DatasetRegistry.names():
         raise HTTPException(status_code=404, detail=f"Unknown dataset: {name}")
-    return _to_out(name)
+    base_dir: Path = request.app.state.data_dir
+    return _to_out(name, base_dir)
 
 
 @router.delete("/{name}/data", response_model=DatasetDeleteOut)

@@ -1,6 +1,7 @@
 # Available variables for the ERA5 single-level dataset.
-# Each entry maps to one CDS API variable name.
-# `defaults` lists the variables included in the "default download" preset.
+# Mirrors the grouping used by the CDS web form so the Download Wizard
+# can present them in the same sections. Each variable may appear in
+# multiple groups (e.g. "Popular" is a curated cross-cut of others).
 
 defaults:
   - 2m_temperature
@@ -10,94 +11,2164 @@ defaults:
   - surface_pressure
   - total_precipitation
 
+# Display order matches the CDS site. ``id`` is the stable token used by
+# the API and the UI; ``label`` is the human title shown in the wizard.
+groups:
+  - id: popular
+    label: Popular
+  - id: temperature_pressure
+    label: Temperature and pressure
+  - id: wind
+    label: Wind
+  - id: mean_rates
+    label: Mean rates
+  - id: radiation_heat
+    label: Radiation and heat
+  - id: clouds
+    label: Clouds
+  - id: lakes
+    label: Lakes
+  - id: evaporation_runoff
+    label: Evaporation and runoff
+  - id: precipitation_rain
+    label: Precipitation and rain
+  - id: snow
+    label: Snow
+  - id: soil
+    label: Soil
+  - id: vertical_integrals
+    label: Vertical integrals
+  - id: vegetation
+    label: Vegetation
+  - id: ocean_waves
+    label: Ocean waves
+  - id: other
+    label: Other
+
 variables:
+
+  # ----- Popular + Temperature/Pressure + Wind cross-cut ---------------
+
   - api_name: "2m_temperature"
     short_name: "t2m"
     friendly_name: "temperature_2m"
     full_name: "2-metre temperature"
-    description: "Temperature of air at 2m above the surface of land, sea or inland waters."
+    description: "Air temperature at 2 m above the surface; interpolated between the lowest model level and the surface."
     unit: "K"
+    groups: [popular, temperature_pressure]
 
   - api_name: "2m_dewpoint_temperature"
     short_name: "d2m"
     friendly_name: "dewpoint_2m"
     full_name: "2-metre dewpoint temperature"
-    description: "Temperature to which air at 2m above the surface must be cooled to become saturated."
+    description: "Temperature to which 2 m air would have to be cooled at constant pressure to reach saturation."
     unit: "K"
+    groups: [popular, temperature_pressure]
 
   - api_name: "10m_u_component_of_wind"
     short_name: "u10"
     friendly_name: "wind_u_10m"
     full_name: "10-metre U wind component"
-    description: "Eastward component of the 10m wind. Combined with V component to derive wind speed."
+    description: "Eastward component of the 10 m wind; pairs with V to derive speed/direction."
     unit: "m/s"
+    groups: [popular, wind]
 
   - api_name: "10m_v_component_of_wind"
     short_name: "v10"
     friendly_name: "wind_v_10m"
     full_name: "10-metre V wind component"
-    description: "Northward component of the 10m wind. Combined with U component to derive wind speed."
+    description: "Northward component of the 10 m wind; pairs with U to derive speed/direction."
     unit: "m/s"
+    groups: [popular, wind]
+
+  - api_name: "mean_sea_level_pressure"
+    short_name: "msl"
+    friendly_name: "mean_sea_level_pressure"
+    full_name: "Mean sea level pressure"
+    description: "Surface pressure adjusted to mean sea level; used to identify synoptic systems over varied terrain."
+    unit: "Pa"
+    groups: [popular, temperature_pressure]
+
+  - api_name: "mean_wave_direction"
+    short_name: "mwd"
+    friendly_name: "mean_wave_direction"
+    full_name: "Mean wave direction"
+    description: "Mean direction of ocean/wave-spectrum waves."
+    unit: "degree"
+    groups: [popular, ocean_waves]
+
+  - api_name: "mean_wave_period"
+    short_name: "mwp"
+    friendly_name: "mean_wave_period"
+    full_name: "Mean wave period"
+    description: "Mean period of ocean waves (energy-weighted)."
+    unit: "s"
+    groups: [popular, ocean_waves]
+
+  - api_name: "sea_surface_temperature"
+    short_name: "sst"
+    friendly_name: "sea_surface_temperature"
+    full_name: "Sea surface temperature"
+    description: "Temperature of the sea surface (analysed/forecast)."
+    unit: "K"
+    groups: [popular, temperature_pressure]
+
+  - api_name: "significant_height_of_combined_wind_waves_and_swell"
+    short_name: "swh"
+    friendly_name: "significant_wave_height"
+    full_name: "Significant height of combined wind waves and swell"
+    description: "Average height of the highest 1/3 of waves (combined wind sea + swell)."
+    unit: "m"
+    groups: [popular, ocean_waves]
 
   - api_name: "surface_pressure"
     short_name: "sp"
     friendly_name: "surface_pressure"
     full_name: "Surface pressure"
-    description: "Pressure of the atmosphere on the surface of land, sea and inland water."
+    description: "Atmospheric pressure at the surface of land, sea, or inland waters."
     unit: "Pa"
-
-  - api_name: "mean_sea_level_pressure"
-    short_name: "msl"
-    friendly_name: "msl_pressure"
-    full_name: "Mean sea level pressure"
-    description: "Pressure adjusted to the height of mean sea level."
-    unit: "Pa"
+    groups: [popular, temperature_pressure]
 
   - api_name: "total_precipitation"
     short_name: "tp"
     friendly_name: "total_precipitation"
     full_name: "Total precipitation"
-    description: "Accumulated liquid and frozen water, including rain and snow, that falls to the Earth's surface."
+    description: "Accumulated liquid + frozen water that has fallen to the surface (large-scale + convective)."
     unit: "m"
+    groups: [popular, precipitation_rain]
+
+  # ----- Temperature and pressure (additional) -------------------------
+
+  - api_name: "ice_temperature_layer_1"
+    short_name: "istl1"
+    friendly_name: "ice_temperature_layer_1"
+    full_name: "Ice temperature layer 1"
+    description: "Sea-ice temperature in layer 1 (uppermost)."
+    unit: "K"
+    groups: [temperature_pressure]
+
+  - api_name: "ice_temperature_layer_2"
+    short_name: "istl2"
+    friendly_name: "ice_temperature_layer_2"
+    full_name: "Ice temperature layer 2"
+    description: "Sea-ice temperature in layer 2."
+    unit: "K"
+    groups: [temperature_pressure]
+
+  - api_name: "ice_temperature_layer_3"
+    short_name: "istl3"
+    friendly_name: "ice_temperature_layer_3"
+    full_name: "Ice temperature layer 3"
+    description: "Sea-ice temperature in layer 3."
+    unit: "K"
+    groups: [temperature_pressure]
+
+  - api_name: "ice_temperature_layer_4"
+    short_name: "istl4"
+    friendly_name: "ice_temperature_layer_4"
+    full_name: "Ice temperature layer 4"
+    description: "Sea-ice temperature in layer 4 (deepest)."
+    unit: "K"
+    groups: [temperature_pressure]
+
+  - api_name: "maximum_2m_temperature_since_previous_post_processing"
+    short_name: "mx2t"
+    friendly_name: "max_temperature_2m"
+    full_name: "Maximum 2 m temperature since previous post-processing"
+    description: "Maximum 2 m air temperature reached since the last post-processing step."
+    unit: "K"
+    groups: [temperature_pressure]
+
+  - api_name: "minimum_2m_temperature_since_previous_post_processing"
+    short_name: "mn2t"
+    friendly_name: "min_temperature_2m"
+    full_name: "Minimum 2 m temperature since previous post-processing"
+    description: "Minimum 2 m air temperature reached since the last post-processing step."
+    unit: "K"
+    groups: [temperature_pressure]
 
   - api_name: "skin_temperature"
     short_name: "skt"
     friendly_name: "skin_temperature"
     full_name: "Skin temperature"
-    description: "Temperature of the surface of the Earth (skin temperature)."
+    description: "Temperature of the uppermost surface layer (no heat capacity)."
     unit: "K"
+    groups: [temperature_pressure]
+
+  # ----- Wind (additional) --------------------------------------------
+
+  - api_name: "100m_u_component_of_wind"
+    short_name: "u100"
+    friendly_name: "wind_u_100m"
+    full_name: "100-metre U wind component"
+    description: "Eastward component of the 100 m wind."
+    unit: "m/s"
+    groups: [wind]
+
+  - api_name: "100m_v_component_of_wind"
+    short_name: "v100"
+    friendly_name: "wind_v_100m"
+    full_name: "100-metre V wind component"
+    description: "Northward component of the 100 m wind."
+    unit: "m/s"
+    groups: [wind]
+
+  - api_name: "10m_u_component_of_neutral_wind"
+    short_name: "u10n"
+    friendly_name: "neutral_wind_u_10m"
+    full_name: "10-metre U component of neutral wind"
+    description: "Eastward 10 m wind reduced to neutral atmospheric stability conditions."
+    unit: "m/s"
+    groups: [wind]
+
+  - api_name: "10m_v_component_of_neutral_wind"
+    short_name: "v10n"
+    friendly_name: "neutral_wind_v_10m"
+    full_name: "10-metre V component of neutral wind"
+    description: "Northward 10 m wind reduced to neutral atmospheric stability conditions."
+    unit: "m/s"
+    groups: [wind]
+
+  - api_name: "10m_wind_gust_since_previous_post_processing"
+    short_name: "fg10"
+    friendly_name: "wind_gust_10m"
+    full_name: "10 m wind gust since previous post-processing"
+    description: "Maximum 10 m wind speed reached since the last post-processing step."
+    unit: "m/s"
+    groups: [wind]
+
+  - api_name: "instantaneous_10m_wind_gust"
+    short_name: "i10fg"
+    friendly_name: "instantaneous_wind_gust_10m"
+    full_name: "Instantaneous 10 m wind gust"
+    description: "Instantaneous 10 m wind gust."
+    unit: "m/s"
+    groups: [wind]
+
+  # ----- Mean rates (38) ----------------------------------------------
+
+  - api_name: "mean_boundary_layer_dissipation"
+    short_name: "mbld"
+    friendly_name: "mean_boundary_layer_dissipation"
+    full_name: "Mean boundary layer dissipation"
+    description: "Mean rate of kinetic-energy dissipation in the boundary layer."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_convective_precipitation_rate"
+    short_name: "mcpr"
+    friendly_name: "mean_convective_precipitation_rate"
+    full_name: "Mean convective precipitation rate"
+    description: "Mean rate of convective precipitation reaching the surface."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_convective_snowfall_rate"
+    short_name: "mcsr"
+    friendly_name: "mean_convective_snowfall_rate"
+    full_name: "Mean convective snowfall rate"
+    description: "Mean rate of convective snowfall reaching the surface (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_eastward_gravity_wave_surface_stress"
+    short_name: "megwss"
+    friendly_name: "mean_eastward_gravity_wave_surface_stress"
+    full_name: "Mean eastward gravity-wave surface stress"
+    description: "Mean eastward stress on the surface from sub-grid orographic gravity waves."
+    unit: "N/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_eastward_turbulent_surface_stress"
+    short_name: "metss"
+    friendly_name: "mean_eastward_turbulent_surface_stress"
+    full_name: "Mean eastward turbulent surface stress"
+    description: "Mean eastward turbulent surface stress."
+    unit: "N/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_evaporation_rate"
+    short_name: "mer"
+    friendly_name: "mean_evaporation_rate"
+    full_name: "Mean evaporation rate"
+    description: "Mean rate of evaporation at the surface."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_gravity_wave_dissipation"
+    short_name: "mgwd"
+    friendly_name: "mean_gravity_wave_dissipation"
+    full_name: "Mean gravity-wave dissipation"
+    description: "Mean rate of energy dissipation by gravity waves."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_large_scale_precipitation_fraction"
+    short_name: "mlspf"
+    friendly_name: "mean_large_scale_precipitation_fraction"
+    full_name: "Mean large-scale precipitation fraction"
+    description: "Mean fraction of the grid box covered by large-scale precipitation."
+    unit: "(0-1)"
+    groups: [mean_rates]
+
+  - api_name: "mean_large_scale_precipitation_rate"
+    short_name: "mlspr"
+    friendly_name: "mean_large_scale_precipitation_rate"
+    full_name: "Mean large-scale precipitation rate"
+    description: "Mean rate of large-scale precipitation."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_large_scale_snowfall_rate"
+    short_name: "mlssr"
+    friendly_name: "mean_large_scale_snowfall_rate"
+    full_name: "Mean large-scale snowfall rate"
+    description: "Mean rate of large-scale snowfall (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_northward_gravity_wave_surface_stress"
+    short_name: "mngwss"
+    friendly_name: "mean_northward_gravity_wave_surface_stress"
+    full_name: "Mean northward gravity-wave surface stress"
+    description: "Mean northward gravity-wave surface stress."
+    unit: "N/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_northward_turbulent_surface_stress"
+    short_name: "mntss"
+    friendly_name: "mean_northward_turbulent_surface_stress"
+    full_name: "Mean northward turbulent surface stress"
+    description: "Mean northward turbulent surface stress."
+    unit: "N/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_potential_evaporation_rate"
+    short_name: "mper"
+    friendly_name: "mean_potential_evaporation_rate"
+    full_name: "Mean potential evaporation rate"
+    description: "Mean potential evaporation rate (well-watered crops/mixed-farming assumption)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_runoff_rate"
+    short_name: "mror"
+    friendly_name: "mean_runoff_rate"
+    full_name: "Mean runoff rate"
+    description: "Mean total runoff rate (surface + sub-surface)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_snow_evaporation_rate"
+    short_name: "mser"
+    friendly_name: "mean_snow_evaporation_rate"
+    full_name: "Mean snow evaporation rate"
+    description: "Mean rate of snow evaporation (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_snowfall_rate"
+    short_name: "msr"
+    friendly_name: "mean_snowfall_rate"
+    full_name: "Mean snowfall rate"
+    description: "Mean rate of total snowfall (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_snowmelt_rate"
+    short_name: "msmr"
+    friendly_name: "mean_snowmelt_rate"
+    full_name: "Mean snowmelt rate"
+    description: "Mean rate of snowmelt (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_sub_surface_runoff_rate"
+    short_name: "mssror"
+    friendly_name: "mean_sub_surface_runoff_rate"
+    full_name: "Mean sub-surface runoff rate"
+    description: "Mean rate of sub-surface (underground) runoff."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_direct_short_wave_radiation_flux"
+    short_name: "msdrswrf"
+    friendly_name: "mean_surface_direct_short_wave_radiation_flux"
+    full_name: "Mean surface direct short-wave radiation flux"
+    description: "Mean direct (beam) short-wave flux reaching the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_direct_short_wave_radiation_flux_clear_sky"
+    short_name: "msdrswrfcs"
+    friendly_name: "mean_surface_direct_short_wave_radiation_flux_clear_sky"
+    full_name: "Mean surface direct short-wave radiation flux, clear sky"
+    description: "Clear-sky equivalent of the mean direct short-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_downward_long_wave_radiation_flux"
+    short_name: "msdwlwrf"
+    friendly_name: "mean_surface_downward_long_wave_radiation_flux"
+    full_name: "Mean surface downward long-wave radiation flux"
+    description: "Mean downward long-wave (thermal) flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_downward_long_wave_radiation_flux_clear_sky"
+    short_name: "msdwlwrfcs"
+    friendly_name: "mean_surface_downward_long_wave_radiation_flux_clear_sky"
+    full_name: "Mean surface downward long-wave radiation flux, clear sky"
+    description: "Clear-sky downward long-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_downward_short_wave_radiation_flux"
+    short_name: "msdwswrf"
+    friendly_name: "mean_surface_downward_short_wave_radiation_flux"
+    full_name: "Mean surface downward short-wave radiation flux"
+    description: "Mean downward short-wave (solar) flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_downward_short_wave_radiation_flux_clear_sky"
+    short_name: "msdwswrfcs"
+    friendly_name: "mean_surface_downward_short_wave_radiation_flux_clear_sky"
+    full_name: "Mean surface downward short-wave radiation flux, clear sky"
+    description: "Clear-sky downward short-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_downward_uv_radiation_flux"
+    short_name: "msduvrf"
+    friendly_name: "mean_surface_downward_uv_radiation_flux"
+    full_name: "Mean surface downward UV radiation flux"
+    description: "Mean downward UV-band flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_latent_heat_flux"
+    short_name: "mslhf"
+    friendly_name: "mean_surface_latent_heat_flux"
+    full_name: "Mean surface latent heat flux"
+    description: "Mean latent heat flux at the surface (downward positive)."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_net_long_wave_radiation_flux"
+    short_name: "msnlwrf"
+    friendly_name: "mean_surface_net_long_wave_radiation_flux"
+    full_name: "Mean surface net long-wave radiation flux"
+    description: "Mean net long-wave flux at the surface (downward positive)."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_net_long_wave_radiation_flux_clear_sky"
+    short_name: "msnlwrfcs"
+    friendly_name: "mean_surface_net_long_wave_radiation_flux_clear_sky"
+    full_name: "Mean surface net long-wave radiation flux, clear sky"
+    description: "Clear-sky net long-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_net_short_wave_radiation_flux"
+    short_name: "msnswrf"
+    friendly_name: "mean_surface_net_short_wave_radiation_flux"
+    full_name: "Mean surface net short-wave radiation flux"
+    description: "Mean net short-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_net_short_wave_radiation_flux_clear_sky"
+    short_name: "msnswrfcs"
+    friendly_name: "mean_surface_net_short_wave_radiation_flux_clear_sky"
+    full_name: "Mean surface net short-wave radiation flux, clear sky"
+    description: "Clear-sky net short-wave flux at the surface."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_runoff_rate"
+    short_name: "msror"
+    friendly_name: "mean_surface_runoff_rate"
+    full_name: "Mean surface runoff rate"
+    description: "Mean rate of surface runoff."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_surface_sensible_heat_flux"
+    short_name: "msshf"
+    friendly_name: "mean_surface_sensible_heat_flux"
+    full_name: "Mean surface sensible heat flux"
+    description: "Mean sensible heat flux at the surface (downward positive)."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_top_downward_short_wave_radiation_flux"
+    short_name: "mtdwswrf"
+    friendly_name: "mean_top_downward_short_wave_radiation_flux"
+    full_name: "Mean top downward short-wave radiation flux"
+    description: "Mean downward short-wave (solar) flux at the top of the atmosphere."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_top_net_long_wave_radiation_flux"
+    short_name: "mtnlwrf"
+    friendly_name: "mean_top_net_long_wave_radiation_flux"
+    full_name: "Mean top net long-wave radiation flux"
+    description: "Mean net long-wave flux at the top of the atmosphere (OLR)."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_top_net_long_wave_radiation_flux_clear_sky"
+    short_name: "mtnlwrfcs"
+    friendly_name: "mean_top_net_long_wave_radiation_flux_clear_sky"
+    full_name: "Mean top net long-wave radiation flux, clear sky"
+    description: "Clear-sky net long-wave flux at the top of the atmosphere."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_top_net_short_wave_radiation_flux"
+    short_name: "mtnswrf"
+    friendly_name: "mean_top_net_short_wave_radiation_flux"
+    full_name: "Mean top net short-wave radiation flux"
+    description: "Mean net short-wave flux at the top of the atmosphere."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_top_net_short_wave_radiation_flux_clear_sky"
+    short_name: "mtnswrfcs"
+    friendly_name: "mean_top_net_short_wave_radiation_flux_clear_sky"
+    full_name: "Mean top net short-wave radiation flux, clear sky"
+    description: "Clear-sky net short-wave flux at the top of the atmosphere."
+    unit: "W/m2"
+    groups: [mean_rates]
+
+  - api_name: "mean_total_precipitation_rate"
+    short_name: "mtpr"
+    friendly_name: "mean_total_precipitation_rate"
+    full_name: "Mean total precipitation rate"
+    description: "Mean total precipitation rate (rain + snow)."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  - api_name: "mean_vertically_integrated_moisture_divergence"
+    short_name: "mvimd"
+    friendly_name: "mean_vertically_integrated_moisture_divergence"
+    full_name: "Mean vertically integrated moisture divergence"
+    description: "Mean vertically integrated horizontal divergence of atmospheric moisture flux."
+    unit: "kg/m2/s"
+    groups: [mean_rates]
+
+  # ----- Radiation and heat (23, accumulated) -------------------------
+
+  - api_name: "clear_sky_direct_solar_radiation_at_surface"
+    short_name: "cdir"
+    friendly_name: "clear_sky_direct_solar_radiation_at_surface"
+    full_name: "Clear-sky direct solar radiation at surface"
+    description: "Accumulated clear-sky direct solar radiation reaching the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "downward_uv_radiation_at_the_surface"
+    short_name: "uvb"
+    friendly_name: "downward_uv_radiation_at_the_surface"
+    full_name: "Downward UV radiation at the surface"
+    description: "Accumulated downward UV-band radiation at the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "forecast_logarithm_of_surface_roughness_for_heat"
+    short_name: "flsr"
+    friendly_name: "forecast_logarithm_of_surface_roughness_for_heat"
+    full_name: "Forecast logarithm of surface roughness for heat"
+    description: "Natural logarithm of the model's surface roughness length for heat."
+    unit: "dimensionless"
+    groups: [radiation_heat]
+
+  - api_name: "instantaneous_surface_sensible_heat_flux"
+    short_name: "ishf"
+    friendly_name: "instantaneous_surface_sensible_heat_flux"
+    full_name: "Instantaneous surface sensible heat flux"
+    description: "Instantaneous sensible heat flux at the surface."
+    unit: "W/m2"
+    groups: [radiation_heat]
+
+  - api_name: "near_ir_albedo_for_diffuse_radiation"
+    short_name: "alnid"
+    friendly_name: "near_ir_albedo_for_diffuse_radiation"
+    full_name: "Near IR albedo for diffuse radiation"
+    description: "Near-infrared albedo of the surface for diffuse solar radiation."
+    unit: "(0-1)"
+    groups: [radiation_heat]
+
+  - api_name: "near_ir_albedo_for_direct_radiation"
+    short_name: "alnip"
+    friendly_name: "near_ir_albedo_for_direct_radiation"
+    full_name: "Near IR albedo for direct radiation"
+    description: "Near-infrared albedo of the surface for direct (beam) solar radiation."
+    unit: "(0-1)"
+    groups: [radiation_heat]
+
+  - api_name: "surface_latent_heat_flux"
+    short_name: "slhf"
+    friendly_name: "surface_latent_heat_flux"
+    full_name: "Surface latent heat flux"
+    description: "Accumulated surface latent heat flux (downward positive)."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_net_solar_radiation"
+    short_name: "ssr"
+    friendly_name: "surface_net_solar_radiation"
+    full_name: "Surface net solar radiation"
+    description: "Net (downwelling minus reflected) short-wave radiation at the surface, accumulated."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_net_solar_radiation_clear_sky"
+    short_name: "ssrc"
+    friendly_name: "surface_net_solar_radiation_clear_sky"
+    full_name: "Surface net solar radiation, clear sky"
+    description: "Clear-sky net solar radiation at the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_net_thermal_radiation"
+    short_name: "str"
+    friendly_name: "surface_net_thermal_radiation"
+    full_name: "Surface net thermal radiation"
+    description: "Accumulated net thermal (long-wave) radiation at the surface (downward positive)."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_net_thermal_radiation_clear_sky"
+    short_name: "strc"
+    friendly_name: "surface_net_thermal_radiation_clear_sky"
+    full_name: "Surface net thermal radiation, clear sky"
+    description: "Clear-sky net thermal radiation at the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_sensible_heat_flux"
+    short_name: "sshf"
+    friendly_name: "surface_sensible_heat_flux"
+    full_name: "Surface sensible heat flux"
+    description: "Accumulated surface sensible heat flux (downward positive)."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_solar_radiation_downward_clear_sky"
+    short_name: "ssrdc"
+    friendly_name: "surface_solar_radiation_downward_clear_sky"
+    full_name: "Surface solar radiation downward, clear sky"
+    description: "Clear-sky downward solar radiation at the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
 
   - api_name: "surface_solar_radiation_downwards"
     short_name: "ssrd"
-    friendly_name: "solar_radiation"
+    friendly_name: "surface_solar_radiation_downwards"
     full_name: "Surface solar radiation downwards"
-    description: "Amount of solar radiation (shortwave) reaching the Earth's surface."
+    description: "Accumulated downward solar (short-wave) radiation at the surface."
     unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "surface_thermal_radiation_downward_clear_sky"
+    short_name: "strdc"
+    friendly_name: "surface_thermal_radiation_downward_clear_sky"
+    full_name: "Surface thermal radiation downward, clear sky"
+    description: "Clear-sky downward thermal radiation at the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
 
   - api_name: "surface_thermal_radiation_downwards"
     short_name: "strd"
-    friendly_name: "thermal_radiation"
+    friendly_name: "surface_thermal_radiation_downwards"
     full_name: "Surface thermal radiation downwards"
-    description: "Amount of thermal radiation (longwave) emitted by the atmosphere reaching the surface."
+    description: "Accumulated downward thermal (long-wave) radiation at the surface."
     unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "toa_incident_solar_radiation"
+    short_name: "tisr"
+    friendly_name: "toa_incident_solar_radiation"
+    full_name: "TOA incident solar radiation"
+    description: "Solar radiation incident at the top of the atmosphere."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "top_net_solar_radiation"
+    short_name: "tsr"
+    friendly_name: "top_net_solar_radiation"
+    full_name: "Top net solar radiation"
+    description: "Net solar radiation at the top of the atmosphere."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "top_net_solar_radiation_clear_sky"
+    short_name: "tsrc"
+    friendly_name: "top_net_solar_radiation_clear_sky"
+    full_name: "Top net solar radiation, clear sky"
+    description: "Clear-sky net solar radiation at the top of the atmosphere."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "top_net_thermal_radiation"
+    short_name: "ttr"
+    friendly_name: "top_net_thermal_radiation"
+    full_name: "Top net thermal radiation"
+    description: "Net thermal (long-wave) radiation at the top of the atmosphere (OLR, downward positive)."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "top_net_thermal_radiation_clear_sky"
+    short_name: "ttrc"
+    friendly_name: "top_net_thermal_radiation_clear_sky"
+    full_name: "Top net thermal radiation, clear sky"
+    description: "Clear-sky net thermal radiation at the top of the atmosphere."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "total_sky_direct_solar_radiation_at_surface"
+    short_name: "fdir"
+    friendly_name: "total_sky_direct_solar_radiation_at_surface"
+    full_name: "Total sky direct solar radiation at surface"
+    description: "All-sky direct (beam) solar radiation reaching the surface."
+    unit: "J/m2"
+    groups: [radiation_heat]
+
+  - api_name: "uv_visible_albedo_for_diffuse_radiation"
+    short_name: "aluvd"
+    friendly_name: "uv_visible_albedo_for_diffuse_radiation"
+    full_name: "UV visible albedo for diffuse radiation"
+    description: "UV/visible-band albedo of the surface for diffuse radiation."
+    unit: "(0-1)"
+    groups: [radiation_heat]
+
+  - api_name: "uv_visible_albedo_for_direct_radiation"
+    short_name: "aluvp"
+    friendly_name: "uv_visible_albedo_for_direct_radiation"
+    full_name: "UV visible albedo for direct radiation"
+    description: "UV/visible-band albedo of the surface for direct (beam) radiation."
+    unit: "(0-1)"
+    groups: [radiation_heat]
+
+  # ----- Clouds (13; six overlap with Vertical Integrals) -------------
+
+  - api_name: "cloud_base_height"
+    short_name: "cbh"
+    friendly_name: "cloud_base_height"
+    full_name: "Cloud base height"
+    description: "Height of cloud base above the surface."
+    unit: "m"
+    groups: [clouds]
+
+  - api_name: "high_cloud_cover"
+    short_name: "hcc"
+    friendly_name: "high_cloud_cover"
+    full_name: "High cloud cover"
+    description: "Fraction of grid box covered by high clouds (above ~400 hPa)."
+    unit: "(0-1)"
+    groups: [clouds]
+
+  - api_name: "low_cloud_cover"
+    short_name: "lcc"
+    friendly_name: "low_cloud_cover"
+    full_name: "Low cloud cover"
+    description: "Fraction of grid box covered by low clouds (below ~800 hPa)."
+    unit: "(0-1)"
+    groups: [clouds]
+
+  - api_name: "medium_cloud_cover"
+    short_name: "mcc"
+    friendly_name: "medium_cloud_cover"
+    full_name: "Medium cloud cover"
+    description: "Fraction of grid box covered by middle-level clouds."
+    unit: "(0-1)"
+    groups: [clouds]
 
   - api_name: "total_cloud_cover"
     short_name: "tcc"
-    friendly_name: "cloud_cover"
+    friendly_name: "total_cloud_cover"
     full_name: "Total cloud cover"
-    description: "Proportion of a grid box covered by cloud (0 = clear sky, 1 = fully cloudy)."
+    description: "Fraction of the grid box covered by any cloud."
     unit: "(0-1)"
+    groups: [clouds]
+
+  - api_name: "total_column_cloud_ice_water"
+    short_name: "tciw"
+    friendly_name: "total_column_cloud_ice_water"
+    full_name: "Total column cloud ice water"
+    description: "Vertically integrated cloud ice water content."
+    unit: "kg/m2"
+    groups: [clouds]
+
+  - api_name: "total_column_cloud_liquid_water"
+    short_name: "tclw"
+    friendly_name: "total_column_cloud_liquid_water"
+    full_name: "Total column cloud liquid water"
+    description: "Vertically integrated cloud liquid water content."
+    unit: "kg/m2"
+    groups: [clouds]
+
+  - api_name: "vertical_integral_of_divergence_of_cloud_frozen_water_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_cloud_frozen_water_flux"
+    full_name: "Vertical integral of divergence of cloud frozen water flux"
+    description: "Vertically integrated divergence of the cloud frozen (ice) water flux."
+    unit: "kg/m2/s"
+    groups: [clouds, vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_cloud_liquid_water_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_cloud_liquid_water_flux"
+    full_name: "Vertical integral of divergence of cloud liquid water flux"
+    description: "Vertically integrated divergence of the cloud liquid water flux."
+    unit: "kg/m2/s"
+    groups: [clouds, vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_cloud_frozen_water_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_cloud_frozen_water_flux"
+    full_name: "Vertical integral of eastward cloud frozen water flux"
+    description: "Vertically integrated eastward flux of cloud frozen (ice) water."
+    unit: "kg/m/s"
+    groups: [clouds, vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_cloud_liquid_water_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_cloud_liquid_water_flux"
+    full_name: "Vertical integral of eastward cloud liquid water flux"
+    description: "Vertically integrated eastward flux of cloud liquid water."
+    unit: "kg/m/s"
+    groups: [clouds, vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_cloud_frozen_water_flux"
+    short_name: ""
+    friendly_name: "vi_northward_cloud_frozen_water_flux"
+    full_name: "Vertical integral of northward cloud frozen water flux"
+    description: "Vertically integrated northward flux of cloud frozen (ice) water."
+    unit: "kg/m/s"
+    groups: [clouds, vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_cloud_liquid_water_flux"
+    short_name: ""
+    friendly_name: "vi_northward_cloud_liquid_water_flux"
+    full_name: "Vertical integral of northward cloud liquid water flux"
+    description: "Vertically integrated northward flux of cloud liquid water."
+    unit: "kg/m/s"
+    groups: [clouds, vertical_integrals]
+
+  # ----- Lakes (9) ----------------------------------------------------
+
+  - api_name: "lake_bottom_temperature"
+    short_name: "lblt"
+    friendly_name: "lake_bottom_temperature"
+    full_name: "Lake bottom temperature"
+    description: "Temperature of water at the bottom of inland water bodies."
+    unit: "K"
+    groups: [lakes]
+
+  - api_name: "lake_cover"
+    short_name: "cl"
+    friendly_name: "lake_cover"
+    full_name: "Lake cover"
+    description: "Fraction of grid box covered by inland water (lakes, reservoirs, rivers)."
+    unit: "(0-1)"
+    groups: [lakes]
+
+  - api_name: "lake_depth"
+    short_name: "dl"
+    friendly_name: "lake_depth"
+    full_name: "Lake depth"
+    description: "Mean depth of the inland water body."
+    unit: "m"
+    groups: [lakes]
+
+  - api_name: "lake_ice_depth"
+    short_name: "licd"
+    friendly_name: "lake_ice_depth"
+    full_name: "Lake ice depth"
+    description: "Thickness of the single modelled ice layer on inland water bodies."
+    unit: "m"
+    groups: [lakes]
+
+  - api_name: "lake_ice_temperature"
+    short_name: "lict"
+    friendly_name: "lake_ice_temperature"
+    full_name: "Lake ice temperature"
+    description: "Temperature of the upper surface of ice on inland water bodies."
+    unit: "K"
+    groups: [lakes]
+
+  - api_name: "lake_mix_layer_depth"
+    short_name: "lmld"
+    friendly_name: "lake_mix_layer_depth"
+    full_name: "Lake mix-layer depth"
+    description: "Depth of the well-mixed upper layer of inland water bodies."
+    unit: "m"
+    groups: [lakes]
+
+  - api_name: "lake_mix_layer_temperature"
+    short_name: "lmlt"
+    friendly_name: "lake_mix_layer_temperature"
+    full_name: "Lake mix-layer temperature"
+    description: "Temperature of the well-mixed upper layer of inland water bodies."
+    unit: "K"
+    groups: [lakes]
+
+  - api_name: "lake_shape_factor"
+    short_name: "lshf"
+    friendly_name: "lake_shape_factor"
+    full_name: "Lake shape factor"
+    description: "Dimensionless factor describing the vertical temperature profile in the thermocline."
+    unit: "dimensionless"
+    groups: [lakes]
+
+  - api_name: "lake_total_layer_temperature"
+    short_name: "ltlt"
+    friendly_name: "lake_total_layer_temperature"
+    full_name: "Lake total layer temperature"
+    description: "Mean temperature of the entire inland-water column."
+    unit: "K"
+    groups: [lakes]
+
+  # ----- Evaporation and runoff (5) -----------------------------------
 
   - api_name: "evaporation"
     short_name: "e"
     friendly_name: "evaporation"
     full_name: "Evaporation"
-    description: "Accumulated amount of water that has evaporated from the Earth's surface."
+    description: "Accumulated water evaporated from the surface (downward positive; negative = evaporation)."
     unit: "m"
+    groups: [evaporation_runoff]
 
-  - api_name: "relative_humidity"
-    short_name: "r"
-    friendly_name: "relative_humidity"
-    full_name: "Relative humidity"
-    description: "Percentage of water vapour in the air relative to saturation."
-    unit: "%"
+  - api_name: "potential_evaporation"
+    short_name: "pev"
+    friendly_name: "potential_evaporation"
+    full_name: "Potential evaporation"
+    description: "Potential evaporation assuming well-watered crops/mixed-farming conditions."
+    unit: "m"
+    groups: [evaporation_runoff]
+
+  - api_name: "runoff"
+    short_name: "ro"
+    friendly_name: "runoff"
+    full_name: "Runoff"
+    description: "Accumulated total runoff (surface + sub-surface) as a depth over the grid box."
+    unit: "m"
+    groups: [evaporation_runoff]
+
+  - api_name: "sub_surface_runoff"
+    short_name: "ssro"
+    friendly_name: "sub_surface_runoff"
+    full_name: "Sub-surface runoff"
+    description: "Accumulated sub-surface (underground) runoff."
+    unit: "m"
+    groups: [evaporation_runoff]
+
+  - api_name: "surface_runoff"
+    short_name: "sro"
+    friendly_name: "surface_runoff"
+    full_name: "Surface runoff"
+    description: "Accumulated surface runoff."
+    unit: "m"
+    groups: [evaporation_runoff]
+
+  # ----- Precipitation and rain (10) ----------------------------------
+
+  - api_name: "convective_precipitation"
+    short_name: "cp"
+    friendly_name: "convective_precipitation"
+    full_name: "Convective precipitation"
+    description: "Accumulated precipitation from the model's convection scheme."
+    unit: "m"
+    groups: [precipitation_rain]
+
+  - api_name: "convective_rain_rate"
+    short_name: "crr"
+    friendly_name: "convective_rain_rate"
+    full_name: "Convective rain rate"
+    description: "Instantaneous convective rain rate at the surface."
+    unit: "kg/m2/s"
+    groups: [precipitation_rain]
+
+  - api_name: "instantaneous_large_scale_surface_precipitation_fraction"
+    short_name: "ilspf"
+    friendly_name: "instantaneous_large_scale_surface_precipitation_fraction"
+    full_name: "Instantaneous large-scale surface precipitation fraction"
+    description: "Fraction of the grid box receiving large-scale precipitation at the instantaneous time."
+    unit: "(0-1)"
+    groups: [precipitation_rain]
+
+  - api_name: "large_scale_rain_rate"
+    short_name: "lsrr"
+    friendly_name: "large_scale_rain_rate"
+    full_name: "Large-scale rain rate"
+    description: "Instantaneous large-scale rain rate at the surface."
+    unit: "kg/m2/s"
+    groups: [precipitation_rain]
+
+  - api_name: "large_scale_precipitation"
+    short_name: "lsp"
+    friendly_name: "large_scale_precipitation"
+    full_name: "Large-scale precipitation"
+    description: "Accumulated large-scale (stratiform) precipitation."
+    unit: "m"
+    groups: [precipitation_rain]
+
+  - api_name: "large_scale_precipitation_fraction"
+    short_name: "lspf"
+    friendly_name: "large_scale_precipitation_fraction"
+    full_name: "Large-scale precipitation fraction"
+    description: "Fraction of the grid box receiving large-scale precipitation."
+    unit: "(0-1)"
+    groups: [precipitation_rain]
+
+  - api_name: "maximum_total_precipitation_rate_since_previous_post_processing"
+    short_name: "mxtpr"
+    friendly_name: "maximum_total_precipitation_rate"
+    full_name: "Maximum total precipitation rate since previous post-processing"
+    description: "Maximum total precipitation rate observed since the last post-processing step."
+    unit: "kg/m2/s"
+    groups: [precipitation_rain]
+
+  - api_name: "minimum_total_precipitation_rate_since_previous_post_processing"
+    short_name: "mntpr"
+    friendly_name: "minimum_total_precipitation_rate"
+    full_name: "Minimum total precipitation rate since previous post-processing"
+    description: "Minimum total precipitation rate observed since the last post-processing step."
+    unit: "kg/m2/s"
+    groups: [precipitation_rain]
+
+  - api_name: "precipitation_type"
+    short_name: "ptype"
+    friendly_name: "precipitation_type"
+    full_name: "Precipitation type"
+    description: "Coded precipitation type (rain, snow, freezing rain, etc.)."
+    unit: "dimensionless"
+    groups: [precipitation_rain]
+
+  - api_name: "total_column_rain_water"
+    short_name: "tcrw"
+    friendly_name: "total_column_rain_water"
+    full_name: "Total column rain water"
+    description: "Vertically integrated rain water mass per unit area."
+    unit: "kg/m2"
+    groups: [precipitation_rain]
+
+  # ----- Snow (12) ----------------------------------------------------
+
+  - api_name: "convective_snowfall"
+    short_name: "csf"
+    friendly_name: "convective_snowfall"
+    full_name: "Convective snowfall"
+    description: "Accumulated convective snowfall (water equivalent)."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "convective_snowfall_rate_water_equivalent"
+    short_name: "csfr"
+    friendly_name: "convective_snowfall_rate"
+    full_name: "Convective snowfall rate, water equivalent"
+    description: "Instantaneous convective snowfall rate (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [snow]
+
+  - api_name: "large_scale_snowfall_rate_water_equivalent"
+    short_name: "lssfr"
+    friendly_name: "large_scale_snowfall_rate"
+    full_name: "Large-scale snowfall rate, water equivalent"
+    description: "Instantaneous large-scale snowfall rate (water equivalent)."
+    unit: "kg/m2/s"
+    groups: [snow]
+
+  - api_name: "large_scale_snowfall"
+    short_name: "lsf"
+    friendly_name: "large_scale_snowfall"
+    full_name: "Large-scale snowfall"
+    description: "Accumulated large-scale snowfall (water equivalent)."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "snow_albedo"
+    short_name: "asn"
+    friendly_name: "snow_albedo"
+    full_name: "Snow albedo"
+    description: "Fraction of solar radiation reflected by the snow surface."
+    unit: "(0-1)"
+    groups: [snow]
+
+  - api_name: "snow_density"
+    short_name: "rsn"
+    friendly_name: "snow_density"
+    full_name: "Snow density"
+    description: "Mass of snow per cubic metre of the snow layer."
+    unit: "kg/m3"
+    groups: [snow]
+
+  - api_name: "snow_depth"
+    short_name: "sd"
+    friendly_name: "snow_depth"
+    full_name: "Snow depth"
+    description: "Snow depth on the ground (water equivalent over the grid box). In ERA5 single-level, short_name 'sd'."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "snow_evaporation"
+    short_name: "es"
+    friendly_name: "snow_evaporation"
+    full_name: "Snow evaporation"
+    description: "Accumulated evaporation from snow (water equivalent)."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "snowfall"
+    short_name: "sf"
+    friendly_name: "snowfall"
+    full_name: "Snowfall"
+    description: "Accumulated total snowfall (water equivalent)."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "snowmelt"
+    short_name: "smlt"
+    friendly_name: "snowmelt"
+    full_name: "Snowmelt"
+    description: "Accumulated snowmelt (water equivalent)."
+    unit: "m"
+    groups: [snow]
+
+  - api_name: "temperature_of_snow_layer"
+    short_name: "tsn"
+    friendly_name: "temperature_of_snow_layer"
+    full_name: "Temperature of snow layer"
+    description: "Temperature of the snow layer (single-layer model)."
+    unit: "K"
+    groups: [snow]
+
+  - api_name: "total_column_snow_water"
+    short_name: "tcsw"
+    friendly_name: "total_column_snow_water"
+    full_name: "Total column snow water"
+    description: "Vertically integrated snow water mass per unit area."
+    unit: "kg/m2"
+    groups: [snow]
+
+  # ----- Soil (9) -----------------------------------------------------
+
+  - api_name: "soil_temperature_level_1"
+    short_name: "stl1"
+    friendly_name: "soil_temperature_level_1"
+    full_name: "Soil temperature level 1"
+    description: "Soil temperature in layer 1 (0-7 cm)."
+    unit: "K"
+    groups: [soil]
+
+  - api_name: "soil_temperature_level_2"
+    short_name: "stl2"
+    friendly_name: "soil_temperature_level_2"
+    full_name: "Soil temperature level 2"
+    description: "Soil temperature in layer 2 (7-28 cm)."
+    unit: "K"
+    groups: [soil]
+
+  - api_name: "soil_temperature_level_3"
+    short_name: "stl3"
+    friendly_name: "soil_temperature_level_3"
+    full_name: "Soil temperature level 3"
+    description: "Soil temperature in layer 3 (28-100 cm)."
+    unit: "K"
+    groups: [soil]
+
+  - api_name: "soil_temperature_level_4"
+    short_name: "stl4"
+    friendly_name: "soil_temperature_level_4"
+    full_name: "Soil temperature level 4"
+    description: "Soil temperature in layer 4 (100-289 cm)."
+    unit: "K"
+    groups: [soil]
+
+  - api_name: "soil_type"
+    short_name: "slt"
+    friendly_name: "soil_type"
+    full_name: "Soil type"
+    description: "Categorical soil texture class (1-7)."
+    unit: "dimensionless"
+    groups: [soil]
+
+  - api_name: "volumetric_soil_water_layer_1"
+    short_name: "swvl1"
+    friendly_name: "volumetric_soil_water_layer_1"
+    full_name: "Volumetric soil water layer 1"
+    description: "Volume fraction of water in soil layer 1 (0-7 cm)."
+    unit: "m3/m3"
+    groups: [soil]
+
+  - api_name: "volumetric_soil_water_layer_2"
+    short_name: "swvl2"
+    friendly_name: "volumetric_soil_water_layer_2"
+    full_name: "Volumetric soil water layer 2"
+    description: "Volume fraction of water in soil layer 2 (7-28 cm)."
+    unit: "m3/m3"
+    groups: [soil]
+
+  - api_name: "volumetric_soil_water_layer_3"
+    short_name: "swvl3"
+    friendly_name: "volumetric_soil_water_layer_3"
+    full_name: "Volumetric soil water layer 3"
+    description: "Volume fraction of water in soil layer 3 (28-100 cm)."
+    unit: "m3/m3"
+    groups: [soil]
+
+  - api_name: "volumetric_soil_water_layer_4"
+    short_name: "swvl4"
+    friendly_name: "volumetric_soil_water_layer_4"
+    full_name: "Volumetric soil water layer 4"
+    description: "Volume fraction of water in soil layer 4 (100-289 cm)."
+    unit: "m3/m3"
+    groups: [soil]
+
+  # ----- Vertical integrals (30 unique; 6 also in Clouds above) -------
+
+  - api_name: "vertical_integral_of_divergence_of_geopotential_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_geopotential_flux"
+    full_name: "Vertical integral of divergence of geopotential flux"
+    description: "Vertically integrated horizontal divergence of geopotential flux."
+    unit: "W/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_kinetic_energy_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_kinetic_energy_flux"
+    full_name: "Vertical integral of divergence of kinetic energy flux"
+    description: "Vertically integrated horizontal divergence of kinetic energy flux."
+    unit: "W/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_mass_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_mass_flux"
+    full_name: "Vertical integral of divergence of mass flux"
+    description: "Vertically integrated horizontal divergence of atmospheric mass flux."
+    unit: "kg/m2/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_moisture_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_moisture_flux"
+    full_name: "Vertical integral of divergence of moisture flux"
+    description: "Vertically integrated horizontal divergence of atmospheric moisture flux."
+    unit: "kg/m2/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_ozone_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_ozone_flux"
+    full_name: "Vertical integral of divergence of ozone flux"
+    description: "Vertically integrated horizontal divergence of ozone flux."
+    unit: "kg/m2/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_thermal_energy_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_thermal_energy_flux"
+    full_name: "Vertical integral of divergence of thermal energy flux"
+    description: "Vertically integrated horizontal divergence of thermal energy flux."
+    unit: "W/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_divergence_of_total_energy_flux"
+    short_name: ""
+    friendly_name: "vi_divergence_total_energy_flux"
+    full_name: "Vertical integral of divergence of total energy flux"
+    description: "Vertically integrated horizontal divergence of total energy flux."
+    unit: "W/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_geopotential_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_geopotential_flux"
+    full_name: "Vertical integral of eastward geopotential flux"
+    description: "Vertically integrated eastward flux of geopotential."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_heat_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_heat_flux"
+    full_name: "Vertical integral of eastward heat flux"
+    description: "Vertically integrated eastward heat flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_kinetic_energy_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_kinetic_energy_flux"
+    full_name: "Vertical integral of eastward kinetic energy flux"
+    description: "Vertically integrated eastward kinetic energy flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_mass_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_mass_flux"
+    full_name: "Vertical integral of eastward mass flux"
+    description: "Vertically integrated eastward atmospheric mass flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_ozone_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_ozone_flux"
+    full_name: "Vertical integral of eastward ozone flux"
+    description: "Vertically integrated eastward ozone flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_total_energy_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_total_energy_flux"
+    full_name: "Vertical integral of eastward total energy flux"
+    description: "Vertically integrated eastward total energy flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_eastward_water_vapour_flux"
+    short_name: ""
+    friendly_name: "vi_eastward_water_vapour_flux"
+    full_name: "Vertical integral of eastward water vapour flux"
+    description: "Vertically integrated eastward water-vapour flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_energy_conversion"
+    short_name: ""
+    friendly_name: "vi_energy_conversion"
+    full_name: "Vertical integral of energy conversion"
+    description: "Vertically integrated rate of atmospheric energy conversion."
+    unit: "W/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_kinetic_energy"
+    short_name: ""
+    friendly_name: "vi_kinetic_energy"
+    full_name: "Vertical integral of kinetic energy"
+    description: "Vertically integrated atmospheric kinetic energy."
+    unit: "J/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_mass_of_atmosphere"
+    short_name: ""
+    friendly_name: "vi_mass_of_atmosphere"
+    full_name: "Vertical integral of mass of atmosphere"
+    description: "Total atmospheric mass per unit area."
+    unit: "kg/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_mass_tendency"
+    short_name: ""
+    friendly_name: "vi_mass_tendency"
+    full_name: "Vertical integral of mass tendency"
+    description: "Vertically integrated atmospheric mass tendency."
+    unit: "kg/m2/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_geopotential_flux"
+    short_name: ""
+    friendly_name: "vi_northward_geopotential_flux"
+    full_name: "Vertical integral of northward geopotential flux"
+    description: "Vertically integrated northward geopotential flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_heat_flux"
+    short_name: ""
+    friendly_name: "vi_northward_heat_flux"
+    full_name: "Vertical integral of northward heat flux"
+    description: "Vertically integrated northward heat flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_kinetic_energy_flux"
+    short_name: ""
+    friendly_name: "vi_northward_kinetic_energy_flux"
+    full_name: "Vertical integral of northward kinetic energy flux"
+    description: "Vertically integrated northward kinetic energy flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_mass_flux"
+    short_name: ""
+    friendly_name: "vi_northward_mass_flux"
+    full_name: "Vertical integral of northward mass flux"
+    description: "Vertically integrated northward atmospheric mass flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_ozone_flux"
+    short_name: ""
+    friendly_name: "vi_northward_ozone_flux"
+    full_name: "Vertical integral of northward ozone flux"
+    description: "Vertically integrated northward ozone flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_total_energy_flux"
+    short_name: ""
+    friendly_name: "vi_northward_total_energy_flux"
+    full_name: "Vertical integral of northward total energy flux"
+    description: "Vertically integrated northward total energy flux."
+    unit: "W/m"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_northward_water_vapour_flux"
+    short_name: ""
+    friendly_name: "vi_northward_water_vapour_flux"
+    full_name: "Vertical integral of northward water vapour flux"
+    description: "Vertically integrated northward water-vapour flux."
+    unit: "kg/m/s"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_potential_and_internal_energy"
+    short_name: ""
+    friendly_name: "vi_potential_and_internal_energy"
+    full_name: "Vertical integral of potential and internal energy"
+    description: "Vertically integrated sum of potential + internal energy."
+    unit: "J/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_potential_internal_and_latent_energy"
+    short_name: ""
+    friendly_name: "vi_potential_internal_latent_energy"
+    full_name: "Vertical integral of potential, internal and latent energy"
+    description: "Vertically integrated sum of potential + internal + latent energy."
+    unit: "J/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_temperature"
+    short_name: ""
+    friendly_name: "vi_temperature"
+    full_name: "Vertical integral of temperature"
+    description: "Vertically integrated atmospheric temperature."
+    unit: "K kg/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_thermal_energy"
+    short_name: ""
+    friendly_name: "vi_thermal_energy"
+    full_name: "Vertical integral of thermal energy"
+    description: "Vertically integrated thermal (sensible-heat) energy."
+    unit: "J/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertical_integral_of_total_energy"
+    short_name: ""
+    friendly_name: "vi_total_energy"
+    full_name: "Vertical integral of total energy"
+    description: "Vertically integrated total atmospheric energy."
+    unit: "J/m2"
+    groups: [vertical_integrals]
+
+  - api_name: "vertically_integrated_moisture_divergence"
+    short_name: ""
+    friendly_name: "vertically_integrated_moisture_divergence"
+    full_name: "Vertically integrated moisture divergence"
+    description: "Vertically integrated horizontal divergence of moisture."
+    unit: "kg/m2/s"
+    groups: [vertical_integrals]
+
+  # ----- Vegetation (6) -----------------------------------------------
+
+  - api_name: "high_vegetation_cover"
+    short_name: "cvh"
+    friendly_name: "high_vegetation_cover"
+    full_name: "High vegetation cover"
+    description: "Fraction of the grid box covered by high vegetation (trees)."
+    unit: "(0-1)"
+    groups: [vegetation]
+
+  - api_name: "leaf_area_index_high_vegetation"
+    short_name: "lai_hv"
+    friendly_name: "leaf_area_index_high_vegetation"
+    full_name: "Leaf area index, high vegetation"
+    description: "Half the total green leaf area per unit ground area for high vegetation."
+    unit: "m2/m2"
+    groups: [vegetation]
+
+  - api_name: "leaf_area_index_low_vegetation"
+    short_name: "lai_lv"
+    friendly_name: "leaf_area_index_low_vegetation"
+    full_name: "Leaf area index, low vegetation"
+    description: "Half the total green leaf area per unit ground area for low vegetation."
+    unit: "m2/m2"
+    groups: [vegetation]
+
+  - api_name: "low_vegetation_cover"
+    short_name: "cvl"
+    friendly_name: "low_vegetation_cover"
+    full_name: "Low vegetation cover"
+    description: "Fraction of the grid box covered by low vegetation (grasses/crops)."
+    unit: "(0-1)"
+    groups: [vegetation]
+
+  - api_name: "type_of_high_vegetation"
+    short_name: "tvh"
+    friendly_name: "type_of_high_vegetation"
+    full_name: "Type of high vegetation"
+    description: "Categorical high-vegetation type code."
+    unit: "dimensionless"
+    groups: [vegetation]
+
+  - api_name: "type_of_low_vegetation"
+    short_name: "tvl"
+    friendly_name: "type_of_low_vegetation"
+    full_name: "Type of low vegetation"
+    description: "Categorical low-vegetation type code."
+    unit: "dimensionless"
+    groups: [vegetation]
+
+  # ----- Ocean waves (40; mwd/mwp/swh already above) ------------------
+
+  - api_name: "air_density_over_the_oceans"
+    short_name: "rhoao"
+    friendly_name: "air_density_over_the_oceans"
+    full_name: "Air density over the oceans"
+    description: "Surface air density used in the wave model."
+    unit: "kg/m3"
+    groups: [ocean_waves]
+
+  - api_name: "coefficient_of_drag_with_waves"
+    short_name: "cdww"
+    friendly_name: "coefficient_of_drag_with_waves"
+    full_name: "Coefficient of drag with waves"
+    description: "Wave-induced surface drag coefficient."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "free_convective_velocity_over_the_oceans"
+    short_name: "wstar"
+    friendly_name: "free_convective_velocity_over_the_oceans"
+    full_name: "Free convective velocity over the oceans"
+    description: "Convective velocity scale over the ocean surface."
+    unit: "m/s"
+    groups: [ocean_waves]
+
+  - api_name: "maximum_individual_wave_height"
+    short_name: "hmax"
+    friendly_name: "maximum_individual_wave_height"
+    full_name: "Maximum individual wave height"
+    description: "Maximum individual wave height in the sea state."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "mean_direction_of_total_swell"
+    short_name: "mdts"
+    friendly_name: "mean_direction_of_total_swell"
+    full_name: "Mean direction of total swell"
+    description: "Mean propagation direction of total swell."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "mean_direction_of_wind_waves"
+    short_name: "mdww"
+    friendly_name: "mean_direction_of_wind_waves"
+    full_name: "Mean direction of wind waves"
+    description: "Mean propagation direction of wind waves."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "mean_period_of_total_swell"
+    short_name: "mpts"
+    friendly_name: "mean_period_of_total_swell"
+    full_name: "Mean period of total swell"
+    description: "Mean period of total swell."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_period_of_wind_waves"
+    short_name: "mpww"
+    friendly_name: "mean_period_of_wind_waves"
+    full_name: "Mean period of wind waves"
+    description: "Mean period of wind waves."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_square_slope_of_waves"
+    short_name: "msqs"
+    friendly_name: "mean_square_slope_of_waves"
+    full_name: "Mean square slope of waves"
+    description: "Mean square slope of the wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_direction_of_first_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_direction_swell_1"
+    full_name: "Mean wave direction of first swell partition"
+    description: "Mean direction of the first (primary) swell partition."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_direction_of_second_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_direction_swell_2"
+    full_name: "Mean wave direction of second swell partition"
+    description: "Mean direction of the second swell partition."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_direction_of_third_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_direction_swell_3"
+    full_name: "Mean wave direction of third swell partition"
+    description: "Mean direction of the third swell partition."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_based_on_first_moment"
+    short_name: "mp1"
+    friendly_name: "mean_wave_period_m1"
+    full_name: "Mean wave period based on first moment"
+    description: "Mean wave period based on the first spectral moment."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_based_on_first_moment_for_swell"
+    short_name: "p1ps"
+    friendly_name: "mean_wave_period_m1_swell"
+    full_name: "Mean wave period based on first moment for swell"
+    description: "Swell mean period based on the first spectral moment."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_based_on_first_moment_for_wind_waves"
+    short_name: "p1ww"
+    friendly_name: "mean_wave_period_m1_wind_waves"
+    full_name: "Mean wave period based on first moment for wind waves"
+    description: "Wind-wave mean period based on the first spectral moment."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_based_on_second_moment_for_swell"
+    short_name: "p2ps"
+    friendly_name: "mean_wave_period_m2_swell"
+    full_name: "Mean wave period based on second moment for swell"
+    description: "Swell mean period based on the second spectral moment."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_based_on_second_moment_for_wind_waves"
+    short_name: "p2ww"
+    friendly_name: "mean_wave_period_m2_wind_waves"
+    full_name: "Mean wave period based on second moment for wind waves"
+    description: "Wind-wave mean period based on the second spectral moment."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_of_first_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_period_swell_1"
+    full_name: "Mean wave period of first swell partition"
+    description: "Mean period of the first swell partition."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_of_second_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_period_swell_2"
+    full_name: "Mean wave period of second swell partition"
+    description: "Mean period of the second swell partition."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_wave_period_of_third_swell_partition"
+    short_name: ""
+    friendly_name: "mean_wave_period_swell_3"
+    full_name: "Mean wave period of third swell partition"
+    description: "Mean period of the third swell partition."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "mean_zero_crossing_wave_period"
+    short_name: "mp2"
+    friendly_name: "mean_zero_crossing_wave_period"
+    full_name: "Mean zero-crossing wave period"
+    description: "Mean zero-crossing wave period."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "model_bathymetry"
+    short_name: "wmb"
+    friendly_name: "model_bathymetry"
+    full_name: "Model bathymetry"
+    description: "Model ocean depth used by the wave model."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "normalized_energy_flux_into_ocean"
+    short_name: "phioc"
+    friendly_name: "normalized_energy_flux_into_ocean"
+    full_name: "Normalized energy flux into ocean"
+    description: "Normalized energy flux from waves into the ocean."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "normalized_energy_flux_into_waves"
+    short_name: "phiaw"
+    friendly_name: "normalized_energy_flux_into_waves"
+    full_name: "Normalized energy flux into waves"
+    description: "Normalized energy flux from the atmosphere into waves."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "normalized_stress_into_ocean"
+    short_name: "tauoc"
+    friendly_name: "normalized_stress_into_ocean"
+    full_name: "Normalized stress into ocean"
+    description: "Normalized momentum stress from waves into the ocean."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "ocean_surface_stress_equivalent_10m_neutral_wind_direction"
+    short_name: "dwi"
+    friendly_name: "ocean_stress_equivalent_neutral_wind_direction_10m"
+    full_name: "Ocean surface stress equivalent 10 m neutral wind direction"
+    description: "10 m wind direction equivalent to the ocean surface stress under neutral stability."
+    unit: "degree"
+    groups: [ocean_waves]
+
+  - api_name: "ocean_surface_stress_equivalent_10m_neutral_wind_speed"
+    short_name: ""
+    friendly_name: "ocean_stress_equivalent_neutral_wind_speed_10m"
+    full_name: "Ocean surface stress equivalent 10 m neutral wind speed"
+    description: "10 m wind speed equivalent to the ocean surface stress under neutral stability."
+    unit: "m/s"
+    groups: [ocean_waves]
+
+  - api_name: "peak_wave_period"
+    short_name: "pp1d"
+    friendly_name: "peak_wave_period"
+    full_name: "Peak wave period"
+    description: "Period of the dominant (peak) waves."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "period_corresponding_to_maximum_individual_wave_height"
+    short_name: "tmax"
+    friendly_name: "period_max_individual_wave_height"
+    full_name: "Period corresponding to maximum individual wave height"
+    description: "Wave period corresponding to the maximum individual wave height."
+    unit: "s"
+    groups: [ocean_waves]
+
+  - api_name: "significant_height_of_total_swell"
+    short_name: "shts"
+    friendly_name: "significant_height_of_total_swell"
+    full_name: "Significant height of total swell"
+    description: "Significant wave height of total swell."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "significant_height_of_wind_waves"
+    short_name: "shww"
+    friendly_name: "significant_height_of_wind_waves"
+    full_name: "Significant height of wind waves"
+    description: "Significant wave height of wind waves."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "significant_wave_height_of_first_swell_partition"
+    short_name: ""
+    friendly_name: "significant_wave_height_swell_1"
+    full_name: "Significant wave height of first swell partition"
+    description: "Significant wave height of the first swell partition."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "significant_wave_height_of_second_swell_partition"
+    short_name: ""
+    friendly_name: "significant_wave_height_swell_2"
+    full_name: "Significant wave height of second swell partition"
+    description: "Significant wave height of the second swell partition."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "significant_wave_height_of_third_swell_partition"
+    short_name: ""
+    friendly_name: "significant_wave_height_swell_3"
+    full_name: "Significant wave height of third swell partition"
+    description: "Significant wave height of the third swell partition."
+    unit: "m"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_directional_width"
+    short_name: "wdw"
+    friendly_name: "wave_spectral_directional_width"
+    full_name: "Wave spectral directional width"
+    description: "Directional width of the total wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_directional_width_for_swell"
+    short_name: "dwps"
+    friendly_name: "wave_spectral_directional_width_for_swell"
+    full_name: "Wave spectral directional width for swell"
+    description: "Directional width of the swell spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_directional_width_for_wind_waves"
+    short_name: "dwww"
+    friendly_name: "wave_spectral_directional_width_for_wind_waves"
+    full_name: "Wave spectral directional width for wind waves"
+    description: "Directional width of the wind-wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_kurtosis"
+    short_name: "wsk"
+    friendly_name: "wave_spectral_kurtosis"
+    full_name: "Wave spectral kurtosis"
+    description: "Kurtosis of the wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_peakedness"
+    short_name: "wsp"
+    friendly_name: "wave_spectral_peakedness"
+    full_name: "Wave spectral peakedness"
+    description: "Peakedness of the wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  - api_name: "wave_spectral_skewness"
+    short_name: "wss"
+    friendly_name: "wave_spectral_skewness"
+    full_name: "Wave spectral skewness"
+    description: "Skewness of the wave spectrum."
+    unit: "dimensionless"
+    groups: [ocean_waves]
+
+  # ----- Other (41) ---------------------------------------------------
+
+  - api_name: "angle_of_sub_gridscale_orography"
+    short_name: "isor"
+    friendly_name: "angle_of_sub_gridscale_orography"
+    full_name: "Angle of sub-gridscale orography"
+    description: "Orientation angle of the sub-grid orography ridges."
+    unit: "rad"
+    groups: [other]
+
+  - api_name: "anisotropy_of_sub_gridscale_orography"
+    short_name: "anor"
+    friendly_name: "anisotropy_of_sub_gridscale_orography"
+    full_name: "Anisotropy of sub-gridscale orography"
+    description: "Anisotropy factor of the sub-grid orography."
+    unit: "dimensionless"
+    groups: [other]
+
+  - api_name: "benjamin_feir_index"
+    short_name: "bfi"
+    friendly_name: "benjamin_feir_index"
+    full_name: "Benjamin-Feir index"
+    description: "Index for the likelihood of nonlinear modulational wave instability."
+    unit: "dimensionless"
+    groups: [other]
+
+  - api_name: "boundary_layer_dissipation"
+    short_name: "bld"
+    friendly_name: "boundary_layer_dissipation"
+    full_name: "Boundary layer dissipation"
+    description: "Accumulated dissipation of kinetic energy within the boundary layer."
+    unit: "J/m2"
+    groups: [other]
+
+  - api_name: "boundary_layer_height"
+    short_name: "blh"
+    friendly_name: "boundary_layer_height"
+    full_name: "Boundary layer height"
+    description: "Height of the planetary boundary layer."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "charnock"
+    short_name: "chnk"
+    friendly_name: "charnock"
+    full_name: "Charnock"
+    description: "Charnock coefficient (wave-dependent ocean surface roughness)."
+    unit: "dimensionless"
+    groups: [other]
+
+  - api_name: "convective_available_potential_energy"
+    short_name: "cape"
+    friendly_name: "convective_available_potential_energy"
+    full_name: "Convective available potential energy"
+    description: "Energy available for deep convection per kilogram of air (CAPE)."
+    unit: "J/kg"
+    groups: [other]
+
+  - api_name: "convective_inhibition"
+    short_name: "cin"
+    friendly_name: "convective_inhibition"
+    full_name: "Convective inhibition"
+    description: "Energy required to break the cap and trigger convection (CIN)."
+    unit: "J/kg"
+    groups: [other]
+
+  - api_name: "duct_base_height"
+    short_name: "dctb"
+    friendly_name: "duct_base_height"
+    full_name: "Duct base height"
+    description: "Height of the base of an atmospheric ducting layer."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "eastward_gravity_wave_surface_stress"
+    short_name: "lgws"
+    friendly_name: "eastward_gravity_wave_surface_stress"
+    full_name: "Eastward gravity-wave surface stress"
+    description: "Accumulated eastward gravity-wave surface stress."
+    unit: "N/m2 s"
+    groups: [other]
+
+  - api_name: "eastward_turbulent_surface_stress"
+    short_name: "ewss"
+    friendly_name: "eastward_turbulent_surface_stress"
+    full_name: "Eastward turbulent surface stress"
+    description: "Accumulated eastward turbulent surface stress."
+    unit: "N/m2 s"
+    groups: [other]
+
+  - api_name: "forecast_albedo"
+    short_name: "fal"
+    friendly_name: "forecast_albedo"
+    full_name: "Forecast albedo"
+    description: "Fraction of solar radiation reflected by the surface (0-1)."
+    unit: "(0-1)"
+    groups: [other]
+
+  - api_name: "forecast_surface_roughness"
+    short_name: "fsr"
+    friendly_name: "forecast_surface_roughness"
+    full_name: "Forecast surface roughness"
+    description: "Surface roughness length used by the model."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "friction_velocity"
+    short_name: "zust"
+    friendly_name: "friction_velocity"
+    full_name: "Friction velocity"
+    description: "Surface friction velocity (u*)."
+    unit: "m/s"
+    groups: [other]
+
+  - api_name: "geopotential"
+    short_name: "z"
+    friendly_name: "geopotential"
+    full_name: "Geopotential"
+    description: "Geopotential of the surface (orographic height x g)."
+    unit: "m2/s2"
+    groups: [other]
+
+  - api_name: "gravity_wave_dissipation"
+    short_name: "gwd"
+    friendly_name: "gravity_wave_dissipation"
+    full_name: "Gravity wave dissipation"
+    description: "Accumulated dissipation by gravity waves."
+    unit: "J/m2"
+    groups: [other]
+
+  - api_name: "instantaneous_eastward_turbulent_surface_stress"
+    short_name: "iews"
+    friendly_name: "instantaneous_eastward_turbulent_surface_stress"
+    full_name: "Instantaneous eastward turbulent surface stress"
+    description: "Instantaneous eastward turbulent surface stress."
+    unit: "N/m2"
+    groups: [other]
+
+  - api_name: "instantaneous_moisture_flux"
+    short_name: "ie"
+    friendly_name: "instantaneous_moisture_flux"
+    full_name: "Instantaneous moisture flux"
+    description: "Instantaneous surface moisture flux."
+    unit: "kg/m2/s"
+    groups: [other]
+
+  - api_name: "instantaneous_northward_turbulent_surface_stress"
+    short_name: "inss"
+    friendly_name: "instantaneous_northward_turbulent_surface_stress"
+    full_name: "Instantaneous northward turbulent surface stress"
+    description: "Instantaneous northward turbulent surface stress."
+    unit: "N/m2"
+    groups: [other]
+
+  - api_name: "k_index"
+    short_name: "kx"
+    friendly_name: "k_index"
+    full_name: "K index"
+    description: "K index for thunderstorm potential."
+    unit: "K"
+    groups: [other]
+
+  - api_name: "land_sea_mask"
+    short_name: "lsm"
+    friendly_name: "land_sea_mask"
+    full_name: "Land-sea mask"
+    description: "Fraction of grid box that is land (1 = land, 0 = sea)."
+    unit: "(0-1)"
+    groups: [other]
+
+  - api_name: "mean_vertical_gradient_of_refractivity_inside_trapping_layer"
+    short_name: "dndzn"
+    friendly_name: "mean_vertical_gradient_of_refractivity_in_trapping_layer"
+    full_name: "Mean vertical gradient of refractivity inside trapping layer"
+    description: "Mean vertical gradient of atmospheric refractivity in the trapping layer."
+    unit: "1/m"
+    groups: [other]
+
+  - api_name: "minimum_vertical_gradient_of_refractivity_inside_trapping_layer"
+    short_name: ""
+    friendly_name: "minimum_vertical_gradient_of_refractivity_in_trapping_layer"
+    full_name: "Minimum vertical gradient of refractivity inside trapping layer"
+    description: "Minimum vertical gradient of atmospheric refractivity in the trapping layer."
+    unit: "1/m"
+    groups: [other]
+
+  - api_name: "northward_gravity_wave_surface_stress"
+    short_name: ""
+    friendly_name: "northward_gravity_wave_surface_stress"
+    full_name: "Northward gravity-wave surface stress"
+    description: "Accumulated northward gravity-wave surface stress."
+    unit: "N/m2 s"
+    groups: [other]
+
+  - api_name: "northward_turbulent_surface_stress"
+    short_name: "nsss"
+    friendly_name: "northward_turbulent_surface_stress"
+    full_name: "Northward turbulent surface stress"
+    description: "Accumulated northward turbulent surface stress."
+    unit: "N/m2 s"
+    groups: [other]
+
+  - api_name: "sea_ice_cover"
+    short_name: "siconc"
+    friendly_name: "sea_ice_cover"
+    full_name: "Sea-ice cover"
+    description: "Fraction of the grid box covered by sea ice."
+    unit: "(0-1)"
+    groups: [other]
+
+  - api_name: "skin_reservoir_content"
+    short_name: "src"
+    friendly_name: "skin_reservoir_content"
+    full_name: "Skin reservoir content"
+    description: "Water held in the vegetation canopy and a thin soil-surface layer (water equivalent)."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "slope_of_sub_gridscale_orography"
+    short_name: "slor"
+    friendly_name: "slope_of_sub_gridscale_orography"
+    full_name: "Slope of sub-gridscale orography"
+    description: "Mean slope of the sub-grid orography."
+    unit: "dimensionless"
+    groups: [other]
+
+  - api_name: "standard_deviation_of_filtered_subgrid_orography"
+    short_name: "sdfor"
+    friendly_name: "standard_deviation_of_filtered_subgrid_orography"
+    full_name: "Standard deviation of filtered subgrid orography"
+    description: "Standard deviation of the filtered sub-grid orography (smooth scale)."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "standard_deviation_of_orography"
+    short_name: "sdor"
+    friendly_name: "standard_deviation_of_orography"
+    full_name: "Standard deviation of orography"
+    description: "Standard deviation of the sub-grid orography."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "total_column_ozone"
+    short_name: "tco3"
+    friendly_name: "total_column_ozone"
+    full_name: "Total column ozone"
+    description: "Vertically integrated ozone mass per unit area."
+    unit: "kg/m2"
+    groups: [other]
+
+  - api_name: "total_column_supercooled_liquid_water"
+    short_name: "tcslw"
+    friendly_name: "total_column_supercooled_liquid_water"
+    full_name: "Total column supercooled liquid water"
+    description: "Vertically integrated supercooled cloud liquid water."
+    unit: "kg/m2"
+    groups: [other]
+
+  - api_name: "total_column_water"
+    short_name: "tcw"
+    friendly_name: "total_column_water"
+    full_name: "Total column water"
+    description: "Total water (vapour + cloud condensate) in the column."
+    unit: "kg/m2"
+    groups: [other]
+
+  - api_name: "total_column_water_vapour"
+    short_name: "tcwv"
+    friendly_name: "total_column_water_vapour"
+    full_name: "Total column water vapour"
+    description: "Total water vapour in the column (precipitable water)."
+    unit: "kg/m2"
+    groups: [other]
+
+  - api_name: "total_totals_index"
+    short_name: "totalx"
+    friendly_name: "total_totals_index"
+    full_name: "Total totals index"
+    description: "Total totals stability index for severe-weather forecasting."
+    unit: "K"
+    groups: [other]
+
+  - api_name: "trapping_layer_base_height"
+    short_name: "tplb"
+    friendly_name: "trapping_layer_base_height"
+    full_name: "Trapping layer base height"
+    description: "Height of the base of the radio-refractivity trapping layer."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "trapping_layer_top_height"
+    short_name: "tplt"
+    friendly_name: "trapping_layer_top_height"
+    full_name: "Trapping layer top height"
+    description: "Height of the top of the radio-refractivity trapping layer."
+    unit: "m"
+    groups: [other]
+
+  - api_name: "u_component_stokes_drift"
+    short_name: "ust"
+    friendly_name: "u_component_stokes_drift"
+    full_name: "U-component Stokes drift"
+    description: "Eastward Stokes drift induced by surface waves."
+    unit: "m/s"
+    groups: [other]
+
+  - api_name: "v_component_stokes_drift"
+    short_name: "vst"
+    friendly_name: "v_component_stokes_drift"
+    full_name: "V-component Stokes drift"
+    description: "Northward Stokes drift induced by surface waves."
+    unit: "m/s"
+    groups: [other]
+
+  - api_name: "zero_degree_level"
+    short_name: "deg0l"
+    friendly_name: "zero_degree_level"
+    full_name: "Zero degree level"
+    description: "Height of the 0 °C isotherm."
+    unit: "m"
+    groups: [other]

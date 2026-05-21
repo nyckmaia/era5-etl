@@ -116,7 +116,12 @@ def sample_netcdf_file(temp_data_dir: Path) -> Generator[Path, None, None]:
             ),
         },
         coords={
-            "time": np.arange("2020-01-01", "2020-01-02", dtype="datetime64[h]"),
+            # xarray ≥2024 emits a UserWarning when it has to convert
+            # non-nanosecond datetimes to ``ns`` resolution internally —
+            # generate the array directly in ``ns`` precision to skip it.
+            "time": np.arange(
+                "2020-01-01", "2020-01-02", dtype="datetime64[h]"
+            ).astype("datetime64[ns]"),
             "latitude": np.linspace(-10, 0, 10),
             "longitude": np.linspace(-50, -40, 10),
         },

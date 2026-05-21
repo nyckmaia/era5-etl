@@ -115,6 +115,7 @@ class NetCDFToParquetConverter:
 
             df = self._drop_unused_columns(df)
             df = self._round_latlon(df)
+            df = self._clip_to_regions(df)
             df = self._apply_float_precision(df)
 
             self._write_partitioned_parquet(df)
@@ -356,6 +357,34 @@ class NetCDFToParquetConverter:
                 pl.col("longitude").round(dec).cast(pl.Float32),
             ]
         )
+
+    def _clip_to_regions(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Drop grid points outside the configured ``clip_regions`` polygon(s).
+
+        No-op when the converter has no dataset (synthetic-frame tests), no
+        ``clip_regions`` configured, or the DataFrame lacks lat/lon. The clip
+        is an ``INNER JOIN`` on Float32 ``(latitude, longitude)`` against the
+        pre-computed membership parquet — see
+        :mod:`era5_etl.regions.membership`.
+
+        Must run after :meth:`_round_latlon` so the join key dtype/precision
+        matches the membership table.
+        """
+        regions = self.transform_config.clip_regions
+        if not regions or self.dataset is None:
+            return df
+        if not ({"latitude", "longitude"} <= set(df.columns)):
+            return df
+
+        from era5_etl.regions.membership import latlon_set
+
+        keep = latlon_set(self.dataset, regions)
+        before = df.height
+        out = df.join(keep, on=["latitude", "longitude"], how="inner")
+        self.logger.info(
+            "Region clip: kept %s/%s rows (regions=%s)", out.height, before, regions
+        )
+        return out
 
     def _apply_float_precision(self, df: pl.DataFrame) -> pl.DataFrame:
         """Cast Float64 columns to Float32 and round to configured decimal places.

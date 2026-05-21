@@ -11,21 +11,24 @@ import {
   PanelLeftOpen,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { OnboardingGate } from "@/components/OnboardingGate";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { cn } from "@/lib/format";
 
 const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: BarChart3 },
-  { to: "/inventory", label: "Inventory", icon: MapPin },
-  { to: "/download", label: "Download", icon: CloudDownload },
-  { to: "/query", label: "Query", icon: Database },
-  { to: "/timeseries", label: "Time Series", icon: LineChart },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
+  { to: "/dashboard", labelKey: "layout.nav.dashboard", icon: BarChart3 },
+  { to: "/inventory", labelKey: "layout.nav.inventory", icon: MapPin },
+  { to: "/download", labelKey: "layout.nav.download", icon: CloudDownload },
+  { to: "/query", labelKey: "layout.nav.query", icon: Database },
+  { to: "/timeseries", labelKey: "layout.nav.timeseries", icon: LineChart },
+  { to: "/settings", labelKey: "layout.nav.settings", icon: SettingsIcon },
 ] as const;
 
 export function Layout({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useLocalStorage(
     "layout.sidebarCollapsed",
     false,
@@ -48,8 +51,10 @@ export function Layout({ children }: { children: ReactNode }) {
           <button
             type="button"
             onClick={() => setCollapsed((c) => !c)}
-            title={collapsed ? "Expandir menu" : "Recolher menu"}
-            aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
+            title={collapsed ? t("layout.expandMenu") : t("layout.collapseMenu")}
+            aria-label={
+              collapsed ? t("layout.expandMenu") : t("layout.collapseMenu")
+            }
             className="rounded-lg p-2 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
           >
             {collapsed ? (
@@ -71,46 +76,57 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
           {!collapsed ? (
             <div>
-              <div className="text-sm font-semibold text-ink-800">ERA5-ETL</div>
+              <div className="text-sm font-semibold text-ink-800">
+                {t("layout.brand")}
+              </div>
               <div className="text-[10px] uppercase tracking-wide text-ink-400">
-                Climate data
+                {t("layout.tagline")}
               </div>
             </div>
           ) : null}
         </div>
 
         <nav className="flex-1 px-3">
-          {NAV.map(({ to, label, icon: Icon }) => (
-            <Link
-              key={to}
-              to={to}
-              title={collapsed ? label : undefined}
-              className={cn(
-                "group flex items-center rounded-xl px-3 py-2 text-sm font-medium text-ink-500 transition hover:bg-ink-100 hover:text-ink-800",
-                collapsed ? "justify-center" : "gap-3",
-              )}
-              activeProps={{
-                className: cn(
-                  "group flex items-center rounded-xl px-3 py-2 text-sm font-medium",
+          {NAV.map(({ to, labelKey, icon: Icon }) => {
+            const label = t(labelKey);
+            return (
+              <Link
+                key={to}
+                to={to}
+                title={collapsed ? label : undefined}
+                className={cn(
+                  "group flex items-center rounded-xl px-3 py-2 text-sm font-medium text-ink-500 transition hover:bg-ink-100 hover:text-ink-800",
                   collapsed ? "justify-center" : "gap-3",
-                  "bg-ocean-600/10 text-ocean-700",
-                ),
-              }}
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!collapsed ? label : null}
-            </Link>
-          ))}
+                )}
+                activeProps={{
+                  className: cn(
+                    "group flex items-center rounded-xl px-3 py-2 text-sm font-medium",
+                    collapsed ? "justify-center" : "gap-3",
+                    "bg-ocean-600/10 text-ocean-700",
+                  ),
+                }}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {!collapsed ? label : null}
+              </Link>
+            );
+          })}
         </nav>
 
         {!collapsed ? (
           <footer className="px-6 py-4 text-[11px] text-ink-400">
-            ERA5 / ERA5-LAND · Copernicus CDS
+            {t("layout.footer")}
           </footer>
         ) : null}
       </aside>
 
       <main className="flex-1 overflow-y-auto">
+        {/* Top bar: language switcher pinned to the top-right. Stays
+            translucent + blurred over the scrolled content so it never
+            collides with page chrome. */}
+        <div className="sticky top-0 z-30 flex items-center justify-end gap-2 border-b border-ink-100 bg-white/70 px-8 py-2 backdrop-blur">
+          <LanguageSwitcher />
+        </div>
         <div className="flex min-h-full flex-col px-8 py-8">
           <OnboardingGate>{children}</OnboardingGate>
         </div>

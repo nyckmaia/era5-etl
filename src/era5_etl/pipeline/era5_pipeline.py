@@ -11,9 +11,9 @@ from era5_etl.core.pipeline import Pipeline
 from era5_etl.core.stage import Stage
 from era5_etl.pipeline.source_handlers import REFRESH_STATIONS, get_handler
 from era5_etl.storage.coverage import rebuild_from_parquet
-from era5_etl.storage.paths import view_name_for
 from era5_etl.storage.manifest import Manifest
 from era5_etl.storage.parquet_manager import ParquetManager
+from era5_etl.storage.paths import view_name_for
 from era5_etl.storage.stations import (
     rebuild_from_parquet as rebuild_stations_from_parquet,
 )
@@ -105,6 +105,16 @@ class ConvertToParquetStage(Stage):
         return context
 
 
+def _emit_finalizing(
+    progress_callback: ProgressCallback | None, message: str
+) -> None:
+    """Push a ``stage="finalizing"`` event so the UI can show a "wait…" line
+    between the convert bar hitting 100% and the success card. Cheap no-op
+    when there is no callback (CLI invocation)."""
+    if progress_callback is not None:
+        progress_callback({"stage": "finalizing", "message": message})
+
+
 class RefreshCoverageStage(Stage):
     """Refresh the per-cell coverage index from the on-disk parquets.
 
@@ -114,9 +124,14 @@ class RefreshCoverageStage(Stage):
     here is logged but does not fail the pipeline.
     """
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         super().__init__("Refresh coverage index")
         self.config = config
+        self.progress_callback = progress_callback
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         from era5_etl.storage.paths import resolve_dataset_dir
@@ -124,6 +139,10 @@ class RefreshCoverageStage(Stage):
         base_dir = self.config.storage.database_dir
         dataset = self.config.dataset_name
         parquet_dir = resolve_dataset_dir(base_dir, dataset)
+        _emit_finalizing(
+            self.progress_callback,
+            f"Atualizando índice de cobertura ({dataset})…",
+        )
         self.logger.info(
             "Refreshing coverage index for %s from %s", dataset, parquet_dir
         )
@@ -152,7 +171,7 @@ class RefreshCoverageStage(Stage):
                     stats.get("files_processed"),
                     parquet_dir,
                 )
-        except Exception as exc:  # noqa: BLE001 -- coverage is derived; never fail the pipeline
+        except Exception as exc:
             self.logger.warning(
                 "Coverage index refresh failed (non-fatal); run "
                 "`era5 coverage rebuild` manually to recover: %s",
@@ -172,9 +191,14 @@ class RefreshStationIndexStage(Stage):
     failure is logged but never fails the pipeline.
     """
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         super().__init__("Refresh station index")
         self.config = config
+        self.progress_callback = progress_callback
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         from era5_etl.storage.paths import resolve_dataset_dir
@@ -182,6 +206,10 @@ class RefreshStationIndexStage(Stage):
         base_dir = self.config.storage.database_dir
         dataset = self.config.dataset_name
         parquet_dir = resolve_dataset_dir(base_dir, dataset)
+        _emit_finalizing(
+            self.progress_callback,
+            "Atualizando índice de estações INMET (pode levar ~1 minuto)…",
+        )
         self.logger.info(
             "Refreshing station index for %s from %s", dataset, parquet_dir
         )
@@ -195,7 +223,7 @@ class RefreshStationIndexStage(Stage):
                 stats.get("n_stations", "?"),
                 stats.get("files_processed", "?"),
             )
-        except Exception as exc:  # noqa: BLE001 -- derived; never fail the pipeline
+        except Exception as exc:
             self.logger.warning(
                 "Station index refresh failed (non-fatal); run "
                 "`era5 coverage rebuild` equivalent manually to recover: %s",
@@ -208,9 +236,14 @@ class RefreshStationIndexStage(Stage):
 class CreateViewStage(Stage):
     """Stage for creating a DuckDB VIEW pointing to Parquet files."""
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         super().__init__("Create DuckDB View")
         self.config = config
+        self.progress_callback = progress_callback
 
     def _execute(self, context: PipelineContext) -> PipelineContext:
         """Create DuckDB VIEW from Parquet files."""
@@ -224,6 +257,9 @@ class CreateViewStage(Stage):
             self.logger.warning("No Parquet files found. Skipping VIEW creation.")
             return context
 
+        _emit_finalizing(
+            self.progress_callback, f"Criando VIEW '{view_name}' no DuckDB…"
+        )
         conn = duckdb.connect(str(db_path))
         try:
             manager.create_duckdb_view(conn, view_name)
@@ -232,8 +268,155 @@ class CreateViewStage(Stage):
             self.logger.info(f"Created VIEW '{view_name}' in {db_path}")
         finally:
             conn.close()
+        _emit_finalizing(self.progress_callback, "Pronto — preparando view final…")
 
         return context
+
+
+class ExtractGridStage(Stage):
+    """Convert a freshly downloaded NetCDF into a tiny ``(lat, lon)`` parquet.
+
+    Used by the INMET auto-bootstrap path to materialise the ERA5 /
+    ERA5-LAND grid without writing anything into the user's actual dataset
+    directory. The resulting parquet lives at
+    ``<base>/climate_data_store_db/_grids/<dataset>_grid.parquet`` and is
+    later consulted by the INMET converter (see
+    :class:`era5_etl.storage.grid_index.GridIndex`).
+
+    The NetCDF is deleted after the grid is extracted so no transient
+    files survive on disk.
+    """
+
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
+        super().__init__("Extract grid points")
+        self.config = config
+        self.progress_callback = progress_callback
+
+    def _execute(self, context: PipelineContext) -> PipelineContext:
+        import shutil
+
+        import numpy as np
+        import polars as pl
+        import xarray as xr
+
+        from era5_etl.datasets import DatasetRegistry
+        from era5_etl.storage.grid_index import grid_parquet_path
+
+        files = list(context.get("downloaded_files") or [])
+        if not files:
+            self.logger.warning(
+                "ExtractGridStage: no files downloaded -- skipping grid write."
+            )
+            return context
+
+        dataset = self.config.dataset_name
+        decimals = DatasetRegistry.get(dataset).latlon_decimals
+        _emit_finalizing(
+            self.progress_callback,
+            f"Extraindo grade de pontos do {dataset.upper()} (dependência)…",
+        )
+
+        # Read every downloaded NetCDF and union their lat/lon. The
+        # bootstrap normally downloads a single file (1 var x 1 day x 1
+        # hour x Brazil), but the loop is cheap and lets a planner-split
+        # request work the same way.
+        lats: list[float] = []
+        lons: list[float] = []
+        for path in files:
+            with xr.open_dataset(path, engine="netcdf4") as ds:
+                lats.extend(np.asarray(ds["latitude"].values).ravel().tolist())
+                lons.extend(np.asarray(ds["longitude"].values).ravel().tolist())
+
+        if not lats or not lons:
+            self.logger.error(
+                "ExtractGridStage: NetCDF(s) had no latitude/longitude data."
+            )
+            return context
+
+        # Uppercase ``LAT/LON`` is the numpy convention for meshgrid
+        # 2-D arrays (vs lowercase 1-D inputs); kept here for clarity.
+        lat_grid, lon_grid = np.meshgrid(
+            np.unique(np.round(np.array(lats, dtype=np.float64), decimals)),
+            np.unique(np.round(np.array(lons, dtype=np.float64), decimals)),
+            indexing="ij",
+        )
+        df = (
+            pl.DataFrame(
+                {
+                    "latitude": pl.Series(
+                        lat_grid.ravel().astype(np.float32), dtype=pl.Float32
+                    ),
+                    "longitude": pl.Series(
+                        lon_grid.ravel().astype(np.float32), dtype=pl.Float32
+                    ),
+                }
+            )
+            .unique(subset=["latitude", "longitude"])
+            .sort(["latitude", "longitude"])
+        )
+
+        out_path = grid_parquet_path(self.config.storage.database_dir, dataset)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(
+            out_path, compression=self.config.storage.parquet_compression
+        )
+        context.set_metadata("grid_parquet_path", str(out_path))
+        context.set_metadata("grid_point_count", df.height)
+        self.logger.info(
+            "Bootstrap grid for %s: %d points -> %s",
+            dataset,
+            df.height,
+            out_path,
+        )
+
+        # Clean up the temp NetCDFs so the bootstrap leaves no residue in
+        # the user's storage. Skip with ``keep_temp_files=True`` only when
+        # the user explicitly opts in (parity with the full pipeline).
+        if not self.config.keep_temp_files:
+            nc_dir = self.config.download.output_dir
+            if nc_dir.exists():
+                shutil.rmtree(nc_dir, ignore_errors=True)
+        return context
+
+
+class BootstrapGridPipeline(Pipeline[PipelineConfig]):
+    """Two-stage pipeline used by the INMET auto-bootstrap.
+
+    Downloads the minimal CDS request (1 var x 1 day x 1 hour x Brazil),
+    extracts its grid into ``<base>/climate_data_store_db/_grids/
+    <dataset>_grid.parquet`` and drops the NetCDF. Does NOT write anything
+    into ``<base>/climate_data_store_db/<dataset>/``, leaving that
+    directory exclusively for data the user downloads on purpose.
+    """
+
+    def __init__(
+        self,
+        config: PipelineConfig,
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
+        self.progress_callback = progress_callback
+        super().__init__(config)
+
+    def setup_stages(self) -> None:
+        self.add_stage(
+            DownloadStage(
+                self.config,
+                progress_callback=self.progress_callback,
+                apply_diff=False,
+            )
+        )
+        self.add_stage(
+            ExtractGridStage(
+                self.config, progress_callback=self.progress_callback
+            )
+        )
+        self.logger.info(
+            f"Bootstrap pipeline configured with {len(self._stages)} stages"
+        )
 
 
 class ERA5Pipeline(Pipeline[PipelineConfig]):
@@ -279,8 +462,18 @@ class ERA5Pipeline(Pipeline[PipelineConfig]):
         # gridded sources get the cell coverage index; station sources
         # (INMET) get the station index.
         if get_handler(self.config.dataset_name).refresh_kind == REFRESH_STATIONS:
-            self.add_stage(RefreshStationIndexStage(self.config))
+            self.add_stage(
+                RefreshStationIndexStage(
+                    self.config, progress_callback=self.progress_callback
+                )
+            )
         else:
-            self.add_stage(RefreshCoverageStage(self.config))
-        self.add_stage(CreateViewStage(self.config))
+            self.add_stage(
+                RefreshCoverageStage(
+                    self.config, progress_callback=self.progress_callback
+                )
+            )
+        self.add_stage(
+            CreateViewStage(self.config, progress_callback=self.progress_callback)
+        )
         self.logger.info(f"Pipeline configured with {len(self._stages)} stages")

@@ -43,13 +43,10 @@ from era5_etl.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
 
-#: Mean Earth radius (km) for the haversine great-circle distance.
-_EARTH_KM = 6371.0088
-
 #: Grids the station is located within. Each INMET station gets, per grid,
-#: the four enclosing grid-cell corner coordinates and the great-circle
-#: distance (km) from the station to each corner -- enough to spatially
-#: interpolate (e.g. IDW / bilinear) instead of snapping to one point.
+#: the four enclosing grid-cell corner coordinates -- enough to identify the
+#: surrounding cells for joins with the ERA5/ERA5-LAND parquet (the
+#: ``era5_inmet`` comparison view uses an epsilon equality on these edges).
 #: ``(prefix, dataset_name)``; resolution + decimals come from the registry.
 _GRID_NEIGHBOURS = (
     ("era5", "era5"),
@@ -57,26 +54,17 @@ _GRID_NEIGHBOURS = (
 )
 
 
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    rl1, rl2 = math.radians(lat1), math.radians(lat2)
-    dlat = rl2 - rl1
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(rl1) * math.cos(rl2) * math.sin(dlon / 2) ** 2
-    )
-    return 2 * _EARTH_KM * math.asin(math.sqrt(a))
-
-
 def _grid_block(lat: float, lon: float, res: float, decimals: int) -> dict[str, float]:
-    """Enclosing grid cell + station→corner distances for one grid.
+    """Enclosing grid cell edges for one grid.
 
     Returns the four cell-edge coordinates (``lat_top`` = North/higher
     latitude, ``lat_bottom`` = South, ``lon_left`` = West/lower longitude,
-    ``lon_right`` = East) and the great-circle distance from the station to
-    each of the four corners. Edge coordinates are snapped to the grid and
-    rounded exactly like the stored ERA5 coordinates (``decimals``) so an
-    equality/epsilon join in the ``era5_inmet`` view lines up.
+    ``lon_right`` = East). Combining them gives the four enclosing grid
+    points: ``(lat_top, lon_left)``, ``(lat_top, lon_right)``,
+    ``(lat_bottom, lon_left)``, ``(lat_bottom, lon_right)``. Edge values are
+    snapped to the grid and rounded exactly like the stored ERA5
+    coordinates (``decimals``) so an epsilon equality join in the
+    ``era5_inmet`` view lines up.
     """
     lat_bottom = round(math.floor(lat / res) * res, decimals)
     lat_top = round(lat_bottom + res, decimals)
@@ -87,52 +75,57 @@ def _grid_block(lat: float, lon: float, res: float, decimals: int) -> dict[str, 
         "lat_bottom": lat_bottom,
         "lon_left": lon_left,
         "lon_right": lon_right,
-        "top_left": _haversine_km(lat, lon, lat_top, lon_left),
-        "top_right": _haversine_km(lat, lon, lat_top, lon_right),
-        "bottom_left": _haversine_km(lat, lon, lat_bottom, lon_left),
-        "bottom_right": _haversine_km(lat, lon, lat_bottom, lon_right),
     }
 
 
-def _neighbour_columns(lat: float | None, lon: float | None) -> list[pl.Expr]:
-    """Build the per-station grid-neighbour / distance literal columns.
+def _neighbour_columns(
+    lat: float | None,
+    lon: float | None,
+    grid_indexes: dict[str, Any] | None = None,
+) -> list[pl.Expr]:
+    """Build the per-station grid-neighbour literal columns.
 
-    8 corner coordinates (4 per grid) + 8 distances (4 per grid) = 16
-    columns. All NULL when the station has no coordinates.
+    4 cell-edge coordinates per grid × 2 grids (ERA5, ERA5-LAND) = 8
+    columns total. All NULL when the station has no coordinates.
+
+    ``grid_indexes`` maps the legacy dataset name (``"era5"`` /
+    ``"era5-land"``) to a :class:`GridIndex` loaded from the bootstrap
+    parquet under ``_grids/``. When absent, the function falls back to
+    the math approach (``floor(lat/res)*res`` -- correct for axis-aligned
+    grids), so CLI invocations and tests that do not run the bootstrap
+    keep working.
     """
     exprs: list[pl.Expr] = []
     for prefix, ds_name in _GRID_NEIGHBOURS:
         cfg = DatasetRegistry.get(ds_name)
         res = float(cfg.GRID_RESOLUTION_DEG)
         dec = cfg.latlon_decimals
-        block = (
-            _grid_block(lat, lon, res, dec)
-            if lat is not None and lon is not None
-            else None
-        )
+        if lat is None or lon is None:
+            block = None
+        else:
+            gi = (grid_indexes or {}).get(ds_name)
+            block = gi.enclosing(lat, lon) if gi is not None else _grid_block(lat, lon, res, dec)
 
-        def _v(key: str) -> float | None:
-            return None if block is None else block[key]
+        # Bind ``block`` and ``prefix`` via defaults so each iteration's
+        # ``_v`` closes over THIS iteration's values, not the last one
+        # (ruff B023). Without this the function reads whatever ``block``
+        # is in the enclosing scope at call time -- harmless here because
+        # we invoke ``_v`` immediately below, but the linter is right
+        # that the pattern is fragile.
+        def _v(key: str, _block: dict[str, float] | None = block) -> float | None:
+            return None if _block is None else _block[key]
 
         exprs += [
             pl.lit(_v("lat_top")).cast(pl.Float32).alias(f"{prefix}_lat_top"),
             pl.lit(_v("lat_bottom")).cast(pl.Float32).alias(f"{prefix}_lat_bottom"),
             pl.lit(_v("lon_left")).cast(pl.Float32).alias(f"{prefix}_lon_left"),
             pl.lit(_v("lon_right")).cast(pl.Float32).alias(f"{prefix}_lon_right"),
-            pl.lit(_v("top_left")).cast(pl.Float32).alias(f"dist_{prefix}_top_left"),
-            pl.lit(_v("top_right")).cast(pl.Float32).alias(f"dist_{prefix}_top_right"),
-            pl.lit(_v("bottom_left"))
-            .cast(pl.Float32)
-            .alias(f"dist_{prefix}_bottom_left"),
-            pl.lit(_v("bottom_right"))
-            .cast(pl.Float32)
-            .alias(f"dist_{prefix}_bottom_right"),
         ]
     return exprs
 
 
 #: Metadata/identity columns (everything that is NOT one of the 17
-#: measurement variables). Kept in sync with :data:`_NEIGHBOUR_COL_NAMES`.
+#: measurement variables). Kept in sync with :data:`_neighbour_columns`.
 def _neighbour_col_names() -> list[str]:
     names: list[str] = []
     for prefix, _ in _GRID_NEIGHBOURS:
@@ -141,10 +134,6 @@ def _neighbour_col_names() -> list[str]:
             f"{prefix}_lat_bottom",
             f"{prefix}_lon_left",
             f"{prefix}_lon_right",
-            f"dist_{prefix}_top_left",
-            f"dist_{prefix}_top_right",
-            f"dist_{prefix}_bottom_left",
-            f"dist_{prefix}_bottom_right",
         ]
     return names
 
@@ -289,6 +278,17 @@ class InmetToParquetConverter:
             v.friendly_name or v.api_name
             for v in DatasetRegistry.get("inmet").variables
         ]
+        # Bootstrap grid lookup: try to load the per-grid parquet written
+        # by ``BootstrapGridPipeline``. Missing files mean we'll fall back
+        # to the math-only neighbour computation (correct for axis-aligned
+        # ERA5/ERA5-LAND grids; matches the legacy behaviour).
+        from era5_etl.storage.grid_index import GridIndex
+
+        self._grid_indexes: dict[str, GridIndex] = {}
+        for _, ds_name in _GRID_NEIGHBOURS:
+            gi = GridIndex.try_load(storage_config.database_dir, ds_name)
+            if gi is not None:
+                self._grid_indexes[ds_name] = gi
 
     # -- single file -----------------------------------------------------
 
@@ -335,7 +335,7 @@ class InmetToParquetConverter:
             return out_path
         except ProcessingError:
             raise
-        except Exception as e:  # noqa: BLE001 -- wrap with file context
+        except Exception as e:
             raise ProcessingError(
                 f"INMET CSV to Parquet conversion failed for {csv_path}: {e}"
             ) from e
@@ -393,7 +393,7 @@ class InmetToParquetConverter:
                 .str.slice(0, 2)
                 .cast(pl.Int8, strict=False)
                 .alias("hour_utc"),
-                *_neighbour_columns(lat, lon),
+                *_neighbour_columns(lat, lon, self._grid_indexes),
                 *[_num_expr(name, name) for name in self._var_names],
             ]
         )
@@ -411,7 +411,7 @@ class InmetToParquetConverter:
     def _year_of(self, df: pl.DataFrame, csv_path: Path) -> int:
         years = df.get_column("date").dt.year().drop_nulls()
         if len(years) > 0:
-            return int(years.min())
+            return int(years.min())  # type: ignore[arg-type]
         m = re.search(r"_A_\d{2}-\d{2}-(\d{4})", csv_path.name)
         if m:
             return int(m.group(1))
@@ -426,6 +426,7 @@ class InmetToParquetConverter:
         up empty -- using ``rmdir`` so a dir still holding a kept/failed
         file is left untouched (mirrors the NetCDF converter).
         """
+        import contextlib
         import os
 
         from era5_etl.storage.paths import NETCDF_TMP_DIRNAME
@@ -434,10 +435,8 @@ class InmetToParquetConverter:
             p = Path(root)
             if p == input_dir:
                 continue
-            try:
+            with contextlib.suppress(OSError):
                 p.rmdir()  # only succeeds if empty
-            except OSError:
-                pass
         try:
             input_dir.rmdir()
             self.logger.info("Removed empty temp dir %s", input_dir)
@@ -510,7 +509,7 @@ class InmetToParquetConverter:
                         self.logger.warning(
                             "Could not delete %s: %s", csv_file.name, exc
                         )
-            except Exception as e:  # noqa: BLE001 -- collect ALL, report at end
+            except Exception as e:
                 stats["failed"] += 1
                 errors.append({"file": str(csv_file), "error": str(e)})
                 self.logger.error("Failed: %s: %s", csv_file.name, e)

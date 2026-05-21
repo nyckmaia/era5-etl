@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -112,7 +113,75 @@ def start_run(body: PipelineRunIn, request: Request) -> PipelineRunOut:
         raise HTTPException(status_code=400, detail=f"Unknown dataset: {body.dataset}")
 
     data_dir: Path = request.app.state.data_dir
-    config = PipelineConfig.create(
+    try:
+        phases = _build_phases(body, data_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    run_id = uuid.uuid4().hex
+    run = PipelineRun(run_id=run_id, dataset=body.dataset)
+    RUNTIME.register(run_id, run)
+
+    def _execute() -> None:
+        run.mark_started()
+        from era5_etl.pipeline.era5_pipeline import (
+            BootstrapGridPipeline,
+            ERA5Pipeline,
+        )
+
+        total = len(phases)
+        for idx, phase in enumerate(phases, start=1):
+            run.set_phase(phase.name, idx, total)
+            try:
+                if phase.is_bootstrap:
+                    # Bootstrap phases only need download + grid extraction
+                    # (no convert/index/view). The resulting lat/lon-only
+                    # parquet lives at `_grids/<dataset>_grid.parquet`;
+                    # the per-dataset folder stays empty.
+                    boot = BootstrapGridPipeline(
+                        phase.config,
+                        progress_callback=run.emit_chunk_event,
+                    )
+                    boot.run()
+                else:
+                    pipe = ERA5Pipeline(
+                        phase.config,
+                        progress_callback=run.emit_chunk_event,
+                        apply_diff=phase.apply_diff,
+                    )
+                    pipe.run()
+            except Exception as exc:  # pragma: no cover - depends on CDS access
+                # Translate the most common pre-flight failure (no CDS
+                # credentials) into a UX message that points the user to
+                # Settings; any other error propagates verbatim.
+                msg = _format_phase_error(phase.name, exc)
+                run.mark_failed(msg)
+                return
+        run.mark_completed()
+
+    threading.Thread(target=_execute, daemon=True).start()
+    return PipelineRunOut(run_id=run_id, dataset=body.dataset, status="pending")
+
+
+@dataclass
+class _Phase:
+    """One sub-pipeline scheduled by the orchestrator."""
+
+    name: str  # stable token: "bootstrap-era5", "bootstrap-era5-land", "inmet", or "<dataset>"
+    config: PipelineConfig
+    apply_diff: bool
+    is_bootstrap: bool = False  # use BootstrapGridPipeline instead of ERA5Pipeline
+
+
+def _build_phases(body: PipelineRunIn, data_dir: Path) -> list[_Phase]:
+    """Plan the ordered sub-pipelines for one /run request.
+
+    For INMET runs without ERA5/ERA5-LAND data on disk, prepend tiny
+    bootstrap sub-pipelines so the comparison view can resolve joins. For
+    every other dataset (and for INMET when prerequisites are already on
+    disk), this returns a single-phase plan that matches the legacy path.
+    """
+    main_config = PipelineConfig.create(
         base_dir=data_dir,
         dataset=body.dataset,
         start_date=body.start_date,
@@ -121,29 +190,62 @@ def start_run(body: PipelineRunIn, request: Request) -> PipelineRunOut:
         area=body.area,
         hours=body.hours,
         years=body.years,
+        clip_regions=body.clip_regions,
+    )
+    main_phase = _Phase(
+        name=body.dataset if body.dataset != "inmet" else "inmet",
+        config=main_config,
+        apply_diff=body.apply_diff,
+    )
+    if body.dataset != "inmet":
+        return [main_phase]
+
+    # INMET: prepend bootstrap sub-pipelines for any missing grid.
+    from era5_etl.web.prereq import (
+        BOOTSTRAP_AREA,
+        BOOTSTRAP_CLIP_REGIONS,
+        BOOTSTRAP_DATE,
+        BOOTSTRAP_HOURS,
+        BOOTSTRAP_VARIABLES,
+        missing_grids,
     )
 
-    run_id = uuid.uuid4().hex
-    run = PipelineRun(run_id=run_id, dataset=body.dataset)
-    RUNTIME.register(run_id, run)
-
-    def _execute() -> None:
-        run.mark_started()
-        try:
-            from era5_etl.pipeline.era5_pipeline import ERA5Pipeline
-
-            pipe = ERA5Pipeline(
-                config,
-                progress_callback=run.emit_chunk_event,
-                apply_diff=body.apply_diff,
+    phases: list[_Phase] = []
+    for grid in missing_grids(data_dir):
+        boot_config = PipelineConfig.create(
+            base_dir=data_dir,
+            dataset=grid,
+            start_date=BOOTSTRAP_DATE,
+            end_date=BOOTSTRAP_DATE,
+            variables=list(BOOTSTRAP_VARIABLES),
+            area=list(BOOTSTRAP_AREA),
+            hours=list(BOOTSTRAP_HOURS),
+            clip_regions=list(BOOTSTRAP_CLIP_REGIONS),
+        )
+        phases.append(
+            _Phase(
+                name=f"bootstrap-{grid}",
+                config=boot_config,
+                apply_diff=False,
+                is_bootstrap=True,
             )
-            pipe.run()
-            run.mark_completed()
-        except Exception as exc:  # pragma: no cover - depends on CDS access
-            run.mark_failed(str(exc))
+        )
+    phases.append(main_phase)
+    return phases
 
-    threading.Thread(target=_execute, daemon=True).start()
-    return PipelineRunOut(run_id=run_id, dataset=body.dataset, status="pending")
+
+def _format_phase_error(phase: str, exc: BaseException) -> str:
+    """Surface a friendly error for the run, with a hint if it's CDS-auth."""
+    msg = str(exc).strip() or exc.__class__.__name__
+    lower = msg.lower()
+    if phase.startswith("bootstrap-") and (
+        "credential" in lower or "401" in lower or "cdsapirc" in lower
+    ):
+        return (
+            f"Falha em {phase}: {msg}. "
+            "Configure as credenciais do CDS em Configurações → Credenciais."
+        )
+    return f"Falha em {phase}: {msg}"
 
 
 @router.get("/runs/{run_id}/progress")
@@ -185,7 +287,7 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
         )
 
     from era5_etl.config import DownloadConfig
-    from era5_etl.datasets import DatasetRegistry as _DR
+    from era5_etl.datasets import DatasetRegistry as Registry
     from era5_etl.download.grid import snap_area_to_grid
     from era5_etl.download.request_planner import (
         DIFF_MAX_CELLS,
@@ -213,7 +315,7 @@ def diff_preview(body: DiffPreviewIn, request: Request) -> DiffPreviewOut:
         hours=hours_str,
     )
 
-    resolution = _DR.get(cfg.dataset).GRID_RESOLUTION_DEG
+    resolution = Registry.get(cfg.dataset).GRID_RESOLUTION_DEG
     snapped = snap_area_to_grid(list(cfg.area), resolution)
 
     # Guard: a per-cell diff over a huge request (state × decades) would

@@ -168,6 +168,7 @@ def update_object(
             updated_ts=int(time.time() * 1000),
         )
         _save(data)
+    assert isinstance(target, dict)
     return target
 
 
@@ -207,17 +208,17 @@ def register_user_objects(conn) -> list[dict[str, Any]]:
         try:
             conn.execute(o["sql"])
             results.append({**o, "ok": True, "error": None})
-        except Exception as exc:  # noqa: BLE001 -- surfaced, not raised
+        except Exception as exc:
             results.append({**o, "ok": False, "error": str(exc)})
     return results
 
 
 __all__ = [
     "UserObjectError",
-    "validate_ddl",
     "add_object",
-    "update_object",
     "delete_object",
     "list_objects",
     "register_user_objects",
+    "update_object",
+    "validate_ddl",
 ]

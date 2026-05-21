@@ -19,6 +19,7 @@ Format of ``~/.cdsapirc`` (the YAML cdsapi expects)::
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -118,10 +119,8 @@ def save_credentials(body: CredentialsIn) -> CredentialStatusOut:
     payload = f"url: {url}\nkey: {key}\n"
     path.write_text(payload, encoding="utf-8")
     # Best-effort: lock down permissions on POSIX. No-op on Windows.
-    try:
+    with contextlib.suppress(OSError, NotImplementedError):
         os.chmod(path, 0o600)
-    except (OSError, NotImplementedError):
-        pass
 
     return _read_status()
 

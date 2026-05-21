@@ -68,7 +68,7 @@ class CDSEventCapture(logging.Handler):
     def clear_chunk_context(self) -> None:
         self._ctx = None
 
-    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401 - logging API
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             payload = self._parse(record.getMessage())
         except Exception:  # pragma: no cover - never let logging crash the app

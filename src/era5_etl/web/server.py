@@ -37,22 +37,22 @@ from era5_etl.web.routes import (
     query as query_routes,
 )
 from era5_etl.web.routes import (
-    timeseries as timeseries_routes,
-)
-from era5_etl.web.routes import (
-    regions as regions_routes,
-)
-from era5_etl.web.routes import (
     query_store as query_store_routes,
 )
 from era5_etl.web.routes import (
-    user_views as user_views_routes,
+    regions as regions_routes,
 )
 from era5_etl.web.routes import (
     settings as settings_routes,
 )
 from era5_etl.web.routes import (
     stats as stats_routes,
+)
+from era5_etl.web.routes import (
+    timeseries as timeseries_routes,
+)
+from era5_etl.web.routes import (
+    user_views as user_views_routes,
 )
 from era5_etl.web.routes import (
     version as version_routes,

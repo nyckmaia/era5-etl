@@ -157,27 +157,6 @@ def test_estimate_grid_dataset_still_works(client: TestClient):
     assert r.json()["estimate_skipped"] is False
 
 
-def test_inmet_prerequisite_reports_missing(client: TestClient):
-    r = client.get("/api/inmet/prerequisite")
-    assert r.status_code == 200
-    b = r.json()
-    assert b["era5"] is False and b["era5_land"] is False
-    assert b["ok"] is False
-    assert set(b["missing"]) == {"era5", "era5-land"}
-
-
-def test_inmet_prerequisite_ok_when_grids_present(client: TestClient, tmp_path):
-    for ds in ("era5", "era5-land"):
-        d = resolve_dataset_dir(tmp_path, ds) / "date=2024-01-01"
-        d.mkdir(parents=True, exist_ok=True)
-        pl.DataFrame({"latitude": [0.0]}).write_parquet(
-            d / f"{ds}_2024-01-01_part-001.parquet"
-        )
-    r = client.get("/api/inmet/prerequisite")
-    assert r.status_code == 200
-    assert r.json()["ok"] is True
-
-
 def test_inmet_years_endpoint(client: TestClient, monkeypatch):
     monkeypatch.setattr(
         "era5_etl.web.routes.inmet.scrape_available_years",

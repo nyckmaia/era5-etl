@@ -231,7 +231,10 @@ class StationIndex:
         if "date" in df.columns:
             years = df.get_column("date").dt.year().drop_nulls()
             if len(years):
-                return int(years.min())
+                # Polars' ``Series.min`` is typed to return its inner
+                # ``Any``; the column is Int32 here so casting to int is
+                # safe.
+                return int(years.min())  # type: ignore[arg-type]
         return None
 
     def _dedupe_station_metadata(self) -> None:

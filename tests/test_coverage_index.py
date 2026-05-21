@@ -260,14 +260,14 @@ def test_upsert_rolls_back_on_failure(tmp_path: Path) -> None:
         # Force schema creation so the underlying connection exists, then
         # wrap it with the flaky proxy.
         cov.stats()
-        assert cov._conn is not None  # noqa: SLF001
-        real_conn = cov._conn  # noqa: SLF001
-        cov._conn = _FlakyConn(real_conn)  # type: ignore[assignment]  # noqa: SLF001
+        assert cov._conn is not None
+        real_conn = cov._conn
+        cov._conn = _FlakyConn(real_conn)  # type: ignore[assignment]
         try:
             with pytest.raises(RuntimeError, match="simulated mid-loop failure"):
                 cov.upsert_from_dataframe(df)
         finally:
-            cov._conn = real_conn  # noqa: SLF001
+            cov._conn = real_conn
 
         # Rollback must have wiped the first variable's insert as well.
         assert cov.stats()["total_rows"] == 0

@@ -282,3 +282,119 @@ def test_pipeline_with_pais_flag_dry_run(tmp_path: Path):
     )
     assert result.exit_code == 0
     assert "country 'Brasil'" in result.stdout or "Brasil" in result.stdout
+
+
+# --- --region / --no-clip ---------------------------------------------
+
+
+def test_pipeline_region_single_uf_sets_clip_and_bbox(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "pipeline",
+            "--data-dir",
+            str(tmp_path),
+            "--dataset",
+            "era5-land",
+            "--region",
+            "SP",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2024-01-02",
+            "--var",
+            "2m_temperature",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "region(s)" in result.stdout
+    assert "SP" in result.stdout
+
+
+def test_pipeline_multi_region_unions_bbox(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "pipeline",
+            "--data-dir",
+            str(tmp_path),
+            "--dataset",
+            "era5",
+            "--region",
+            "SP",
+            "--region",
+            "RJ",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2024-01-02",
+            "--var",
+            "2m_temperature",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "SP+RJ" in result.stdout
+
+
+def test_convert_no_clip_disables_clipping(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "convert",
+            "--data-dir",
+            str(tmp_path),
+            "--dataset",
+            "era5",
+            "--region",
+            "SP",
+            "--no-clip",
+        ],
+    )
+    # No NetCDF to convert → command still exits 0, but the --no-clip notice
+    # must have been printed.
+    assert result.exit_code == 0
+    assert "no-clip" in result.stdout.lower()
+
+
+def test_pipeline_unknown_region_errors(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "pipeline",
+            "--data-dir",
+            str(tmp_path),
+            "--dataset",
+            "era5",
+            "--region",
+            "XX",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_pipeline_region_br_uses_country_bbox(tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "pipeline",
+            "--data-dir",
+            str(tmp_path),
+            "--dataset",
+            "era5",
+            "--region",
+            "BR",
+            "--start-date",
+            "2024-01-01",
+            "--end-date",
+            "2024-01-02",
+            "--var",
+            "2m_temperature",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "region(s)" in result.stdout
+    assert "BR" in result.stdout

@@ -1,26 +1,20 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { RunProgress } from "@/components/RunProgress";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/format";
 
 /**
- * Dedicated INMET download flow.
- *
- * INMET is a station source: one ZIP per year (all stations), no
- * variables/area/hours/smart-diff/size-estimate. So the ERA5 wizard does
- * not apply -- this is the branch rendered by the /download page when the
- * selected dataset is non-grid. Steps: ERA5/ERA5-LAND prerequisite ->
- * pick years -> run + progress.
+ * Dedicated INMET download flow. See the original Portuguese-only
+ * version's docstring for the design notes; the only change here is
+ * that every user-visible string is sourced from i18n.
  */
 export function InmetDownloadFlow() {
-  const prereqQ = useQuery({
-    queryKey: ["inmet-prerequisite"],
-    queryFn: api.inmet.prerequisite,
-  });
+  const { t } = useTranslation();
   const yearsQ = useQuery({
     queryKey: ["inmet-years"],
     queryFn: api.inmet.years,
@@ -33,7 +27,6 @@ export function InmetDownloadFlow() {
   });
 
   const years = yearsQ.data?.years ?? [];
-  const prereqOk = prereqQ.data?.ok ?? false;
   const allSelected = years.length > 0 && selected.size === years.length;
 
   function toggle(y: number) {
@@ -48,60 +41,45 @@ export function InmetDownloadFlow() {
     <div className="space-y-6">
       <header>
         <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
-          Download INMET
+          {t("inmet.title")}
         </h1>
-        <p className="mt-1 text-sm text-ink-500">
-          Estações meteorológicas do INMET. Um ZIP por ano (todas as
-          estações) — sem variáveis, área ou Smart Diff.
-        </p>
+        <p className="mt-1 text-sm text-ink-500">{t("inmet.subtitle")}</p>
       </header>
 
-      {/* 1. Prerequisite */}
-      <section className="card p-5">
-        <h2 className="text-lg font-medium text-ink-800">
-          1. Pré-requisito: ERA5 e ERA5-LAND
-        </h2>
-        <p className="mt-1 text-sm text-ink-500">
-          O INMET é comparado contra as grades de reanálise (view{" "}
-          <code>era5_inmet</code> e distâncias por estação). É preciso ter ao
-          menos o mínimo de cada uma baixado primeiro.
-        </p>
-        {prereqQ.isLoading ? (
-          <div className="mt-3 flex items-center gap-2 text-sm text-ink-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Verificando...
+      <aside className="relative overflow-hidden rounded-2xl border border-amber-200/70 bg-gradient-to-br from-amber-50 to-white p-5">
+        <div className="absolute inset-y-0 left-0 w-1 bg-amber-400" aria-hidden />
+        <div className="flex items-start gap-3 pl-2">
+          <div className="mt-0.5 rounded-full bg-amber-100 p-1.5">
+            <Sparkles className="h-4 w-4 text-amber-700" aria-hidden />
           </div>
-        ) : (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <PrereqPill label="ERA5" ok={prereqQ.data?.era5 ?? false} />
-            <PrereqPill
-              label="ERA5-LAND"
-              ok={prereqQ.data?.era5_land ?? false}
-            />
-            {!prereqOk && (
-              <div className="flex flex-wrap gap-2">
-                {(prereqQ.data?.missing ?? []).map((ds) => (
-                  <Link
-                    key={ds}
-                    to="/download"
-                    search={{ dataset: ds, step: 1 }}
-                    className="btn-outline text-sm"
-                  >
-                    Baixar {ds.toUpperCase()} →
-                  </Link>
-                ))}
-              </div>
-            )}
+          <div className="text-sm leading-relaxed text-ink-700">
+            <div className="font-semibold tracking-tight text-amber-900">
+              {t("inmet.autoBootstrap.title")}
+            </div>
+            <p className="mt-0.5 text-ink-600">
+              <Trans
+                i18nKey="inmet.autoBootstrap.body"
+                values={{ view: "era5_inmet" }}
+                components={{
+                  c: (
+                    <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-[12px] text-amber-900" />
+                  ),
+                }}
+              >
+                {t("inmet.autoBootstrap.body", { view: "era5_inmet" })}
+              </Trans>{" "}
+              <span className="text-ink-500">
+                {t("inmet.autoBootstrap.noAction")}
+              </span>
+            </p>
           </div>
-        )}
-      </section>
+        </div>
+      </aside>
 
-      {/* 2. Year selection */}
-      <section
-        className={cn("card p-5", !prereqOk && "pointer-events-none opacity-50")}
-      >
+      <section className="card p-5">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-medium text-ink-800">
-            2. Anos disponíveis no portal
+            {t("inmet.years.title")}
           </h2>
           {years.length > 0 && (
             <button
@@ -111,21 +89,19 @@ export function InmetDownloadFlow() {
                 setSelected(allSelected ? new Set() : new Set(years))
               }
             >
-              {allSelected ? "Desmarcar todos" : "Marcar todos"}
+              {allSelected
+                ? t("inmet.years.deselectAll")
+                : t("inmet.years.selectAll")}
             </button>
           )}
         </div>
 
         {yearsQ.isLoading ? (
           <div className="mt-3 flex items-center gap-2 text-sm text-ink-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Consultando o
-            portal INMET...
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("inmet.years.loading")}
           </div>
         ) : yearsQ.isError ? (
-          <p className="mt-3 text-sm text-amber-700">
-            Não foi possível listar os anos do portal INMET (fora do ar ou
-            layout mudou). Tente novamente mais tarde.
-          </p>
+          <p className="mt-3 text-sm text-amber-700">{t("inmet.years.error")}</p>
         ) : (
           <div className="mt-4 grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8">
             {years.map((y) => {
@@ -150,37 +126,36 @@ export function InmetDownloadFlow() {
         )}
       </section>
 
-      {/* 3. Run */}
       <section className="card p-5">
-        <h2 className="text-lg font-medium text-ink-800">3. Executar</h2>
+        <h2 className="text-lg font-medium text-ink-800">{t("inmet.run.title")}</h2>
         <p className="mt-1 text-sm text-ink-500">
           {selected.size === 0
-            ? "Selecione ao menos um ano."
-            : `${selected.size} ano(s) selecionado(s).`}
+            ? t("inmet.run.selectAtLeastOne")
+            : t("inmet.run.yearsSelected", { count: selected.size })}
         </p>
         <button
           className="btn-primary mt-4"
-          disabled={
-            !prereqOk || selected.size === 0 || runMutation.isPending
-          }
+          disabled={selected.size === 0 || runMutation.isPending}
           onClick={() => runMutation.mutate()}
         >
           {runMutation.isPending && (
             <Loader2 className="h-4 w-4 animate-spin" />
           )}
-          Baixar + processar INMET
+          {t("inmet.run.button")}
         </button>
 
         {runMutation.isError && (
           <p className="mt-3 text-sm text-amber-700">
-            Falha ao iniciar: {(runMutation.error as Error).message}
+            {t("inmet.run.failure", {
+              message: (runMutation.error as Error).message,
+            })}
           </p>
         )}
 
         {runMutation.data && (
           <div className="mt-5 space-y-4">
             <p className="text-sm text-ink-500">
-              Run iniciado:{" "}
+              {t("inmet.run.runStarted")}{" "}
               <span className="font-mono">{runMutation.data.run_id}</span>
             </p>
             <RunProgress
@@ -189,22 +164,25 @@ export function InmetDownloadFlow() {
               kind="station"
             />
             <div className="rounded-xl border border-ink-200 bg-ink-50/60 p-4 text-sm">
-              <p className="font-medium text-ink-800">Próximos passos</p>
+              <p className="font-medium text-ink-800">{t("inmet.run.nextSteps")}</p>
               <ul className="mt-2 list-inside list-disc space-y-1 text-ink-600">
                 <li>
                   <Link
                     to="/inventory"
                     className="text-ocean-600 hover:underline"
                   >
-                    Ver as estações no Inventário
+                    {t("inmet.run.seeInventory")}
                   </Link>{" "}
-                  (mapa de pontos por estação).
+                  {t("inmet.run.seeInventoryHint")}
                 </li>
                 <li>
-                  Comparar com a reanálise via a view{" "}
-                  <code>era5_inmet</code> (CLI:{" "}
-                  <code>era5 era5-inmet</code>) — INMET alinhado ao ERA5/
-                  ERA5-LAND nos 4 vizinhos de grade, mesma data e hora.
+                  <Trans
+                    i18nKey="inmet.run.compareNote"
+                    values={{ view: "era5_inmet" }}
+                    components={{ c: <code /> }}
+                  >
+                    {t("inmet.run.compareNote", { view: "era5_inmet" })}
+                  </Trans>
                 </li>
               </ul>
             </div>
@@ -212,25 +190,5 @@ export function InmetDownloadFlow() {
         )}
       </section>
     </div>
-  );
-}
-
-function PrereqPill({ label, ok }: { label: string; ok: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm",
-        ok
-          ? "bg-emerald-50 text-emerald-700"
-          : "bg-amber-50 text-amber-700",
-      )}
-    >
-      {ok ? (
-        <CheckCircle2 className="h-4 w-4" />
-      ) : (
-        <AlertTriangle className="h-4 w-4" />
-      )}
-      {label} {ok ? "pronto" : "faltando"}
-    </span>
   );
 }

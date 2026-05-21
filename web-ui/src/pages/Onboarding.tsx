@@ -11,37 +11,38 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { api, type CredentialTestResult, type PathValidation } from "@/lib/api";
 import { cn } from "@/lib/format";
 
 type StepKey = "welcome" | "data-dir" | "credentials" | "done";
 
-const STEPS: { key: StepKey; label: string }[] = [
-  { key: "welcome", label: "Welcome" },
-  { key: "data-dir", label: "Data directory" },
-  { key: "credentials", label: "CDS credentials" },
-  { key: "done", label: "Ready" },
+const STEP_KEYS: { key: StepKey; labelKey: string }[] = [
+  { key: "welcome", labelKey: "onboarding.steps.welcome" },
+  { key: "data-dir", labelKey: "onboarding.steps.dataDir" },
+  { key: "credentials", labelKey: "onboarding.steps.credentials" },
+  { key: "done", labelKey: "onboarding.steps.done" },
 ];
 
 export function Onboarding({ initialStep = "welcome" }: { initialStep?: StepKey }) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<StepKey>(initialStep);
-  const stepIndex = STEPS.findIndex((s) => s.key === step);
+  const stepIndex = STEP_KEYS.findIndex((s) => s.key === step);
 
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-ink-900">First-time setup</h1>
-          <p className="mt-1 text-sm text-ink-500">
-            Two small things before downloading climate data: where to store it and
-            how to talk to the Copernicus CDS.
-          </p>
+          <h1 className="text-2xl font-semibold text-ink-900">
+            {t("onboarding.title")}
+          </h1>
+          <p className="mt-1 text-sm text-ink-500">{t("onboarding.subtitle")}</p>
         </div>
       </div>
 
       <ol className="mb-8 flex items-center gap-2 text-xs">
-        {STEPS.map((s, i) => (
+        {STEP_KEYS.map((s, i) => (
           <li key={s.key} className="flex items-center gap-2">
             <span
               className={cn(
@@ -60,9 +61,9 @@ export function Onboarding({ initialStep = "welcome" }: { initialStep?: StepKey 
                 i === stepIndex ? "font-medium text-ink-800" : "text-ink-400",
               )}
             >
-              {s.label}
+              {t(s.labelKey)}
             </span>
-            {i < STEPS.length - 1 && <span className="mx-1 h-px w-6 bg-ink-200" />}
+            {i < STEP_KEYS.length - 1 && <span className="mx-1 h-px w-6 bg-ink-200" />}
           </li>
         ))}
       </ol>
@@ -81,9 +82,8 @@ export function Onboarding({ initialStep = "welcome" }: { initialStep?: StepKey 
   );
 }
 
-// ---------------------------------------------------------------------------
-
 function WelcomeStep({ onNext }: { onNext: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-3">
@@ -92,12 +92,10 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
         </div>
         <div>
           <h2 className="text-lg font-medium text-ink-900">
-            Welcome to ERA5-ETL
+            {t("onboarding.welcome.title")}
           </h2>
           <p className="mt-1 text-sm text-ink-500">
-            Two quick steps will get you ready: pick a folder to store downloaded
-            climate data, then paste your Copernicus CDS API key. Both can be
-            changed later from the Settings page.
+            {t("onboarding.welcome.body")}
           </p>
         </div>
       </div>
@@ -107,16 +105,15 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
           onClick={onNext}
           className="rounded-lg bg-ocean-600 px-4 py-2 text-sm font-medium text-white hover:bg-ocean-700"
         >
-          Begin setup
+          {t("onboarding.welcome.begin")}
         </button>
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-
 function DataDirStep({ onNext }: { onNext: () => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [path, setPath] = useState("");
@@ -170,19 +167,17 @@ function DataDirStep({ onNext }: { onNext: () => void }) {
         </div>
         <div>
           <h2 className="text-lg font-medium text-ink-900">
-            Where should downloaded data live?
+            {t("onboarding.dataDir.title")}
           </h2>
           <p className="mt-1 text-sm text-ink-500">
-            Pick a root folder with several GB of headroom. ERA5-ETL{" "}
-            <strong>will not write files directly inside it</strong> — it
-            creates two managed subfolders described below.
+            {t("onboarding.dataDir.body")}
           </p>
         </div>
       </div>
 
       <div className="space-y-3">
         <label className="block text-xs font-medium uppercase tracking-wide text-ink-500">
-          Folder path
+          {t("onboarding.dataDir.pathLabel")}
         </label>
         <div className="flex gap-2">
           <input
@@ -204,18 +199,17 @@ function DataDirStep({ onNext }: { onNext: () => void }) {
             ) : (
               <FolderOpen className="h-4 w-4" />
             )}
-            Pick…
+            {t("onboarding.dataDir.pickButton")}
           </button>
         </div>
 
         {checking && (
           <div className="flex items-center gap-2 text-xs text-ink-400">
-            <Loader2 className="h-3 w-3 animate-spin" /> Validating…
+            <Loader2 className="h-3 w-3 animate-spin" />{" "}
+            {t("onboarding.dataDir.validating")}
           </div>
         )}
-        {validation && !checking && (
-          <ValidationBadge v={validation} />
-        )}
+        {validation && !checking && <ValidationBadge v={validation} />}
         {(validation?.path || path) && (
           <LayoutPreview rootPath={validation?.path || path} />
         )}
@@ -228,39 +222,39 @@ function DataDirStep({ onNext }: { onNext: () => void }) {
           disabled={!canSave || save.isPending}
           className="rounded-lg bg-ocean-600 px-4 py-2 text-sm font-medium text-white hover:bg-ocean-700 disabled:opacity-50"
         >
-          {save.isPending ? "Saving…" : "Save & continue"}
+          {save.isPending
+            ? t("onboarding.dataDir.saving")
+            : t("onboarding.dataDir.saveContinue")}
         </button>
       </div>
     </div>
   );
 }
 
-// Names mirror src/era5_etl/storage/paths.py (STORAGE_ROOT_DIRNAME, NETCDF_TMP_DIRNAME).
 const STORAGE_ROOT_DIRNAME = "climate_data_store_db";
 const NETCDF_TMP_DIRNAME = "_tmp_netcdf";
 
 function LayoutPreview({ rootPath }: { rootPath: string }) {
+  const { t } = useTranslation();
   const trimmed = rootPath.replace(/[\\/]+$/, "");
   const sep = trimmed.includes("\\") && !trimmed.includes("/") ? "\\" : "/";
   return (
     <div className="rounded-lg border border-ocean-200 bg-ocean-50/50 px-4 py-3 text-xs">
       <div className="font-medium text-ocean-900">
-        What gets created in this folder
+        {t("onboarding.layoutPreview.title")}
       </div>
-      <p className="mt-1 text-ink-600">
-        The folder you picked stays your root.{" "}
-        <strong>ERA5-ETL adds two managed subfolders inside it</strong>; the
-        root itself is never filled with data files directly.
-      </p>
+      <p className="mt-1 text-ink-600">{t("onboarding.layoutPreview.body")}</p>
       <pre className="mt-3 overflow-x-auto rounded-md bg-white p-3 font-mono text-[11px] leading-relaxed text-ink-700">
-        <span className="text-ink-500">{trimmed || "<your folder>"}</span>
+        <span className="text-ink-500">
+          {trimmed || t("onboarding.layoutPreview.placeholder")}
+        </span>
         {sep}
         {"\n"}
         <span className="text-ocean-700">
           └── {STORAGE_ROOT_DIRNAME}/
         </span>
         <span className="text-ink-400">
-          {"           ← tudo que a ferramenta gerencia fica aqui"}
+          {`           ${t("onboarding.layoutPreview.managedCommentRoot")}`}
         </span>
         {"\n"}
         <span className="text-ink-500">
@@ -268,7 +262,7 @@ function LayoutPreview({ rootPath }: { rootPath: string }) {
           {"        ├── era5-land/    "}
         </span>
         <span className="text-ink-400">
-          {"← Parquet + DuckDB + manifest (persistente)"}
+          {t("onboarding.layoutPreview.managedCommentData")}
         </span>
         {"\n"}
         <span className="text-ocean-700">
@@ -276,7 +270,7 @@ function LayoutPreview({ rootPath }: { rootPath: string }) {
           {NETCDF_TMP_DIRNAME}/
         </span>
         <span className="text-ink-400">
-          {"      ← NetCDF temporário (apagado após conversão)"}
+          {`      ${t("onboarding.layoutPreview.managedCommentTmp")}`}
         </span>
         {"\n"}
         <span className="text-ink-500">
@@ -285,49 +279,48 @@ function LayoutPreview({ rootPath }: { rootPath: string }) {
         </span>
       </pre>
       <p className="mt-2 text-ink-500">
-        Parquet partitions, the DuckDB file, and the per-dataset manifest
-        all live under <code className="rounded bg-white px-1">{STORAGE_ROOT_DIRNAME}/</code>.
-        The <code className="rounded bg-white px-1">{NETCDF_TMP_DIRNAME}/</code>{" "}
-        folder now lives <em>inside</em> it and is removed automatically
-        after a successful NetCDF → Parquet conversion.
+        {t("onboarding.layoutPreview.explanation", {
+          root: STORAGE_ROOT_DIRNAME,
+          tmp: NETCDF_TMP_DIRNAME,
+        })}
       </p>
     </div>
   );
 }
 
 function ValidationBadge({ v }: { v: PathValidation }) {
+  const { t } = useTranslation();
   if (!v.exists) {
     return (
       <Badge tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        Path doesn't exist yet. Pick an existing folder or create it first.
+        {t("onboarding.validation.missing")}
       </Badge>
     );
   }
   if (!v.is_dir) {
     return (
       <Badge tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        That path points to a file, not a directory.
+        {t("onboarding.validation.notADir")}
       </Badge>
     );
   }
   if (!v.is_writable) {
     return (
       <Badge tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        ERA5-ETL can't write to this folder. Check permissions.
+        {t("onboarding.validation.notWritable")}
       </Badge>
     );
   }
   return (
     <Badge tone="success" icon={<CheckCircle2 className="h-4 w-4" />}>
-      Folder exists and is writable.
-      {v.is_empty === false && " (it already has files — that's fine)"}
+      {t("onboarding.validation.ok")}
+      {v.is_empty === false && t("onboarding.validation.okHasFiles")}
     </Badge>
   );
 }
 
-// ---------------------------------------------------------------------------
-
 function CredentialsStep({ onNext }: { onNext: () => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const status = useQuery({
     queryKey: ["credentials"],
@@ -365,14 +358,12 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
         </div>
         <div>
           <h2 className="text-lg font-medium text-ink-900">
-            Connect to the Copernicus CDS
+            {t("onboarding.credentials.title")}
           </h2>
           <p className="mt-1 text-sm text-ink-500">
-            ERA5 data is served by the Copernicus Climate Data Store. You'll
-            need a free account and a Personal Access Token. The token is saved
-            to <code className="rounded bg-ink-100 px-1 py-0.5 text-[11px]">
-              {status.data?.file_path ?? "~/.cdsapirc"}
-            </code> on this machine.
+            {t("onboarding.credentials.body", {
+              path: status.data?.file_path ?? "~/.cdsapirc",
+            })}
           </p>
         </div>
       </div>
@@ -380,30 +371,28 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <ol className="space-y-3 text-sm text-ink-600">
           <Step n={1}>
-            Create or sign in to a Copernicus account at{" "}
+            {t("onboarding.credentials.steps.signIn")}{" "}
             <ExtLink href="https://cds.climate.copernicus.eu/">
               cds.climate.copernicus.eu
             </ExtLink>
             .
           </Step>
-          <Step n={2}>
-            Open each dataset page (ERA5, ERA5-Land) and accept the terms
-            once.
-          </Step>
+          <Step n={2}>{t("onboarding.credentials.steps.accept")}</Step>
           <Step n={3}>
-            Visit your{" "}
+            {t("onboarding.credentials.steps.copyToken")}{" "}
             <ExtLink href="https://cds.climate.copernicus.eu/profile">
               profile
             </ExtLink>{" "}
-            and copy the <strong>Personal Access Token</strong>.
+            {t("onboarding.credentials.steps.copyTokenSuffix")}{" "}
+            <strong>Personal Access Token</strong>.
           </Step>
-          <Step n={4}>Paste it on the right and click Save.</Step>
+          <Step n={4}>{t("onboarding.credentials.steps.paste")}</Step>
         </ol>
 
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium uppercase tracking-wide text-ink-500">
-              API URL
+              {t("onboarding.credentials.apiUrl")}
             </label>
             <input
               type="text"
@@ -414,13 +403,17 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
           </div>
           <div>
             <label className="block text-xs font-medium uppercase tracking-wide text-ink-500">
-              Personal Access Token
+              {t("onboarding.credentials.token")}
             </label>
             <input
               type="password"
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              placeholder={alreadyOk ? "(already saved — paste to replace)" : ""}
+              placeholder={
+                alreadyOk
+                  ? t("onboarding.credentials.tokenPlaceholderReplace")
+                  : ""
+              }
               autoComplete="off"
               spellCheck={false}
               className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm focus:border-ocean-500 focus:outline-none focus:ring-1 focus:ring-ocean-500"
@@ -434,7 +427,9 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
               disabled={!key.trim() || save.isPending}
               className="rounded-lg bg-ocean-600 px-4 py-2 text-sm font-medium text-white hover:bg-ocean-700 disabled:opacity-50"
             >
-              {save.isPending ? "Saving…" : "Save credentials"}
+              {save.isPending
+                ? t("onboarding.credentials.saving")
+                : t("onboarding.credentials.saveButton")}
             </button>
             <button
               type="button"
@@ -447,7 +442,7 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              Test
+              {t("onboarding.credentials.testButton")}
             </button>
           </div>
 
@@ -469,10 +464,13 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
           )}
           {alreadyOk && !testResult && (
             <Badge tone="info" icon={<CheckCircle2 className="h-4 w-4" />}>
-              Credentials present ({status.data?.source}).{" "}
-              {status.data?.source === "env"
-                ? "Loaded from environment variables."
-                : "Click Test to verify the key is accepted."}
+              {t("onboarding.credentials.presentNote", {
+                source: status.data?.source ?? "",
+                action:
+                  status.data?.source === "env"
+                    ? t("onboarding.credentials.sourceEnv")
+                    : t("onboarding.credentials.sourceFile"),
+              })}
             </Badge>
           )}
         </div>
@@ -485,7 +483,7 @@ function CredentialsStep({ onNext }: { onNext: () => void }) {
           disabled={!alreadyOk}
           className="rounded-lg bg-ocean-600 px-4 py-2 text-sm font-medium text-white hover:bg-ocean-700 disabled:opacity-50"
         >
-          Continue
+          {t("onboarding.credentials.continue")}
         </button>
       </div>
     </div>
@@ -523,33 +521,30 @@ function ExtLink({
   );
 }
 
-// ---------------------------------------------------------------------------
-
 function DoneStep() {
+  const { t } = useTranslation();
   return (
     <div className="space-y-5 text-center">
       <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
         <CheckCircle2 className="h-7 w-7" />
       </div>
       <div>
-        <h2 className="text-lg font-medium text-ink-900">Setup complete</h2>
-        <p className="mt-1 text-sm text-ink-500">
-          You can now browse datasets, plan a download, and query parquet data.
-        </p>
+        <h2 className="text-lg font-medium text-ink-900">
+          {t("onboarding.done.title")}
+        </h2>
+        <p className="mt-1 text-sm text-ink-500">{t("onboarding.done.body")}</p>
       </div>
       <div className="flex justify-center">
         <a
           href="/dashboard"
           className="rounded-lg bg-ocean-600 px-5 py-2 text-sm font-medium text-white hover:bg-ocean-700"
         >
-          Open the dashboard
+          {t("onboarding.done.openDashboard")}
         </a>
       </div>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
 
 function Badge({
   tone,

@@ -13,6 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useReducer, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/format";
 
@@ -39,6 +40,14 @@ export interface ProgressPayload {
   bytes_total?: number;
   files_done?: number;
   files_total?: number;
+  // Multi-phase orchestration (INMET auto-bootstrap flow). When
+  // ``phase_total > 1`` we surface a small chip ("Etapa N/M · Label")
+  // above the bars; single-phase runs (all non-INMET datasets, and INMET
+  // when prerequisites are already present) leave these at null/1/1 and
+  // the chip is hidden.
+  pipeline_phase?: string;
+  phase_index?: number;
+  phase_total?: number;
 }
 
 interface ChunkState {
@@ -57,6 +66,17 @@ interface ConvertState {
   message: string;
 }
 
+interface FinalizingState {
+  message: string;
+  last_update: number;
+}
+
+interface PhaseState {
+  name: string;
+  index: number;
+  total: number;
+}
+
 interface RunState {
   chunks: Record<string, ChunkState>;
   events: { ts: number; chunk_id: string | null; phase: string | null; message: string }[];
@@ -64,6 +84,8 @@ interface RunState {
   error: string | null;
   chunks_total: number | null;
   convert: ConvertState | null;
+  pipeline_phase: PhaseState | null;
+  finalizing: FinalizingState | null;
 }
 
 const INITIAL_STATE: RunState = {
@@ -73,6 +95,8 @@ const INITIAL_STATE: RunState = {
   error: null,
   chunks_total: null,
   convert: null,
+  pipeline_phase: null,
+  finalizing: null,
 };
 
 type Action =
@@ -85,11 +109,39 @@ function reducer(state: RunState, action: Action): RunState {
   }
   const p = action.payload;
 
+  // Refresh the phase chip on every event: backend stamps every progress
+  // event with the active phase, so we keep this in sync via reducer.
+  const pipeline_phase: PhaseState | null =
+    p.pipeline_phase && (p.phase_total ?? 1) > 1
+      ? {
+          name: p.pipeline_phase,
+          index: p.phase_index ?? 1,
+          total: p.phase_total ?? 1,
+        }
+      : state.pipeline_phase;
+
+  // Finalizing events are emitted by the post-convert stages (refresh
+  // indexes, create views). They carry a rotating message and let the UI
+  // render a "wait…" banner while convert is already at 100%.
+  if (p.stage === "finalizing") {
+    const now = p.timestamp ?? Date.now() / 1000;
+    return {
+      ...state,
+      pipeline_phase,
+      finalizing: { message: p.message ?? "", last_update: now },
+      events: [
+        { ts: now, chunk_id: null, phase: "finalizing", message: p.message ?? "" },
+        ...state.events,
+      ].slice(0, 50),
+    };
+  }
+
   // Conversion-stage events carry no chunk_id; they drive a separate bar.
   if (p.stage === "convert") {
     const now = p.timestamp ?? Date.now() / 1000;
     return {
       ...state,
+      pipeline_phase,
       convert: {
         done: p.files_done ?? state.convert?.done ?? 0,
         total: p.files_total ?? state.convert?.total ?? 0,
@@ -103,7 +155,11 @@ function reducer(state: RunState, action: Action): RunState {
   }
 
   if (!p.chunk_id || !p.phase) {
-    return state;
+    // Even non-chunk events update the phase chip (e.g. "starting"
+    // submitted before the first chunk event).
+    return pipeline_phase === state.pipeline_phase
+      ? state
+      : { ...state, pipeline_phase };
   }
   const prev = state.chunks[p.chunk_id];
   const now = p.timestamp ?? Date.now() / 1000;
@@ -122,29 +178,30 @@ function reducer(state: RunState, action: Action): RunState {
   ].slice(0, 50);
   return {
     ...state,
+    pipeline_phase,
     chunks: { ...state.chunks, [p.chunk_id]: next },
     events,
     chunks_total: p.chunks_total ?? state.chunks_total,
   };
 }
 
-// Friendly, ordered phase labels for the "current request" tracker.
-// CDS (grid) and INMET (station) have different lifecycles.
-const PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
-  { phase: "submitting", label: "Enviando requisição ao CDS" },
-  { phase: "queued", label: "Na fila do CDS (aguardando aceitação)" },
-  { phase: "running", label: "Aceita — CDS processando" },
-  { phase: "downloading", label: "Baixando NetCDF" },
-  { phase: "completed", label: "Concluído" },
+// Friendly phase-step descriptors share their order across languages;
+// the visible label is resolved via i18n at render time.
+const GRID_PHASE_STEPS: { phase: ChunkPhase; key: string }[] = [
+  { phase: "submitting", key: "runProgress.barSub.submitting" },
+  { phase: "queued", key: "runProgress.barSub.queued" },
+  { phase: "running", key: "runProgress.barSub.runningCDS" },
+  { phase: "downloading", key: "runProgress.barSub.downloadingNetcdf" },
+  { phase: "completed", key: "runProgress.barSub.completed" },
 ];
-const STATION_PHASE_STEPS: { phase: ChunkPhase; label: string }[] = [
-  { phase: "downloading", label: "Baixando ZIP do ano (portal INMET)" },
-  { phase: "completed", label: "Ano extraído" },
+const STATION_PHASE_STEPS: { phase: ChunkPhase; key: string }[] = [
+  { phase: "downloading", key: "runProgress.barSub.downloadingYear" },
+  { phase: "completed", key: "runProgress.barSub.yearExtracted" },
 ];
 
 function phaseRank(
   phase: ChunkPhase,
-  steps: { phase: ChunkPhase; label: string }[],
+  steps: { phase: ChunkPhase; key: string }[],
 ): number {
   const idx = steps.findIndex((s) => s.phase === phase);
   return idx < 0 ? 0 : idx;
@@ -161,9 +218,12 @@ export function RunProgress({
   // portal ZIPs) -> the 3 bars are relabelled for that context.
   kind?: "grid" | "station";
 }) {
+  const { t } = useTranslation();
   const isStation = kind === "station";
-  const phaseSteps = isStation ? STATION_PHASE_STEPS : PHASE_STEPS;
-  const unitLabel = isStation ? "ano" : "chunk";
+  const phaseSteps = isStation ? STATION_PHASE_STEPS : GRID_PHASE_STEPS;
+  const unitLabel = t(
+    isStation ? "runProgress.units.year" : "runProgress.units.chunk",
+  );
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const sourceRef = useRef<EventSource | null>(null);
 
@@ -241,81 +301,100 @@ export function RunProgress({
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+        {state.pipeline_phase && (
+          <PhaseChip phase={state.pipeline_phase} status={state.status} />
+        )}
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-xs font-medium uppercase tracking-wide text-ink-400">
               {state.status === "completed"
-                ? "Pipeline finished"
+                ? t("runProgress.finished")
                 : state.status === "failed"
-                  ? "Pipeline failed"
-                  : "Pipeline running"}
+                  ? t("runProgress.failed")
+                  : t("runProgress.running")}
             </div>
             <div className="mt-1 text-lg font-semibold text-ink-900">
               {state.status === "completed"
-                ? "Pipeline concluído com sucesso"
+                ? t("runProgress.completedTitle")
                 : startingUp
                   ? isStation
-                    ? "Iniciando — consultando o portal INMET…"
-                    : "Iniciando — enviando requisição ao CDS…"
+                    ? t("runProgress.startingINMET")
+                    : t("runProgress.startingCDS")
                   : active
-                    ? `${isStation ? "Ano" : "Chunk"} ${active.chunk_index ?? "?"} de ${total}`
+                    ? t(
+                        isStation
+                          ? "runProgress.yearOf"
+                          : "runProgress.chunkOf",
+                        { i: active.chunk_index ?? "?", n: total },
+                      )
                     : conv && conv.total > 0
-                      ? `Convertendo ${conv.done}/${conv.total}`
-                      : `${completed} de ${total} ${unitLabel}(s)`}
+                      ? t("runProgress.converting", {
+                          done: conv.done,
+                          total: conv.total,
+                        })
+                      : t("runProgress.progressOf", {
+                          done: completed,
+                          total,
+                          unit: unitLabel,
+                        })}
             </div>
           </div>
           <StatusIndicator status={state.status} />
         </div>
 
         <div className="mt-5 space-y-4">
-          {/* 1º: requisição/arquivo NetCDF individual (em cima).
-              INMET baixa o ZIP direto (sem submitting/queued/running),
-              então esta barra não tem o que mostrar -- ocultada para
-              fontes de estação; mantida para ERA5/ERA5-LAND. */}
           {!isStation && (
             <Bar
               icon={<Cloud className="h-4 w-4 text-amber-600" />}
-              label="Requisição CDS atual (NetCDF individual)"
+              label={t("runProgress.bars.currentRequest")}
               pct={phaseBarPct}
               sub={
                 curPhase
-                  ? (phaseSteps.find((s) => s.phase === curPhase)?.label ??
-                    curPhase)
+                  ? (() => {
+                      const step = phaseSteps.find(
+                        (s) => s.phase === curPhase,
+                      );
+                      return step ? t(step.key) : curPhase;
+                    })()
                   : state.status === "completed"
-                    ? "Concluído"
+                    ? t("runProgress.barSub.completed")
                     : startingUp
-                      ? "Enviando requisição ao CDS…"
-                      : "Aguardando primeira requisição…"
+                      ? t("runProgress.barSub.submitting")
+                      : t("runProgress.barSub.waitingFirstRequest")
               }
               tone={state.status === "failed" ? "fail" : "phase"}
               pulse={startingUp}
             />
           )}
-          {/* 2º: grupo (chunks / anos) */}
           <Bar
             icon={<FileStack className="h-4 w-4 text-ocean-600" />}
-            label={
-              isStation ? "Download (anos)" : "Download (grupo de chunks)"
-            }
+            label={t(
+              isStation
+                ? "runProgress.bars.yearsDownload"
+                : "runProgress.bars.groupDownload",
+            )}
             pct={groupPct}
-            sub={`${completed}/${total} ${unitLabel}(s)`}
+            sub={t("runProgress.progressOf", {
+              done: completed,
+              total,
+              unit: unitLabel,
+            })}
             tone={state.status === "failed" ? "fail" : "group"}
           />
-          {/* 3º: conversão */}
           <Bar
             icon={<Download className="h-4 w-4 text-moss-600" />}
-            label={
+            label={t(
               isStation
-                ? "Conversão CSV → Parquet"
-                : "Conversão NetCDF → Parquet"
-            }
+                ? "runProgress.bars.conversionCsv"
+                : "runProgress.bars.conversionNetcdf",
+            )}
             pct={convPct}
             sub={
               conv
-                ? `${conv.done}/${conv.total} arquivo(s) — ${conv.message.slice(0, 60)}`
+                ? `${conv.done}/${conv.total} · ${conv.message.slice(0, 60)}`
                 : isStation
-                  ? "Aguardando o download dos anos…"
-                  : "Aguardando downloads…"
+                  ? t("runProgress.barSub.waitingYearDownloads")
+                  : t("runProgress.barSub.waitingDownloads")
             }
             tone={state.status === "failed" ? "fail" : "convert"}
           />
@@ -327,17 +406,36 @@ export function RunProgress({
           </div>
         )}
 
+        {state.status === "running" && state.finalizing && (
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-ocean-200 bg-ocean-50/70 px-4 py-3">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-ocean-600" />
+            <div className="min-w-0 flex-1 text-sm">
+              <div className="font-medium text-ocean-900">
+                {t("runProgress.finalizing.title")}
+              </div>
+              <div className="mt-0.5 truncate text-ocean-700">
+                {state.finalizing.message}
+              </div>
+              <div className="mt-1 text-[11px] text-ocean-600/80">
+                {t("runProgress.finalizing.explanation")}
+              </div>
+            </div>
+          </div>
+        )}
+
         {state.status === "completed" && (
           <div className="mt-5 flex flex-col items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <Sparkles className="h-5 w-5 shrink-0 text-emerald-600" />
               <div>
                 <div className="text-sm font-semibold text-emerald-800">
-                  Pipeline finalizado com sucesso
+                  {t("runProgress.completedTitle")}
                 </div>
                 <div className="text-xs text-emerald-700">
-                  {completed} {unitLabel}(s) baixado(s) e convertido(s) para
-                  Parquet. Os dados já estão consultáveis.
+                  {t("runProgress.completedSubtitle", {
+                    done: completed,
+                    unit: unitLabel,
+                  })}
                 </div>
               </div>
             </div>
@@ -349,7 +447,7 @@ export function RunProgress({
               className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
             >
               <Database className="h-4 w-4" />
-              Ir para Query
+              {t("runProgress.goToQuery")}
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
@@ -358,14 +456,20 @@ export function RunProgress({
 
       <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
         <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
-          {isStation ? "Anos" : "Chunks"}
+          {t(
+            isStation
+              ? "runProgress.listHeader.years"
+              : "runProgress.listHeader.chunks",
+          )}
         </div>
         <ul className="divide-y divide-ink-100">
           {chunkList.length === 0 && (
             <li className="px-5 py-4 text-sm text-ink-400">
-              {isStation
-                ? "Aguardando o primeiro ano…"
-                : "Waiting for the first chunk…"}
+              {t(
+                isStation
+                  ? "runProgress.waitingFirstYear"
+                  : "runProgress.waitingFirstChunk",
+              )}
             </li>
           )}
           {chunkList.map((c) => (
@@ -376,7 +480,7 @@ export function RunProgress({
 
       <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
         <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
-          Recent events
+          {t("runProgress.recentEvents")}
         </div>
         <ul className="max-h-60 divide-y divide-ink-50 overflow-y-auto font-mono text-[11px]">
           {state.events.slice(0, 30).map((e, i) => (
@@ -499,24 +603,60 @@ function PhaseBadge({ phase }: { phase: ChunkPhase }) {
   );
 }
 
+function PhaseChip({
+  phase,
+  status,
+}: {
+  phase: PhaseState;
+  status: RunState["status"];
+}) {
+  const { t } = useTranslation();
+  const isBootstrap = phase.name.startsWith("bootstrap-");
+  const tone =
+    status === "failed"
+      ? "border-rose-300 bg-rose-50 text-rose-700"
+      : isBootstrap
+        ? "border-amber-300 bg-amber-50 text-amber-800"
+        : "border-ocean-300 bg-ocean-50 text-ocean-700";
+  const labelKey = `runProgress.phaseLabels.${phase.name}`;
+  const labelTranslated = t(labelKey, { defaultValue: phase.name });
+  return (
+    <div
+      className={cn(
+        "mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]",
+        tone,
+      )}
+    >
+      <span className="tabular-nums">
+        {t("runProgress.phaseStep", { i: phase.index, n: phase.total })}
+      </span>
+      <span className="text-ink-300" aria-hidden>
+        ·
+      </span>
+      <span className="normal-case tracking-normal">{labelTranslated}</span>
+    </div>
+  );
+}
+
 function StatusIndicator({ status }: { status: RunState["status"] }) {
+  const { t } = useTranslation();
   if (status === "completed") {
     return (
       <span className="flex items-center gap-1 text-sm text-emerald-700">
-        <CheckCircle2 className="h-4 w-4" /> Completed
+        <CheckCircle2 className="h-4 w-4" /> {t("common.completed")}
       </span>
     );
   }
   if (status === "failed") {
     return (
       <span className="flex items-center gap-1 text-sm text-rose-700">
-        <XCircle className="h-4 w-4" /> Failed
+        <XCircle className="h-4 w-4" /> {t("common.failed")}
       </span>
     );
   }
   return (
     <span className="flex items-center gap-1 text-sm text-ocean-700">
-      <Loader2 className="h-4 w-4 animate-spin" /> Running
+      <Loader2 className="h-4 w-4 animate-spin" /> {t("common.running")}
     </span>
   );
 }

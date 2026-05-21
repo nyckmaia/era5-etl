@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { InmetDownloadFlow } from "@/components/inmet/InmetDownloadFlow";
 import { RunProgress } from "@/components/RunProgress";
@@ -23,20 +24,27 @@ const HOURS_ALL = Array.from({ length: 24 }, (_, h) => `${h.toString().padStart(
 const HOURS_SYNOPTIC = ["00:00", "06:00", "12:00", "18:00"];
 const HOURS_3H = Array.from({ length: 8 }, (_, i) => `${(i * 3).toString().padStart(2, "0")}:00`);
 
-const AREA_PRESETS: Record<string, [number, number, number, number]> = {
-  Brazil: [6, -74, -34, -34],
-  Global: [90, -180, -90, 180],
-  "South America": [13, -82, -56, -34],
-};
+// Stable preset ids so the i18n key drives the visible label per language.
+const AREA_PRESETS: { id: "brazil" | "global" | "southAmerica"; bbox: [number, number, number, number] }[] = [
+  { id: "brazil", bbox: [6, -74, -34, -34] },
+  { id: "global", bbox: [90, -180, -90, 180] },
+  { id: "southAmerica", bbox: [13, -82, -56, -34] },
+];
 
 const downloadRouteApi = getRouteApi("/download");
 
 export function DownloadWizardPage() {
+  const { t } = useTranslation();
   const search = downloadRouteApi.useSearch();
   const [step, setStep] = useState<Step>(0);
   const [dataset, setDataset] = useState<string>("");
   const [variables, setVariables] = useState<string[]>([]);
   const [area, setArea] = useState<[number, number, number, number]>([6, -74, -34, -34]);
+  // Brazilian region(s) for polygon clipping. Empty list = no clip (download
+  // the raw bbox). UF siglas (e.g. ["SP", "RJ"]) clip to the union; ["BR"]
+  // clips to the whole-country polygon. Sent verbatim as ``clip_regions`` in
+  // the pipeline payload.
+  const [clipRegions, setClipRegions] = useState<string[]>([]);
   const [hours, setHours] = useState<string[]>(HOURS_SYNOPTIC);
   const [startDate, setStartDate] = useState("2024-01-01");
   const [endDate, setEndDate] = useState("2024-01-31");
@@ -77,6 +85,7 @@ export function DownloadWizardPage() {
         end_date: endDate,
         area,
         hours,
+        clip_regions: clipRegions.length > 0 ? clipRegions : null,
       }),
   });
   const runMutation = useMutation({
@@ -89,6 +98,7 @@ export function DownloadWizardPage() {
         area,
         hours,
         apply_diff: applyDiff,
+        clip_regions: clipRegions.length > 0 ? clipRegions : null,
       }),
   });
 
@@ -122,6 +132,7 @@ export function DownloadWizardPage() {
     area.join(","),
     hours.join(","),
     variables.join(","),
+    clipRegions.join(","),
     diffReset,
     estimateReset,
   ]);
@@ -155,10 +166,10 @@ export function DownloadWizardPage() {
     <div className="space-y-6">
       <header className="flex items-baseline justify-between">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink-800">Download wizard</h1>
-          <p className="mt-1 text-ink-500">
-            Configure a CDS request. Variables and grid resolution are independent for each dataset.
-          </p>
+          <h1 className="text-3xl font-semibold tracking-tight text-ink-800">
+            {t("wizard.title")}
+          </h1>
+          <p className="mt-1 text-ink-500">{t("wizard.subtitle")}</p>
         </div>
         <Stepper step={step} />
       </header>
@@ -178,7 +189,14 @@ export function DownloadWizardPage() {
         {step === 1 && activeDataset && (
           <StepVariables dataset={activeDataset} value={variables} onChange={setVariables} />
         )}
-        {step === 2 && <StepArea value={area} onChange={setArea} />}
+        {step === 2 && (
+          <StepArea
+            value={area}
+            onChange={setArea}
+            clipRegions={clipRegions}
+            onClipRegionsChange={setClipRegions}
+          />
+        )}
         {step === 3 && (
           <StepPeriod
             startDate={startDate}
@@ -207,6 +225,7 @@ export function DownloadWizardPage() {
             startDate={startDate}
             endDate={endDate}
             applyDiff={applyDiff}
+            clipRegions={clipRegions}
             estimate={estimateMutation}
             run={runMutation}
             onEstimate={() => estimateMutation.mutate()}
@@ -221,7 +240,7 @@ export function DownloadWizardPage() {
           disabled={step === 0}
           onClick={() => setStep((s) => Math.max(0, s - 1) as Step)}
         >
-          <ChevronLeft className="h-4 w-4" /> Back
+          <ChevronLeft className="h-4 w-4" /> {t("common.back")}
         </button>
         {step < 5 ? (
           <button
@@ -230,13 +249,12 @@ export function DownloadWizardPage() {
             onClick={() => {
               const next = Math.min(5, step + 1) as Step;
               setStep(next);
-              // Auto-fetch the diff when entering the diff step.
               if (next === 4 && !diffMutation.data && !diffMutation.isPending) {
                 diffMutation.mutate();
               }
             }}
           >
-            Next <ChevronRight className="h-4 w-4" />
+            {t("common.next")} <ChevronRight className="h-4 w-4" />
           </button>
         ) : null}
       </div>
@@ -245,12 +263,20 @@ export function DownloadWizardPage() {
 }
 
 function Stepper({ step }: { step: Step }) {
-  const labels = ["Dataset", "Variables", "Area", "Period", "Smart Diff", "Confirm"];
+  const { t } = useTranslation();
+  const keys = [
+    "wizard.steps.dataset",
+    "wizard.steps.variables",
+    "wizard.steps.area",
+    "wizard.steps.period",
+    "wizard.steps.smartDiff",
+    "wizard.steps.confirm",
+  ];
   return (
     <ol className="flex items-center gap-2 text-xs">
-      {labels.map((label, i) => (
+      {keys.map((key, i) => (
         <li
-          key={label}
+          key={key}
           className={cn(
             "rounded-full px-3 py-1",
             i === step
@@ -260,7 +286,7 @@ function Stepper({ step }: { step: Step }) {
                 : "bg-ink-100 text-ink-400",
           )}
         >
-          {label}
+          {t(key)}
         </li>
       ))}
     </ol>
@@ -276,9 +302,10 @@ function StepDataset({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-medium">Choose dataset</h2>
+      <h2 className="text-lg font-medium">{t("wizard.chooseDataset")}</h2>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {datasets.map((d) => {
           const isActive = value === d.name;
@@ -288,15 +315,11 @@ function StepDataset({
               : d.name === "era5-land"
                 ? "ERA5-LAND"
                 : d.name.toUpperCase();
+          const descKey = `dashboard.descriptions.${d.name}`;
           const description =
-            d.name === "era5"
-              ? "Atmospheric reanalysis on 0.25° grid -- temperature, pressure, wind, radiation, clouds."
-              : d.name === "era5-land"
-                ? "Land-surface reanalysis on 0.1° grid -- soil temperature, soil moisture, surface fluxes."
-                : d.name === "inmet"
-                  ? "Estações meteorológicas do INMET (Brasil) -- 1 ZIP por ano, todas as estações."
-                  : d.cds_dataset_id || "Fonte de dados.";
-
+            t(descKey, { defaultValue: "" }) ||
+            d.cds_dataset_id ||
+            t("dashboard.fallbackDescription");
           return (
             <button
               key={d.name}
@@ -314,7 +337,8 @@ function StepDataset({
               <div className="text-xl font-semibold text-ink-800">{label}</div>
               <p className="text-sm text-ink-500">{description}</p>
               <div className="mt-2 text-xs text-ink-400">
-                Resolution: {d.grid_resolution_deg}° · {d.variables.length} variables available
+                {t("wizard.resolution")}: {d.grid_resolution_deg}° ·{" "}
+                {t("wizard.variablesAvailable", { count: d.variables.length })}
               </div>
             </button>
           );
@@ -333,62 +357,178 @@ function StepVariables({
   value: string[];
   onChange: (v: string[]) => void;
 }) {
+  const { t } = useTranslation();
+  const [query, setQuery] = useState("");
+  const groups = dataset.variable_groups ?? [];
+  const sections = useMemo(() => {
+    if (groups.length === 0) {
+      return [
+        {
+          id: "__all__",
+          label: t("wizard.variables.allVariables"),
+          variables: dataset.variables,
+        },
+      ];
+    }
+    return groups.map((g) => ({
+      id: g.id,
+      label: g.label,
+      variables: dataset.variables.filter((v) =>
+        (v.groups ?? []).includes(g.id),
+      ),
+    }));
+  }, [groups, dataset.variables, t]);
+
+  const q = query.trim().toLowerCase();
+  const filteredSections = useMemo(() => {
+    if (!q) return sections;
+    return sections
+      .map((s) => ({
+        ...s,
+        variables: s.variables.filter((v) =>
+          [v.api_name, v.full_name, v.description, v.short_name]
+            .filter(Boolean)
+            .some((t) => t.toLowerCase().includes(q)),
+        ),
+      }))
+      .filter((s) => s.variables.length > 0);
+  }, [sections, q]);
+
   function toggle(v: string) {
     onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
   }
 
+  function toggleGroup(api_names: string[]) {
+    const all = api_names.every((n) => value.includes(n));
+    if (all) {
+      // Deselect every variable that belongs to this group.
+      onChange(value.filter((n) => !api_names.includes(n)));
+    } else {
+      // Add anything missing (preserve selections from other groups).
+      const merged = new Set(value);
+      for (const n of api_names) merged.add(n);
+      onChange([...merged]);
+    }
+  }
+
+  const totalSelected = value.length;
+  const totalAvailable = dataset.variables.length;
+
   return (
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-lg font-medium">Select variables</h2>
+        <h2 className="text-lg font-medium">
+          {t("wizard.variables.title")}{" "}
+          <span className="text-sm font-normal text-ink-400">
+            {t("wizard.variables.counter", {
+              selected: totalSelected,
+              total: totalAvailable,
+            })}
+          </span>
+        </h2>
         <div className="space-x-2 text-xs">
           <button
             onClick={() => onChange(dataset.default_variables)}
             className="text-ocean-600 hover:underline"
           >
-            Default preset
+            {t("wizard.variables.defaultPreset")}
           </button>
           <button
             onClick={() => onChange(dataset.variables.map((v) => v.api_name))}
             className="text-ocean-600 hover:underline"
           >
-            All
+            {t("wizard.variables.all")}
           </button>
           <button onClick={() => onChange([])} className="text-ink-400 hover:underline">
-            Clear
+            {t("wizard.variables.clear")}
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-        {dataset.variables.map((v) => {
-          const checked = value.includes(v.api_name);
+
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={t("wizard.variables.filter")}
+        className="input w-full"
+      />
+
+      <div className="space-y-5">
+        {filteredSections.map((section) => {
+          const apiNames = section.variables.map((v) => v.api_name);
+          const selectedInGroup = apiNames.filter((n) =>
+            value.includes(n),
+          ).length;
+          const allSelected =
+            selectedInGroup === apiNames.length && apiNames.length > 0;
           return (
-            <label
-              key={v.api_name}
-              className={cn(
-                "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition",
-                checked
-                  ? "border-ocean-400 bg-ocean-50/60"
-                  : "border-ink-200 bg-white hover:border-ocean-300",
-              )}
-            >
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={checked}
-                onChange={() => toggle(v.api_name)}
-              />
-              <div className="flex-1">
-                <div className="flex items-baseline justify-between">
-                  <span className="font-medium text-ink-800">{v.full_name}</span>
-                  <span className="font-mono text-[11px] text-ink-400">{v.unit}</span>
-                </div>
-                <div className="text-xs text-ink-400">{v.api_name}</div>
-                <div className="mt-1 text-xs text-ink-500">{v.description}</div>
+            <section key={section.id} className="space-y-2">
+              <div className="flex items-baseline justify-between border-b border-ink-100 pb-1">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-600">
+                  {section.label}{" "}
+                  <span className="ml-1 text-xs font-normal text-ink-400">
+                    {t("wizard.variables.sectionCounter", {
+                      selected: selectedInGroup,
+                      total: apiNames.length,
+                    })}
+                  </span>
+                </h3>
+                <button
+                  type="button"
+                  className="text-xs text-ocean-600 hover:underline"
+                  onClick={() => toggleGroup(apiNames)}
+                  disabled={apiNames.length === 0}
+                >
+                  {allSelected
+                    ? t("wizard.variables.deselectAll")
+                    : t("wizard.variables.selectAll")}
+                </button>
               </div>
-            </label>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {section.variables.map((v) => {
+                  const checked = value.includes(v.api_name);
+                  return (
+                    <label
+                      key={`${section.id}-${v.api_name}`}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition",
+                        checked
+                          ? "border-ocean-400 bg-ocean-50/60"
+                          : "border-ink-200 bg-white hover:border-ocean-300",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={checked}
+                        onChange={() => toggle(v.api_name)}
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-baseline justify-between">
+                          <span className="font-medium text-ink-800">
+                            {v.full_name}
+                          </span>
+                          <span className="font-mono text-[11px] text-ink-400">
+                            {v.unit}
+                          </span>
+                        </div>
+                        <div className="text-xs text-ink-400">{v.api_name}</div>
+                        <div className="mt-1 text-xs text-ink-500">
+                          {v.description}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
           );
         })}
+        {filteredSections.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-ink-200 p-6 text-center text-sm text-ink-400">
+            {t("wizard.variables.nothingMatches", { query })}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -449,22 +589,29 @@ const UF_LIST = [
 function StepArea({
   value,
   onChange,
+  clipRegions,
+  onClipRegionsChange,
 }: {
   value: [number, number, number, number];
   onChange: (v: [number, number, number, number]) => void;
+  clipRegions: string[];
+  onClipRegionsChange: (regions: string[]) => void;
 }) {
-  const [selectedUfs, setSelectedUfs] = useState<string[]>([]);
+  const { t } = useTranslation();
+  // Mirror `clipRegions` for UF buttons. ["BR"] selects the country
+  // chip; UF siglas select individual states; [] = no clip.
+  const selectedUfs = clipRegions.filter((r) => r !== "BR");
+  const brSelected = clipRegions.includes("BR");
   const { data: ufBboxes } = useQuery({
     queryKey: ["regions-uf"],
     queryFn: api.regions.uf,
   });
 
   function applyUfs(ufs: string[]) {
-    setSelectedUfs(ufs);
+    onClipRegionsChange(ufs);
     if (ufs.length === 0 || !ufBboxes) return;
     const sel = ufBboxes.filter((b) => ufs.includes(b.uf));
     if (sel.length === 0) return;
-    // Union covering every selected state: widest N/E, lowest W/S.
     const north = Math.max(...sel.map((b) => b.north));
     const west = Math.min(...sel.map((b) => b.west));
     const south = Math.min(...sel.map((b) => b.south));
@@ -472,29 +619,38 @@ function StepArea({
     onChange([north, west, south, east]);
   }
 
+  function applyBrazil() {
+    onClipRegionsChange(["BR"]);
+    const brazil = AREA_PRESETS.find((p) => p.id === "brazil");
+    if (brazil) onChange(brazil.bbox);
+  }
+
   function toggleUf(uf: string) {
+    const base = brSelected ? [] : selectedUfs;
     applyUfs(
-      selectedUfs.includes(uf)
-        ? selectedUfs.filter((x) => x !== uf)
-        : [...selectedUfs, uf],
+      base.includes(uf) ? base.filter((x) => x !== uf) : [...base, uf],
     );
   }
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-medium">Geographic area</h2>
+      <h2 className="text-lg font-medium">{t("wizard.area.title")}</h2>
       <div className="flex flex-wrap gap-2">
-        {Object.entries(AREA_PRESETS).map(([name, bbox]) => (
+        {AREA_PRESETS.map((preset) => (
           <button
-            key={name}
+            key={preset.id}
             className="btn-outline"
             onClick={() => {
-              setSelectedUfs([]);
-              onChange(bbox);
+              if (preset.id === "brazil") {
+                applyBrazil();
+              } else {
+                onClipRegionsChange([]);
+                onChange(preset.bbox);
+              }
             }}
           >
             <MapPin className="h-3.5 w-3.5" />
-            {name}
+            {t(`wizard.area.presets.${preset.id}`)}
           </button>
         ))}
       </div>
@@ -502,28 +658,35 @@ function StepArea({
       <div className="rounded-xl border border-ink-200 p-4">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
-            Brasil — estados (UF)
+            {t("wizard.area.brazilRegions")}
           </span>
           <div className="flex gap-3 text-xs">
             <button
               type="button"
               className="text-ocean-600 hover:underline"
+              onClick={applyBrazil}
+            >
+              {t("wizard.area.brazilWhole")}
+            </button>
+            <button
+              type="button"
+              className="text-ocean-600 hover:underline"
               onClick={() => applyUfs([...UF_LIST])}
             >
-              Selecionar todos
+              {t("wizard.area.allUfs")}
             </button>
             <button
               type="button"
               className="text-ink-500 hover:underline"
-              onClick={() => setSelectedUfs([])}
+              onClick={() => onClipRegionsChange([])}
             >
-              Limpar
+              {t("wizard.area.noClip")}
             </button>
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {UF_LIST.map((uf) => {
-            const on = selectedUfs.includes(uf);
+            const on = !brSelected && selectedUfs.includes(uf);
             return (
               <button
                 key={uf}
@@ -540,24 +703,31 @@ function StepArea({
             );
           })}
         </div>
-        {selectedUfs.length > 0 ? (
-          <p className="mt-2 text-[11px] text-ink-400">
-            {selectedUfs.length} estado(s) — bounding box ajustado para
-            cobrir a seleção.
+        {brSelected ? (
+          <p className="mt-2 text-[11px] text-ocean-600">
+            {t("wizard.area.brazilClipNote")}
           </p>
-        ) : null}
+        ) : selectedUfs.length > 0 ? (
+          <p className="mt-2 text-[11px] text-ocean-600">
+            {t("wizard.area.ufsClipNote", { count: selectedUfs.length })}
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] text-ink-400">
+            {t("wizard.area.noClipNote")}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {[
-          { label: "North", idx: 0 },
-          { label: "West", idx: 1 },
-          { label: "South", idx: 2 },
-          { label: "East", idx: 3 },
-        ].map(({ label, idx }) => (
-          <label key={label} className="block">
+          { key: "wizard.area.north", idx: 0 },
+          { key: "wizard.area.west", idx: 1 },
+          { key: "wizard.area.south", idx: 2 },
+          { key: "wizard.area.east", idx: 3 },
+        ].map(({ key, idx }) => (
+          <label key={key} className="block">
             <span className="text-xs uppercase tracking-wide text-ink-500">
-              {label}
+              {t(key)}
             </span>
             <CoordInput
               value={value[idx]}
@@ -569,15 +739,17 @@ function StepArea({
                   number,
                 ];
                 next[idx] = n;
+                // Manual bbox edit invalidates the polygon clip: the
+                // resulting rectangle no longer corresponds to the union
+                // of the selected regions.
+                if (clipRegions.length > 0) onClipRegionsChange([]);
                 onChange(next);
               }}
             />
           </label>
         ))}
       </div>
-      <p className="text-xs text-ink-400">
-        Bounding box order: [North, West, South, East] in decimal degrees.
-      </p>
+      <p className="text-xs text-ink-400">{t("wizard.area.bboxOrder")}</p>
     </div>
   );
 }
@@ -597,13 +769,16 @@ function StepPeriod({
   onEnd: (v: string) => void;
   onHours: (v: string[]) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-medium">Period & hours</h2>
+      <h2 className="text-lg font-medium">{t("wizard.period.title")}</h2>
 
       <div className="grid grid-cols-2 gap-4">
         <label>
-          <span className="text-xs uppercase tracking-wide text-ink-500">Start date</span>
+          <span className="text-xs uppercase tracking-wide text-ink-500">
+            {t("wizard.period.startDate")}
+          </span>
           <input
             type="date"
             className="input mt-1"
@@ -612,7 +787,9 @@ function StepPeriod({
           />
         </label>
         <label>
-          <span className="text-xs uppercase tracking-wide text-ink-500">End date</span>
+          <span className="text-xs uppercase tracking-wide text-ink-500">
+            {t("wizard.period.endDate")}
+          </span>
           <input
             type="date"
             className="input mt-1"
@@ -624,16 +801,18 @@ function StepPeriod({
 
       <div>
         <div className="mb-2 flex items-baseline justify-between">
-          <span className="text-xs uppercase tracking-wide text-ink-500">Hours (UTC)</span>
+          <span className="text-xs uppercase tracking-wide text-ink-500">
+            {t("wizard.period.hours")}
+          </span>
           <div className="space-x-2 text-xs">
             <button onClick={() => onHours(HOURS_ALL)} className="text-ocean-600 hover:underline">
-              All 24
+              {t("wizard.period.hoursAll")}
             </button>
             <button onClick={() => onHours(HOURS_3H)} className="text-ocean-600 hover:underline">
-              Every 3h
+              {t("wizard.period.hours3h")}
             </button>
             <button onClick={() => onHours(HOURS_SYNOPTIC)} className="text-ocean-600 hover:underline">
-              Synoptic (0/6/12/18)
+              {t("wizard.period.hoursSynoptic")}
             </button>
           </div>
         </div>
@@ -970,6 +1149,7 @@ function StepConfirm({
   startDate,
   endDate,
   applyDiff,
+  clipRegions,
   estimate,
   run,
   onEstimate,
@@ -982,12 +1162,19 @@ function StepConfirm({
   startDate: string;
   endDate: string;
   applyDiff: boolean;
+  clipRegions: string[];
   estimate: ReturnType<typeof useMutation<any, any, any, any>>;
   run: ReturnType<typeof useMutation<any, any, any, any>>;
   onEstimate: () => void;
   onRun: () => void;
 }) {
   const result = estimate.data;
+  const clipLabel =
+    clipRegions.length === 0
+      ? "No clip (raw bbox)"
+      : clipRegions.includes("BR")
+        ? "Brasil (polygon, half-cell buffer)"
+        : `UF(s): ${clipRegions.join(", ")} (half-cell buffer)`;
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-medium">Confirm & start</h2>
@@ -997,6 +1184,7 @@ function StepConfirm({
         <Row label="Variables" value={`${variables.length} selected`} />
         <Row label="Hours" value={`${hours.length} of 24`} />
         <Row label="Area" value={`N ${area[0]} · W ${area[1]} · S ${area[2]} · E ${area[3]}`} />
+        <Row label="Polygon clip" value={clipLabel} />
         <Row
           label="Smart diff"
           value={applyDiff ? "Enabled (skip cached)" : "Disabled (full request)"}

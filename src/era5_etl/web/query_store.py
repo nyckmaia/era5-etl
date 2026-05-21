@@ -259,10 +259,10 @@ def list_templates() -> list[dict[str, Any]]:
 
 __all__ = [
     "HISTORY_CAP",
-    "list_history",
     "append_history",
-    "patch_history",
-    "delete_history",
     "clear_history",
+    "delete_history",
+    "list_history",
     "list_templates",
+    "patch_history",
 ]

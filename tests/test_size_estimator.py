@@ -6,7 +6,6 @@ import pytest
 
 from era5_etl.download.size_estimator import (
     BYTES_PER_VALUE,
-    DEFAULT_MAX_REQUEST_BYTES,
     ERA5_LAND_RESOLUTION,
     ERA5_RESOLUTION,
     AreaSplit,

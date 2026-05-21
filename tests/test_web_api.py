@@ -79,6 +79,115 @@ def test_pipeline_estimate(client: TestClient):
     assert payload["chunks"][0]["dataset" if False else "year"] == 2024
 
 
+def test_pipeline_estimate_accepts_clip_regions(client: TestClient):
+    body = {
+        "dataset": "era5-land",
+        "variables": ["2m_temperature"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31",
+        "area": [-19.78, -53.10, -25.31, -44.16],
+        "hours": ["00:00", "12:00"],
+        "clip_regions": ["SP", "RJ"],
+    }
+    r = client.post("/api/pipeline/estimate", json=body)
+    assert r.status_code == 200
+
+
+def test_pipeline_run_rejects_clip_regions_for_inmet(client: TestClient):
+    body = {
+        "dataset": "inmet",
+        "variables": [],
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "area": [0, 0, 0, 0],
+        "hours": [],
+        "apply_diff": False,
+        "clip_regions": ["SP"],
+    }
+    r = client.post("/api/pipeline/run", json=body)
+    assert r.status_code == 400
+    assert "gridded" in r.json()["detail"].lower()
+
+
+def test_pipeline_run_rejects_unknown_region(client: TestClient):
+    body = {
+        "dataset": "era5",
+        "variables": ["2m_temperature"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-02",
+        "area": [-19.78, -53.10, -25.31, -44.16],
+        "hours": ["00:00"],
+        "apply_diff": False,
+        "clip_regions": ["XX"],
+    }
+    r = client.post("/api/pipeline/run", json=body)
+    assert r.status_code == 400
+    assert "unknown region" in r.json()["detail"].lower()
+
+
+def test_regions_clip_available_gridded(client: TestClient):
+    r = client.get("/api/regions/clip-available?dataset=era5")
+    assert r.status_code == 200
+    regions = r.json()["regions"]
+    assert "BR" in regions
+    assert "SP" in regions
+    assert len(regions) == 28
+
+
+def test_regions_clip_available_inmet_returns_empty(client: TestClient):
+    r = client.get("/api/regions/clip-available?dataset=inmet")
+    assert r.status_code == 200
+    assert r.json() == {"regions": []}
+
+
+def test_regions_clip_available_unknown_dataset(client: TestClient):
+    r = client.get("/api/regions/clip-available?dataset=nope")
+    assert r.status_code == 400
+
+
+# --- Variable groups in /api/datasets ---------------------------------
+
+
+def test_era5_dataset_returns_variable_groups(client: TestClient):
+    r = client.get("/api/datasets/era5")
+    assert r.status_code == 200
+    payload = r.json()
+    groups = payload["variable_groups"]
+    ids = [g["id"] for g in groups]
+    assert ids[0] == "popular"
+    assert "temperature_pressure" in ids
+    assert "wind" in ids
+    assert "ocean_waves" in ids
+    assert "other" in ids
+    assert len(groups) == 15
+    # Order must be preserved.
+    assert groups == sorted(groups, key=lambda g: g["order"])
+
+
+def test_era5_variable_2m_temperature_in_multiple_groups(client: TestClient):
+    r = client.get("/api/datasets/era5")
+    payload = r.json()
+    t2m = next(v for v in payload["variables"] if v["api_name"] == "2m_temperature")
+    assert "popular" in t2m["groups"]
+    assert "temperature_pressure" in t2m["groups"]
+
+
+def test_era5_land_has_no_variable_groups(client: TestClient):
+    """ERA5-LAND ships an ungrouped YAML; the API echoes an empty list."""
+    r = client.get("/api/datasets/era5-land")
+    payload = r.json()
+    assert payload["variable_groups"] == []
+    # Variables also report empty groups (default factory).
+    assert all(v["groups"] == [] for v in payload["variables"])
+
+
+def test_era5_variable_count():
+    """Lock down the number of ERA5 single-level variables (regression guard)."""
+    from era5_etl.datasets import DatasetRegistry
+
+    assert len(DatasetRegistry.get("era5").variables) == 262
+
+
 def test_validate_path(client: TestClient, tmp_path: Path):
     r = client.get("/api/settings/validate-path", params={"path": str(tmp_path)})
     assert r.status_code == 200

@@ -14,6 +14,17 @@ class DatasetVariableOut(BaseModel):
     full_name: str
     description: str
     unit: str
+    #: Wizard sections this variable belongs to. Empty for datasets
+    #: without a grouped layout (UI then renders a flat list).
+    groups: list[str] = Field(default_factory=list)
+
+
+class VariableGroupOut(BaseModel):
+    """A wizard section title; ``order`` matches its position in the YAML."""
+
+    id: str
+    label: str
+    order: int
 
 
 class DatasetOut(BaseModel):
@@ -28,19 +39,19 @@ class DatasetOut(BaseModel):
     # show the station map instead). Defaulted for backward compatibility.
     source_kind: str = "cds_grid"
     is_gridded: bool = True
+    #: Sections (in display order) for the wizard variable picker. Empty
+    #: list = ungrouped (flat) layout.
+    variable_groups: list[VariableGroupOut] = Field(default_factory=list)
+    #: Whether the dataset has any user-intentionally-downloaded parquet
+    #: under ``<base>/climate_data_store_db/<dataset>/``. The bootstrap
+    #: grid parquet at ``_grids/<dataset>_grid.parquet`` does NOT count —
+    #: this lets the /query SCHEMA panel hide datasets that were only
+    #: bootstrapped for INMET joins.
+    has_data: bool = False
 
 
 class InmetYearsOut(BaseModel):
     years: list[int]
-
-
-class InmetPrerequisiteOut(BaseModel):
-    """ERA5/ERA5-LAND readiness gate for INMET ingestion."""
-
-    era5: bool
-    era5_land: bool
-    ok: bool
-    missing: list[str]
 
 
 class StationPointOut(BaseModel):
@@ -121,6 +132,14 @@ class EstimateIn(BaseModel):
     area: list[float] = Field(min_length=4, max_length=4)
     hours: list[str]
     max_request_bytes: int = 500 * 1024 * 1024
+    clip_regions: list[str] | None = Field(
+        default=None,
+        description=(
+            "Brazilian UF sigla(s) (e.g. ['SP','RJ']) or ['BR']. Echoed by "
+            "/estimate for symmetry with /run; the size estimate itself is "
+            "unaffected (clipping is post-download, disk-only)."
+        ),
+    )
 
 
 class EstimateChunkOut(BaseModel):
@@ -167,6 +186,14 @@ class PipelineRunIn(BaseModel):
         description=(
             "Non-grid sources (INMET) only: exact yearly ZIPs to fetch "
             "(may be non-contiguous). Ignored by CDS/grid datasets."
+        ),
+    )
+    clip_regions: list[str] | None = Field(
+        default=None,
+        description=(
+            "Brazilian UF sigla(s) (e.g. ['SP','RJ']) or ['BR']. When set, "
+            "grid points outside the polygon (with half-cell buffer) are "
+            "dropped before Parquet write. Gridded datasets only."
         ),
     )
 
@@ -281,7 +308,7 @@ class BuildSpec(BaseModel):
 
 class UserObjectIn(BaseModel):
     name: str
-    kind: str  # "view" | "macro"
+    kind: Literal["view", "macro"]
     sql: str
     #: Optional visual-builder snapshot (sources/columns/joins). When
     #: present, the builder modal re-hydrates from it on edit.
@@ -291,7 +318,7 @@ class UserObjectIn(BaseModel):
 class UserObjectOut(BaseModel):
     id: str
     name: str
-    kind: str
+    kind: Literal["view", "macro"]
     sql: str
     builder_spec: BuildSpec | None = None
     ok: bool = True
@@ -444,41 +471,41 @@ class CredentialTestOut(BaseModel):
 
 
 __all__ = [
-    "DatasetVariableOut",
+    "CredentialStatusOut",
+    "CredentialTestOut",
+    "CredentialsIn",
+    "DatasetDeleteOut",
     "DatasetOut",
-    "InmetYearsOut",
-    "InmetPrerequisiteOut",
-    "StationPointOut",
-    "StationInventoryOut",
-    "StorageStatsOut",
-    "PathValidationOut",
-    "UserConfigOut",
-    "UserConfigIn",
-    "EstimateIn",
+    "DatasetVariableOut",
+    "DiffPreviewIn",
+    "DiffPreviewOut",
+    "DiffPreviewSampleRow",
     "EstimateChunkOut",
+    "EstimateIn",
     "EstimateOut",
+    "InmetYearsOut",
+    "PathValidationOut",
     "PipelineRunIn",
     "PipelineRunOut",
-    "DiffPreviewIn",
-    "DiffPreviewSampleRow",
-    "DiffPreviewOut",
+    "QueryHistoryAppendIn",
+    "QueryHistoryEntry",
+    "QueryHistoryPatch",
     "QueryIn",
     "QueryOut",
-    "DatasetDeleteOut",
-    "QueryHistoryEntry",
-    "QueryHistoryAppendIn",
-    "QueryHistoryPatch",
-    "TemplateItem",
-    "UfBboxOut",
-    "VersionOut",
-    "CredentialStatusOut",
-    "CredentialsIn",
-    "CredentialTestOut",
+    "StationInventoryOut",
+    "StationPointOut",
+    "StorageStatsOut",
     "TSLocationIn",
     "TSSeriesIn",
-    "TimeseriesIn",
     "TSSeriesOut",
-    "TimeseriesOut",
     "TSViewMetaOut",
+    "TemplateItem",
+    "TimeseriesIn",
     "TimeseriesMetaOut",
+    "TimeseriesOut",
+    "UfBboxOut",
+    "UserConfigIn",
+    "UserConfigOut",
+    "VariableGroupOut",
+    "VersionOut",
 ]

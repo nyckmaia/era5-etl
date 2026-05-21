@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from era5_etl.web.models import BuildSpec, JoinPair, SourceSel  # noqa: F401
+from era5_etl.web.models import BuildSpec, JoinPair, SourceSel
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -78,4 +78,4 @@ def build_view_sql(spec: BuildSpec) -> str:
     )
 
 
-__all__ = ["build_view_sql", "BuildSpec", "JoinPair", "SourceSel"]
+__all__ = ["BuildSpec", "JoinPair", "SourceSel", "build_view_sql"]

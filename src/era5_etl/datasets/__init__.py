@@ -12,7 +12,7 @@ Public entry points::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from era5_etl.datasets.base import DatasetConfig
@@ -26,11 +26,11 @@ class DatasetRegistry:
     don't need to remember to import sub-packages explicitly.
     """
 
-    _registry: dict[str, "DatasetConfig"] = {}
-    _loaded: bool = False
+    _registry: ClassVar[dict[str, DatasetConfig]] = {}
+    _loaded: ClassVar[bool] = False
 
     @classmethod
-    def register(cls, config_cls: type["DatasetConfig"]) -> type["DatasetConfig"]:
+    def register(cls, config_cls: type[DatasetConfig]) -> type[DatasetConfig]:
         instance = config_cls()
         if not instance.NAME:
             raise ValueError(f"{config_cls.__name__} must set a NAME")
@@ -42,12 +42,12 @@ class DatasetRegistry:
         if cls._loaded:
             return
         # Importing the sub-packages triggers their @register decorators.
-        from era5_etl.datasets import era5, era5_land, inmet  # noqa: F401
+        from era5_etl.datasets import era5, era5_land, inmet
 
         cls._loaded = True
 
     @classmethod
-    def get(cls, name: str) -> "DatasetConfig":
+    def get(cls, name: str) -> DatasetConfig:
         cls.ensure_loaded()
         try:
             return cls._registry[name]
@@ -61,7 +61,7 @@ class DatasetRegistry:
         return tuple(sorted(cls._registry))
 
     @classmethod
-    def all(cls) -> tuple["DatasetConfig", ...]:
+    def all(cls) -> tuple[DatasetConfig, ...]:
         cls.ensure_loaded()
         return tuple(cls._registry[name] for name in cls.names())
 

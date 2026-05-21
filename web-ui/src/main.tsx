@@ -5,6 +5,7 @@ import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 
 import "./globals.css";
+import "./i18n"; // initialise translations before any component renders
 import { routeTree } from "./router";
 
 const queryClient = new QueryClient({

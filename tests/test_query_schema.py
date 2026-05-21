@@ -64,7 +64,7 @@ def test_query_returns_column_types(client: TestClient, tmp_path: Path) -> None:
     assert body["columns"] == ["latitude", "hour_utc", "t2m", "date"]
     assert "column_types" in body
     assert len(body["column_types"]) == len(body["columns"])
-    tmap = dict(zip(body["columns"], body["column_types"]))
+    tmap = dict(zip(body["columns"], body["column_types"], strict=False))
     assert tmap["latitude"] == "float"
     assert tmap["hour_utc"] == "int"
     assert tmap["t2m"] == "float"

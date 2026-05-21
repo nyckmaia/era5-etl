@@ -179,6 +179,65 @@ def _print_area(kind: str, name: str, area: list[float]) -> None:
     )
 
 
+def _resolve_clip(
+    regions: list[str] | None,
+    no_clip: bool,
+    *,
+    dataset: str | None = None,
+) -> tuple[list[str] | None, list[float] | None]:
+    """Resolve ``--region``/``--no-clip`` into (clip_regions, area).
+
+    ``regions`` may contain UF siglas (e.g. "SP") and/or the special token
+    "BR" (whole country). When non-empty:
+
+    - The area returned is the bbox-union over the listed regions (UFs from
+      ``uf.csv``, Brazil from ``pais.csv``). The caller can prefer an
+      explicit ``--uf``/``--pais``/etc. area over this if it passed one.
+    - ``clip_regions`` is the same list — unless ``--no-clip`` is set, in
+      which case it is ``None`` (download the bbox without clipping).
+
+    Returns ``(None, None)`` when ``regions`` is None/empty. Validation of
+    region tokens against the membership table happens later in
+    :meth:`PipelineConfig.create`; when ``dataset`` is provided we
+    pre-validate here so the error is surfaced before the area is computed.
+    """
+    if not regions:
+        return (None, None)
+
+    norm = [r.strip().upper() for r in regions if r.strip()]
+    if dataset is not None:
+        from era5_etl.regions.membership import validate_regions
+
+        try:
+            validate_regions(dataset, norm)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+    from era5_etl.utils.ibge_regions import RegionType, lookup_region_bbox
+
+    norths: list[float] = []
+    wests: list[float] = []
+    souths: list[float] = []
+    easts: list[float] = []
+    for token in norm:
+        if token == "BR":
+            bbox = lookup_region_bbox(RegionType.PAIS, "Brasil")
+        else:
+            bbox = lookup_region_bbox(RegionType.UF, token)
+        norths.append(bbox[0])
+        wests.append(bbox[1])
+        souths.append(bbox[2])
+        easts.append(bbox[3])
+
+    area = [max(norths), min(wests), min(souths), max(easts)]
+    label = "+".join(norm)
+    _print_area("region(s)", label, area)
+    if no_clip:
+        console.print("[yellow]--no-clip set: polygon clipping disabled.[/yellow]")
+        return (None, area)
+    return (norm, area)
+
+
 def _expand_datasets(name: str) -> list[str]:
     """``"all"`` -> all registered datasets; otherwise validate and return a single name."""
     if name == "all":
@@ -229,6 +288,21 @@ def pipeline(
     regiao_intermediaria: str | None = typer.Option(
         None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
     ),
+    regions: list[str] | None = typer.Option(
+        None,
+        "--region",
+        "-r",
+        help=(
+            "UF sigla (e.g. SP, RJ) or 'BR' for whole-country. Repeatable. "
+            "Sets the download bbox to the union of the regions AND clips "
+            "grid points outside the polygon(s) before writing Parquet."
+        ),
+    ),
+    no_clip: bool = typer.Option(
+        False,
+        "--no-clip",
+        help="With --region: keep the bbox-derived area but skip the polygon clip.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -236,7 +310,11 @@ def pipeline(
     ),
 ) -> None:
     """Execute the complete ERA5 data pipeline (download + convert)."""
-    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+    clip_regions, region_area = _resolve_clip(regions, no_clip)
+    if region_area is not None:
+        area = region_area
+    else:
+        area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
     datasets = _expand_datasets(dataset)
 
     for ds_name in datasets:
@@ -250,6 +328,7 @@ def pipeline(
             override=override,
             compression=compression,  # type: ignore[arg-type]
             area=area,
+            clip_regions=clip_regions,
         )
         config.transform.max_workers = workers
 
@@ -396,6 +475,20 @@ def download(
     regiao_intermediaria: str | None = typer.Option(
         None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
     ),
+    regions: list[str] | None = typer.Option(
+        None,
+        "--region",
+        "-r",
+        help=(
+            "UF sigla (e.g. SP, RJ) or 'BR'. Repeatable. Sets the bbox to "
+            "the union and clips grid points outside the polygon."
+        ),
+    ),
+    no_clip: bool = typer.Option(
+        False,
+        "--no-clip",
+        help="With --region: keep the bbox-derived area but skip the polygon clip.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, do not download"),
     apply_diff: bool = typer.Option(
         True,
@@ -409,7 +502,11 @@ def download(
     ),
 ) -> None:
     """Download ERA5/ERA5-Land data from Copernicus CDS."""
-    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+    clip_regions, region_area = _resolve_clip(regions, no_clip)
+    if region_area is not None:
+        area = region_area
+    else:
+        area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Downloading {ds_name}[/bold blue]\n")
         _auto_rebuild_coverage(data_dir, ds_name)
@@ -421,6 +518,7 @@ def download(
             variables=variables,
             override=override,
             area=area,
+            clip_regions=clip_regions if _is_gridded(ds_name) else None,
         )
 
         if dry_run:
@@ -463,9 +561,25 @@ def convert(
     compression: str = typer.Option("zstd", "--compression", help="Parquet compression"),
     override: bool = typer.Option(False, "--override", help="Override existing files"),
     workers: int | None = typer.Option(None, "--workers", "-w", help="Parallel workers"),
+    regions: list[str] | None = typer.Option(
+        None,
+        "--region",
+        "-r",
+        help=(
+            "UF sigla (e.g. SP) or 'BR'. Repeatable. Clip grid points "
+            "outside the polygon before writing Parquet."
+        ),
+    ),
+    no_clip: bool = typer.Option(
+        False, "--no-clip", help="Skip polygon clipping even if --region is given."
+    ),
 ) -> None:
     """Convert downloaded source files (NetCDF or INMET CSV) to Parquet."""
     from era5_etl.pipeline.source_handlers import get_handler
+
+    # convert doesn't drive a download, so we only use the clip_regions side
+    # of _resolve_clip. The returned area is ignored here.
+    clip_regions, _ = _resolve_clip(regions, no_clip)
 
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Converting -- {ds_name}[/bold blue]\n")
@@ -474,6 +588,7 @@ def convert(
             dataset=ds_name,
             override=override,
             compression=compression,  # type: ignore[arg-type]
+            clip_regions=clip_regions if _is_gridded(ds_name) else None,
         )
         try:
             converter = get_handler(ds_name).make_converter(
@@ -519,6 +634,20 @@ def update(
     regiao_intermediaria: str | None = typer.Option(
         None, "--regiao-intermediaria", help="Intermediate region name (IBGE)"
     ),
+    regions: list[str] | None = typer.Option(
+        None,
+        "--region",
+        "-r",
+        help=(
+            "UF sigla (e.g. SP) or 'BR'. Repeatable. Bbox = union; clipping "
+            "applied at conversion time."
+        ),
+    ),
+    no_clip: bool = typer.Option(
+        False,
+        "--no-clip",
+        help="With --region: keep the bbox-derived area but skip the polygon clip.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Only list the chunks that would be downloaded"
     ),
@@ -534,7 +663,11 @@ def update(
     from era5_etl.download.request_planner import plan_incremental_requests
     from era5_etl.storage.manifest import Manifest
 
-    area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
+    clip_regions, region_area = _resolve_clip(regions, no_clip)
+    if region_area is not None:
+        area = region_area
+    else:
+        area = _resolve_area(pais, municipio, uf, regiao_imediata, regiao_intermediaria)
 
     for ds_name in _expand_datasets(dataset):
         console.print(f"\n[bold blue]Update -- {ds_name}[/bold blue]\n")
@@ -554,6 +687,7 @@ def update(
             end_date=end_date,
             variables=variables,
             area=area,
+            clip_regions=clip_regions,
         )
         manifest = Manifest(data_dir, ds_name)
         missing = plan_incremental_requests(config.download, manifest)
@@ -782,7 +916,7 @@ def ui(
 ) -> None:
     """Launch the local web UI (FastAPI + React)."""
     try:
-        import uvicorn  # type: ignore[import-untyped]
+        import uvicorn
 
         from era5_etl.web.server import create_app
     except ImportError as exc:

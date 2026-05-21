@@ -309,7 +309,18 @@ export function QueryPage() {
 
       <div className="card flex min-h-0 flex-1 overflow-hidden p-0">
         <SchemaSidebar
-          datasets={datasets?.map((d) => d.name) ?? []}
+          // Only show datasets the user has actually downloaded data
+          // for. Bootstrap grid parquets (under ``_grids/``) do NOT
+          // count as data, so the SCHEMA panel hides ERA5/ERA5-LAND
+          // until the user runs a real download. The ViewBuilderModal
+          // below keeps the full list so users can still author a view
+          // that references a not-yet-downloaded grid (it'll show with
+          // a WARN badge until the data arrives).
+          datasets={
+            datasets
+              ?.filter((d) => d.has_data === true)
+              .map((d) => d.name) ?? []
+          }
           userObjects={userObjects ?? []}
           collapsed={leftCollapsed}
           onToggle={() => setLeftCollapsed((c) => !c)}

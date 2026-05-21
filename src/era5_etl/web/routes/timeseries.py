@@ -52,7 +52,7 @@ _VIEW_DATASET = {"era5": "era5", "era5_land": "era5-land", "inmet": "inmet"}
 def _view_columns(conn, view: str) -> list[tuple[str, str]]:
     """(name, python_type) for every column of a registered view."""
     schema = conn.execute(
-        f'SELECT * FROM "{view}" LIMIT 0'  # noqa: S608 -- view is allowlisted
+        f'SELECT * FROM "{view}" LIMIT 0'
     ).fetch_arrow_table().schema
     return [
         (schema.field(i).name, arrow_type_to_python(schema.field(i).type))
@@ -74,7 +74,7 @@ def _date_range(data_dir: Path, view: str) -> tuple[str | None, str | None]:
                 lo.isoformat() if lo else None,
                 hi.isoformat() if hi else None,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return (None, None)
     # inmet / era5_inmet -> inmet station index
     if not (resolve_dataset_dir(data_dir, "inmet") / STATION_INDEX_FILENAME).exists():
@@ -84,13 +84,19 @@ def _date_range(data_dir: Path, view: str) -> tuple[str | None, str | None]:
             df = idx.query_stations()
         if df.is_empty():
             return (None, None)
-        lo = df.get_column("date_min").drop_nulls().min()
-        hi = df.get_column("date_max").drop_nulls().max()
+        # Polars' Series.min/max are typed as Any; we know these columns
+        # store ``date`` values.
+        import datetime as _dt
+
+        lo_raw = df.get_column("date_min").drop_nulls().min()
+        hi_raw = df.get_column("date_max").drop_nulls().max()
+        lo_d = lo_raw if isinstance(lo_raw, _dt.date) else None
+        hi_d = hi_raw if isinstance(hi_raw, _dt.date) else None
         return (
-            lo.isoformat() if lo is not None else None,
-            hi.isoformat() if hi is not None else None,
+            lo_d.isoformat() if lo_d is not None else None,
+            hi_d.isoformat() if hi_d is not None else None,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return (None, None)
 
 
@@ -116,7 +122,7 @@ def meta(request: Request) -> TimeseriesMetaOut:
                     grid_res = float(
                         DatasetRegistry.get(_VIEW_DATASET[view]).GRID_RESOLUTION_DEG
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     grid_res = None
             out.append(
                 TSViewMetaOut(

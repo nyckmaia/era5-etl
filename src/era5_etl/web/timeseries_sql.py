@@ -18,7 +18,7 @@ as defence-in-depth.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 # Gridded reanalysis views filter by lat/lon; station views by station_id.
 _GRID_VIEWS = {"era5", "era5_land"}
@@ -35,7 +35,7 @@ _TRUNC = {"hour": "hour", "day": "day", "month": "month"}
 _EPS = 1e-4
 
 
-def view_kind(view: str) -> str:
+def view_kind(view: str) -> Literal["grid", "station"]:
     """``"grid"`` for era5/era5_land, ``"station"`` for inmet/era5_inmet."""
     if view in _STATION_VIEWS:
         return "station"
@@ -84,7 +84,7 @@ def location_where(view: str, loc: dict[str, Any]) -> tuple[str, list[Any]]:
         if kind == "region":
             s, n = loc.get("south"), loc.get("north")
             w, e = loc.get("west"), loc.get("east")
-            if None in (s, n, w, e):
+            if s is None or n is None or w is None or e is None:
                 raise ValueError("grid region requires south/north/west/east")
             return (
                 '("latitude" BETWEEN ? AND ? AND "longitude" BETWEEN ? AND ?)',
@@ -201,22 +201,22 @@ def run_series_with_cap(
             bucket_used="month",
             downsampled=True,
         )
-    except Exception as exc:  # noqa: BLE001 -- surface per-series, never 500
+    except Exception as exc:
         return SeriesResult(error=str(exc))
 
 
 def _iso(value: Any) -> str:
     """Timestamp -> ISO-8601 string (UTC, no tz conversion)."""
     if hasattr(value, "isoformat"):
-        return value.isoformat()
+        return str(value.isoformat())
     return str(value)
 
 
 __all__ = [
     "BUCKET_ORDER",
     "SeriesResult",
-    "build_series_sql",
     "bucket_expr",
+    "build_series_sql",
     "location_where",
     "run_series_with_cap",
     "ts_expr",
