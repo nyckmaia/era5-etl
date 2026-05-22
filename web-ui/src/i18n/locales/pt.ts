@@ -270,6 +270,10 @@ export const pt = {
     waitingFirstChunk: "Aguardando o primeiro chunk…",
     recentEvents: "Eventos recentes",
     goToQuery: "Ir para Query",
+    timer: {
+      elapsed: "Tempo decorrido",
+      total: "Tempo total",
+    },
     units: {
       chunk: "chunk",
       year: "ano",

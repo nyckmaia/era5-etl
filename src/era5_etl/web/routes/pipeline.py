@@ -70,6 +70,7 @@ def estimate(body: EstimateIn) -> EstimateOut:
         area=body.area,
         hours=body.hours,
         max_request_bytes=body.max_request_bytes,
+        max_request_fields=body.max_request_fields,
     )
 
     chunks = plan_requests(cfg)
@@ -83,6 +84,7 @@ def estimate(body: EstimateIn) -> EstimateOut:
             area=list(c.area),
             dataset=c.dataset,
             max_bytes=body.max_request_bytes,
+            max_fields=body.max_request_fields,
         )
         total_bytes += est.estimated_bytes
         out_chunks.append(
@@ -95,6 +97,7 @@ def estimate(body: EstimateIn) -> EstimateOut:
                 area=list(c.area),
                 estimated_bytes=est.estimated_bytes,
                 estimated_mb=est.estimated_mb,
+                fields_count=est.fields_count,
             )
         )
 

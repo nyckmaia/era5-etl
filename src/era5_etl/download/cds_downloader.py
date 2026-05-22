@@ -16,6 +16,7 @@ import shutil
 import time
 import zipfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,30 @@ from era5_etl.download.request_planner import (
     plan_requests,
     plan_with_diff,
 )
-from era5_etl.exceptions import CDSAPIError, DownloadError
+from era5_etl.exceptions import CDSAPIError, CDSRequestTooLargeError, DownloadError
 from era5_etl.storage.manifest import ChunkRecord, Manifest
+
+# Substrings the CDS server uses in 403 responses for cost / size limits.
+# Hits any of them → mid-flight adaptive split instead of retrying.
+_CDS_TOO_LARGE_HINTS = (
+    "cost limits exceeded",
+    "your request is too large",
+    "request is too large",
+    "request too large",
+    "exceeds the limit",
+)
+
+
+def _is_cds_too_large(exc: BaseException) -> bool:
+    """Return True iff ``exc`` looks like a CDS 'cost limits exceeded' rejection.
+
+    Matches on the error message text because cdsapi raises generic
+    ``Exception`` subclasses without a structured status code on the
+    catalogue endpoint. False positives are harmless — they trigger a
+    one-time split which simply produces smaller chunks.
+    """
+    msg = str(exc).lower()
+    return any(hint in msg for hint in _CDS_TOO_LARGE_HINTS)
 
 # CDS only accepts the literal string "netcdf"; never GRIB in this project.
 _CDS_DATA_FORMAT = "netcdf"
@@ -205,7 +228,7 @@ class CDSDownloader:
 
     # ---- chunk download ----------------------------------------------------
 
-    def _download_chunk(self, chunk: RequestChunk) -> Path:
+    def _download_chunk(self, chunk: RequestChunk, _depth: int = 0) -> Path:
         output_file = self.config.output_dir / f"{chunk.chunk_id}.nc"
         if output_file.exists() and not self.config.override:
             self.logger.debug("Skipping (already exists): %s", output_file.name)
@@ -218,6 +241,14 @@ class CDSDownloader:
         try:
             self._retrieve_with_retry(request, temp_file, chunk.year, chunk.month)
             self._process_downloaded_file(temp_file, temp_dir, output_file)
+        except CDSRequestTooLargeError as exc:
+            # Clean partial files before splitting.
+            for p in (temp_file, output_file):
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            return self._download_with_adaptive_split(chunk, exc, _depth)
         except Exception as exc:
             for p in (temp_file, output_file):
                 if p.exists():
@@ -236,6 +267,132 @@ class CDSDownloader:
             self.manifest.record(record)
             self.manifest.save()
         return output_file
+
+    #: Maximum recursion depth for adaptive sub-splitting. Starting from
+    #: a one-month chunk, depth 6 reaches ~1-day single-variable single
+    #: sub-area requests — beyond that CDS is the problem, not us.
+    _ADAPTIVE_SPLIT_MAX_DEPTH = 6
+
+    def _download_with_adaptive_split(
+        self,
+        chunk: RequestChunk,
+        cause: CDSRequestTooLargeError,
+        depth: int,
+    ) -> Path:
+        """Split ``chunk`` and re-download each half.
+
+        CDS rejected ``chunk`` as too large even though our planner
+        passed it. Halve the chunk on the most-effective axis (days
+        first, then variables) and recurse. Returns the path of the
+        FIRST resulting sub-NetCDF — but every sub-chunk has been
+        written individually and recorded in the manifest, so the
+        converter picks them all up in the next stage.
+        """
+        if depth >= self._ADAPTIVE_SPLIT_MAX_DEPTH:
+            raise DownloadError(
+                f"CDS rejected {chunk.chunk_id} as too large and adaptive "
+                f"split exhausted (depth {depth}). Last error: {cause}"
+            )
+
+        halves = self._halve_chunk(chunk)
+        if halves is None:
+            raise DownloadError(
+                f"CDS rejected {chunk.chunk_id} as too large but it is "
+                f"already a single variable on a single day — cannot "
+                f"split further. Last error: {cause}"
+            )
+
+        self.logger.warning(
+            "CDS rejected %s as too large; splitting into %d sub-chunk(s) "
+            "and retrying. Cause: %s",
+            chunk.chunk_id,
+            len(halves),
+            cause,
+        )
+        first_path: Path | None = None
+        for sub in halves:
+            self._emit(
+                {
+                    "chunk_id": sub.chunk_id,
+                    "phase": "submitting",
+                    "message": f"Adaptive split: submitting {sub.chunk_id} to CDS",
+                }
+            )
+            path = self._download_chunk(sub, _depth=depth + 1)
+            if first_path is None:
+                first_path = path
+        assert first_path is not None
+        return first_path
+
+    def _halve_chunk(self, chunk: RequestChunk) -> list[RequestChunk] | None:
+        """Halve ``chunk`` on days, then hours, then variables — in that order.
+
+        Splitting on **days** or **hours** keeps every sub-chunk's variable
+        set intact, so each downloaded NetCDF — and the Parquet it converts
+        to — carries the full schema. Splitting on **variables** fragments
+        the schema: the per-date partition merge (`_merge_by_key`) does
+        reunify variable-split chunks, but until it runs the intermediate
+        files have partial columns, which is fragile if a run is
+        interrupted. So variable-split is the last resort.
+
+        Returns ``None`` when the chunk is already a single variable on a
+        single hour of a single day — nothing left to halve.
+        """
+        if len(chunk.days) > 1:
+            mid = len(chunk.days) // 2
+            left_days = chunk.days[:mid]
+            right_days = chunk.days[mid:]
+            return [
+                replace(
+                    chunk,
+                    days=left_days,
+                    chunk_id=(
+                        f"{chunk.chunk_id}_d{left_days[0]:02d}-{left_days[-1]:02d}"
+                    ),
+                ),
+                replace(
+                    chunk,
+                    days=right_days,
+                    chunk_id=(
+                        f"{chunk.chunk_id}_d{right_days[0]:02d}-{right_days[-1]:02d}"
+                    ),
+                ),
+            ]
+        if len(chunk.hours) > 1:
+            mid = len(chunk.hours) // 2
+            left_hours = chunk.hours[:mid]
+            right_hours = chunk.hours[mid:]
+
+            def _h(hours: tuple[str, ...]) -> str:
+                return f"{hours[0].replace(':', '')}-{hours[-1].replace(':', '')}"
+
+            return [
+                replace(
+                    chunk,
+                    hours=left_hours,
+                    chunk_id=f"{chunk.chunk_id}_h{_h(left_hours)}",
+                ),
+                replace(
+                    chunk,
+                    hours=right_hours,
+                    chunk_id=f"{chunk.chunk_id}_h{_h(right_hours)}",
+                ),
+            ]
+        if len(chunk.variables) > 1:
+            mid = len(chunk.variables) // 2
+            return [
+                replace(
+                    chunk,
+                    variables=chunk.variables[:mid],
+                    chunk_id=f"{chunk.chunk_id}_v1of2",
+                ),
+                replace(
+                    chunk,
+                    variables=chunk.variables[mid:],
+                    chunk_id=f"{chunk.chunk_id}_v2of2",
+                ),
+            ]
+        return None
 
     # ---- CDS request building ----------------------------------------------
 
@@ -312,6 +469,13 @@ class CDSDownloader:
                 )
                 return
             except Exception as e:
+                # "Cost limits exceeded" / "Your request is too large" is
+                # NOT a transient failure — retrying the identical
+                # request will fail every single time. Surface a typed
+                # error so ``_download_chunk`` can split adaptively
+                # instead of burning the four configured retries.
+                if _is_cds_too_large(e):
+                    raise CDSRequestTooLargeError(str(e)) from e
                 last_error = e
                 if attempt < self.config.max_retries:
                     delay = self.config.retry_delay * (2**attempt)

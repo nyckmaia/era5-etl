@@ -19,6 +19,19 @@ class DownloadSizeError(DownloadError):
     pass
 
 
+class CDSRequestTooLargeError(DownloadError):
+    """Raised when the CDS server itself rejects a request as too large.
+
+    Distinct from :class:`DownloadSizeError` (which the local planner
+    raises before contacting CDS): this one fires when CDS responds
+    with the 403 'cost limits exceeded' or 'Your request is too large'
+    message. ``CDSDownloader`` catches it and splits the offending
+    chunk adaptively rather than retrying the same request.
+    """
+
+    pass
+
+
 class ProcessingError(ERA5ETLError):
     """Raised when NetCDF processing fails."""
 

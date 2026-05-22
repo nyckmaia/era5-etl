@@ -158,6 +158,156 @@ class TestRetryLogic:
         assert mock_client.retrieve.call_count == 3
         assert mock_sleep.call_count == 2
 
+
+class TestAdaptiveSplitOnTooLarge:
+    """The CDS 'cost limits exceeded' / 'too large' 403 must NOT retry the
+    identical request — it must raise CDSRequestTooLargeError so the
+    downloader can split the chunk and retry the halves."""
+
+    @patch("era5_etl.download.cds_downloader.time.sleep")
+    @patch("era5_etl.download.cds_downloader.cdsapi.Client")
+    def test_too_large_skips_retry_and_raises_typed(
+        self, mock_client_cls: MagicMock, mock_sleep: MagicMock, tmp_path: Path
+    ):
+        from era5_etl.download.cds_downloader import CDSDownloader
+        from era5_etl.exceptions import CDSRequestTooLargeError
+
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = Exception(
+            "403 Client Error: Forbidden ... cost limits exceeded. "
+            "Your request is too large, please reduce your selection."
+        )
+        mock_client_cls.return_value = mock_client
+
+        config = DownloadConfig(
+            output_dir=tmp_path / "out", max_retries=3, retry_delay=1.0
+        )
+        with patch.object(CDSDownloader, "_validate_credentials"):
+            downloader = CDSDownloader(config)
+
+        with pytest.raises(CDSRequestTooLargeError):
+            downloader._retrieve_with_retry({}, tmp_path / "x.nc", 2025, 1)
+
+        # The downloader must NOT retry on this error class — single call.
+        assert mock_client.retrieve.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    @patch("era5_etl.download.cds_downloader.cdsapi.Client")
+    def test_halve_chunk_prefers_days_over_variables(
+        self, mock_client_cls: MagicMock, tmp_path: Path
+    ):
+        from era5_etl.download.cds_downloader import CDSDownloader
+        from era5_etl.download.request_planner import RequestChunk
+
+        config = DownloadConfig(output_dir=tmp_path / "out")
+        with patch.object(CDSDownloader, "_validate_credentials"):
+            d = CDSDownloader(config)
+
+        chunk = RequestChunk(
+            dataset="era5-land",
+            variables=("a", "b", "c", "d"),
+            year=2025,
+            month=1,
+            days=tuple(range(1, 32)),
+            hours=("00:00",),
+            area=(0.0, 0.0, 0.0, 0.0),
+            chunk_id="big",
+        )
+        halves = d._halve_chunk(chunk)
+        assert halves is not None and len(halves) == 2
+        # Days split, variables intact.
+        assert halves[0].variables == chunk.variables
+        assert halves[1].variables == chunk.variables
+        assert len(halves[0].days) + len(halves[1].days) == 31
+        assert halves[0].days[-1] + 1 == halves[1].days[0]
+
+    @patch("era5_etl.download.cds_downloader.cdsapi.Client")
+    def test_halve_chunk_prefers_hours_over_variables(
+        self, mock_client_cls: MagicMock, tmp_path: Path
+    ):
+        """A single-day chunk must split on HOURS before variables —
+        hour-split keeps every sub-chunk's variable set (and thus every
+        Parquet file's schema) intact."""
+        from era5_etl.download.cds_downloader import CDSDownloader
+        from era5_etl.download.request_planner import RequestChunk
+
+        config = DownloadConfig(output_dir=tmp_path / "out")
+        with patch.object(CDSDownloader, "_validate_credentials"):
+            d = CDSDownloader(config)
+
+        chunk = RequestChunk(
+            dataset="era5-land",
+            variables=("a", "b", "c", "d"),
+            year=2025,
+            month=1,
+            days=(1,),  # single day → hours is the next axis
+            hours=tuple(f"{h:02d}:00" for h in range(24)),
+            area=(0.0, 0.0, 0.0, 0.0),
+            chunk_id="day",
+        )
+        halves = d._halve_chunk(chunk)
+        assert halves is not None and len(halves) == 2
+        # Hours split, variables AND days intact.
+        assert halves[0].variables == halves[1].variables == chunk.variables
+        assert halves[0].days == halves[1].days == (1,)
+        assert len(halves[0].hours) + len(halves[1].hours) == 24
+        assert halves[0].hours[-1] == "11:00"
+        assert halves[1].hours[0] == "12:00"
+        assert halves[0].chunk_id == "day_h0000-1100"
+        assert halves[1].chunk_id == "day_h1200-2300"
+
+    @patch("era5_etl.download.cds_downloader.cdsapi.Client")
+    def test_halve_chunk_falls_back_to_variables_as_last_resort(
+        self, mock_client_cls: MagicMock, tmp_path: Path
+    ):
+        """Only when days AND hours are both singular does the split fall
+        through to variables — the schema-fragmenting last resort."""
+        from era5_etl.download.cds_downloader import CDSDownloader
+        from era5_etl.download.request_planner import RequestChunk
+
+        config = DownloadConfig(output_dir=tmp_path / "out")
+        with patch.object(CDSDownloader, "_validate_credentials"):
+            d = CDSDownloader(config)
+
+        chunk = RequestChunk(
+            dataset="era5-land",
+            variables=("a", "b", "c", "d"),
+            year=2025,
+            month=1,
+            days=(1,),          # single day
+            hours=("00:00",),   # single hour → only variables left
+            area=(0.0, 0.0, 0.0, 0.0),
+            chunk_id="single-day",
+        )
+        halves = d._halve_chunk(chunk)
+        assert halves is not None and len(halves) == 2
+        assert halves[0].days == halves[1].days == (1,)
+        assert halves[0].variables == ("a", "b")
+        assert halves[1].variables == ("c", "d")
+
+    @patch("era5_etl.download.cds_downloader.cdsapi.Client")
+    def test_halve_chunk_returns_none_for_minimal_chunk(
+        self, mock_client_cls: MagicMock, tmp_path: Path
+    ):
+        from era5_etl.download.cds_downloader import CDSDownloader
+        from era5_etl.download.request_planner import RequestChunk
+
+        config = DownloadConfig(output_dir=tmp_path / "out")
+        with patch.object(CDSDownloader, "_validate_credentials"):
+            d = CDSDownloader(config)
+
+        chunk = RequestChunk(
+            dataset="era5-land",
+            variables=("a",),
+            year=2025,
+            month=1,
+            days=(1,),
+            hours=("00:00",),
+            area=(0.0, 0.0, 0.0, 0.0),
+            chunk_id="atom",
+        )
+        assert d._halve_chunk(chunk) is None
+
     @patch("era5_etl.download.cds_downloader.time.sleep")
     @patch("era5_etl.download.cds_downloader.cdsapi.Client")
     def test_no_retries(

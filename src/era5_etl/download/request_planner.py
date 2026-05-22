@@ -149,36 +149,51 @@ def plan_requests(config: DownloadConfig) -> list[RequestChunk]:
 # ---------------------------------------------------------------------------
 
 def _split_to_fit(slice_: _Slice, config: DownloadConfig) -> list[_Slice]:
-    """Return one or more slices that each individually fit the size budget."""
+    """Return one or more slices that each individually fit the size budget.
+
+    Cascade order — **days → area → variables**:
+
+    1. **Days** (greedy budget-packing). Keeps the full requested area
+       and variable set in every chunk; each chunk fills the byte/field
+       ceiling and writes to disjoint ``date=`` partitions. This is the
+       primary tier — it produces the fewest, largest chunks.
+    2. **Area** (2×2 doubling). A single day-block of the full area is
+       still too large, so shrink the rectangle.
+    3. **Variables** (one per request). Last resort — fragments the
+       Parquet schema until the per-date partition merge reunifies it.
+    """
     if _fits(slice_, config):
         return [slice_]
 
-    # Tier 1: split area
-    area_slices = _try_area_split(slice_, config)
+    # Tier 1: split days (greedy)
+    day_slices = _try_day_split(slice_, config)
     out: list[_Slice] = []
-    for sub in area_slices:
-        if _fits(sub, config):
-            out.append(sub)
+    for day_sub in day_slices:
+        if _fits(day_sub, config):
+            out.append(day_sub)
             continue
 
-        # Tier 2: split days
-        day_slices = _try_day_split(sub, config)
-        for day_sub in day_slices:
-            if _fits(day_sub, config):
-                out.append(day_sub)
+        # Tier 2: split area
+        area_slices = _try_area_split(day_sub, config)
+        for sub in area_slices:
+            if _fits(sub, config):
+                out.append(sub)
                 continue
 
             # Tier 3: one variable per request
-            var_slices = _try_variable_split(day_sub, config)
+            var_slices = _try_variable_split(sub, config)
             for vsub in var_slices:
                 if _fits(vsub, config):
                     out.append(vsub)
                     continue
+                est = _estimate(vsub, config)
                 raise DownloadSizeError(
-                    "Cannot fit single-variable, single-day-block, single-sub-area request "
-                    f"({_estimate(vsub, config).estimated_mb:.1f} MB) "
-                    f"under the {config.max_request_bytes / (1024 * 1024):.0f} MB limit. "
-                    "Reduce hours/day, raise max_request_bytes, or pick a smaller area."
+                    "Cannot fit single-variable, single-day-block, single-sub-area "
+                    f"request under the configured limits: "
+                    f"bytes={est.estimated_mb:.1f} MB / max={est.limit_mb:.0f} MB, "
+                    f"fields={est.fields_count} / max={est.limit_fields}. "
+                    "Reduce hours/day, raise max_request_bytes / max_request_fields, "
+                    "or pick a smaller area."
                 )
     return out
 
@@ -231,31 +246,35 @@ def _try_area_split(slice_: _Slice, config: DownloadConfig) -> list[_Slice]:
 
 
 def _try_day_split(slice_: _Slice, config: DownloadConfig) -> list[_Slice]:
-    """Try halves, thirds, ..., down to single days, until each block fits."""
-    n_days = len(slice_.days)
-    if n_days <= 1:
+    """Greedily pack consecutive days into blocks, each as large as the budget allows.
+
+    Unlike an equal split (which would halve a 31-day month into two
+    16-day blocks regardless of headroom), this fills each block right up
+    to the byte/field ceiling and only opens a new block when the next
+    day would overflow it — the fewest, largest day-blocks the CDS limits
+    permit, each downloading close to the CDS per-request file cap.
+
+    A block that is still too large on its own (a single day over budget)
+    is handed downstream to area- then variable-splitting.
+    """
+    if len(slice_.days) <= 1:
         return [slice_]
 
-    for n_blocks in range(2, n_days + 1):
-        blocks = _chunk_list(slice_.days, n_blocks)
-        candidates = [
-            _replace_days(slice_, days, f"{slice_.days[0]:02d}-{slice_.days[-1]:02d}-of-{n_blocks}")
-            for days in blocks
-        ]
-        # Use the worst-case (largest) block to decide.
-        worst = max(candidates, key=lambda c: len(c.days))
-        if _fits(worst, config):
-            # Rename labels using the actual block range for nicer chunk_ids.
-            renamed: list[_Slice] = []
-            for _i, c in enumerate(candidates, start=1):
-                first, last = c.days[0], c.days[-1]
-                c.days_label = f"d{first:02d}-{last:02d}"
-                renamed.append(c)
-            return renamed
-    # As a last resort, single-day blocks
+    blocks: list[list[int]] = []
+    current: list[int] = []
+    for day in slice_.days:
+        trial = [*current, day]
+        if current and not _fits(_replace_days(slice_, trial, ""), config):
+            blocks.append(current)
+            current = [day]
+        else:
+            current = trial
+    if current:
+        blocks.append(current)
+
     return [
-        _replace_days(slice_, [d], f"d{d:02d}-{d:02d}")
-        for d in slice_.days
+        _replace_days(slice_, days, f"d{days[0]:02d}-{days[-1]:02d}")
+        for days in blocks
     ]
 
 
@@ -296,6 +315,7 @@ def _estimate(slice_: _Slice, config: DownloadConfig):
         area=slice_.area,
         dataset=config.dataset,
         max_bytes=config.max_request_bytes,
+        max_fields=config.max_request_fields,
     )
 
 
@@ -325,14 +345,6 @@ def _replace_days(slice_: _Slice, days: list[int], label: str) -> _Slice:
         days_label=label,
         var_label=slice_.var_label,
     )
-
-
-def _chunk_list(items: list[int], n_chunks: int) -> list[list[int]]:
-    n_chunks = min(n_chunks, len(items))
-    if n_chunks <= 1:
-        return [list(items)]
-    size = -(-len(items) // n_chunks)  # ceil division
-    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def _enumerate_months(y0: int, m0: int, y1: int, m1: int) -> list[tuple[int, int]]:

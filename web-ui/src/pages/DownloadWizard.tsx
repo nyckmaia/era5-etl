@@ -1246,7 +1246,11 @@ function StepConfirm({
           <p className="text-sm text-moss-600">
             Run started: <span className="font-mono">{run.data.run_id}</span>
           </p>
-          <RunProgress runId={run.data.run_id} dataset={dataset} />
+          <RunProgress
+            key={run.data.run_id}
+            runId={run.data.run_id}
+            dataset={dataset}
+          />
         </div>
       ) : null}
     </div>

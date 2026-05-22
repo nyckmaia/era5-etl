@@ -32,8 +32,39 @@ BYTES_PER_VALUE = 8
 # explicitly an estimate, not a guarantee.
 PARQUET_DISK_RATIO = 0.5
 
-# Conservative default limit: 500 MB per request
-DEFAULT_MAX_REQUEST_BYTES = 500 * 1024 * 1024
+# The CDS "cost limit" scales with the *volume of requested values*
+# (variables × hours × days × grid points), not the compressed download
+# size. ``estimate_request_size`` reports that volume as
+# ``total_values × BYTES_PER_VALUE`` (raw uncompressed double).
+#
+# The request planner greedily packs each chunk right up to this ceiling
+# (see ``request_planner._try_day_split``), so the ceiling directly sets
+# the chunk size. ERA5-LAND NetCDF compresses ~12× off the raw-double
+# estimate, so a 300 MB estimate downloads as ~25 MB — the largest file
+# CDS will prepare per request. Calibrated there to minimise the number
+# of round-trips (each request carries non-trivial CDS prep time) while
+# staying under both the cost reject (~46M values observed) and the
+# 25 MB download cap. The adaptive split in ``CDSDownloader`` is the
+# safety net for the occasional over-shoot.
+DEFAULT_MAX_REQUEST_BYTES = 300 * 1024 * 1024
+
+# CDS documents a ceiling of ~12,000 "fields" (variables × hours × days)
+# per request. The byte/value ceiling above is the binding constraint
+# for realistic requests; this field cap is the documented-limit
+# backstop (it stops a many-variable request over a tiny area, where
+# the value count — and thus the byte estimate — stays low).
+DEFAULT_MAX_REQUEST_FIELDS = 12_000
+
+
+def request_fields(num_variables: int, num_hours: int, num_days: int) -> int:
+    """CDS "fields" count for a request: variables × hours × days.
+
+    Independent of area or grid resolution — the CDS server uses this
+    item count as a separate ceiling on top of the byte-size limit, so
+    a large list of variables × full month × every hour can blow past
+    the ceiling even when the on-the-wire bytes look modest.
+    """
+    return max(0, num_variables) * max(0, num_hours) * max(0, num_days)
 
 
 @dataclass
@@ -47,6 +78,11 @@ class SizeEstimate:
     estimated_bytes: int
     exceeds_limit: bool
     limit_bytes: int
+    #: ``variables × hours × days`` — see :func:`request_fields`. Tracked
+    #: alongside bytes so the planner can split on whichever limit is
+    #: tighter for a given request.
+    fields_count: int = 0
+    limit_fields: int = DEFAULT_MAX_REQUEST_FIELDS
 
     @property
     def estimated_mb(self) -> float:
@@ -57,6 +93,16 @@ class SizeEstimate:
     def limit_mb(self) -> float:
         """Limit in megabytes."""
         return self.limit_bytes / (1024 * 1024)
+
+    @property
+    def exceeds_bytes_limit(self) -> bool:
+        """Whether the byte ceiling is the one being violated."""
+        return self.estimated_bytes > self.limit_bytes
+
+    @property
+    def exceeds_field_limit(self) -> bool:
+        """Whether the CDS field-count ceiling is the one being violated."""
+        return self.fields_count > self.limit_fields
 
 
 @dataclass
@@ -96,36 +142,41 @@ def estimate_request_size(
     area: list[float],
     dataset: str = "era5-land",
     max_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
+    max_fields: int = DEFAULT_MAX_REQUEST_FIELDS,
 ) -> SizeEstimate:
     """Estimate the download size for a CDS API request.
 
-    Uses a conservative heuristic: total_values * BYTES_PER_VALUE.
-    The CDS API stores numeric variables as DOUBLE (8 bytes).
+    Two independent ceilings are reported:
 
-    Args:
-        num_variables: Number of climate variables requested.
-        num_hours: Number of hours per day (e.g. 24 for all hours).
-        num_days: Number of days in the download period.
-        area: Geographic bounding box [North, West, South, East].
-        dataset: Dataset name ('era5' or 'era5-land').
-        max_bytes: Maximum allowed request size in bytes.
+    - **Bytes**: ``total_values × BYTES_PER_VALUE`` where ``total_values
+      = num_variables × num_hours × num_days × grid_points``. The CDS
+      API stores numeric variables as DOUBLE (8 bytes).
+    - **Fields**: ``num_variables × num_hours × num_days`` — the CDS
+      server item count, independent of area/grid resolution.
 
-    Returns:
-        SizeEstimate with the estimation details.
+    The returned ``SizeEstimate.exceeds_limit`` is True if *either*
+    ceiling is breached, so callers (e.g. the request planner) can
+    treat both uniformly while still inspecting the per-axis flags
+    (``exceeds_bytes_limit`` / ``exceeds_field_limit``) for diagnostics.
     """
     resolution = ERA5_LAND_RESOLUTION if "land" in dataset else ERA5_RESOLUTION
     grid_points = estimate_grid_points(area, resolution)
     total_values = num_variables * num_hours * num_days * grid_points
     estimated_bytes = total_values * BYTES_PER_VALUE
+    fields_count = request_fields(num_variables, num_hours, num_days)
 
+    over_bytes = estimated_bytes > max_bytes
+    over_fields = fields_count > max_fields
     return SizeEstimate(
         num_variables=num_variables,
         num_hours=num_hours,
         num_days=num_days,
         num_grid_points=grid_points,
         estimated_bytes=estimated_bytes,
-        exceeds_limit=(estimated_bytes > max_bytes),
+        exceeds_limit=over_bytes or over_fields,
         limit_bytes=max_bytes,
+        fields_count=fields_count,
+        limit_fields=max_fields,
     )
 
 

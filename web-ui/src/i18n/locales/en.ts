@@ -270,6 +270,10 @@ export const en: Dictionary = {
     waitingFirstChunk: "Waiting for the first chunk…",
     recentEvents: "Recent events",
     goToQuery: "Go to Query",
+    timer: {
+      elapsed: "Elapsed",
+      total: "Total time",
+    },
     units: {
       chunk: "chunk",
       year: "year",

@@ -6,14 +6,75 @@ import pytest
 
 from era5_etl.download.size_estimator import (
     BYTES_PER_VALUE,
+    DEFAULT_MAX_REQUEST_FIELDS,
     ERA5_LAND_RESOLUTION,
     ERA5_RESOLUTION,
     AreaSplit,
     calculate_splits_needed,
     estimate_grid_points,
     estimate_request_size,
+    request_fields,
     split_area,
 )
+
+
+class TestRequestFields:
+    """Tests for the CDS fields helper (variables × hours × days)."""
+
+    def test_arithmetic_basic(self):
+        assert request_fields(4, 24, 31) == 4 * 24 * 31  # 2976
+
+    def test_zero_variables_yields_zero(self):
+        assert request_fields(0, 24, 31) == 0
+
+    def test_zero_days_yields_zero(self):
+        assert request_fields(4, 24, 0) == 0
+
+    def test_independent_of_area(self):
+        # ``request_fields`` takes no area argument by design — fields
+        # depend only on variable/hour/day counts.
+        assert request_fields(2, 12, 10) == 240
+
+    def test_default_limit_constant(self):
+        # The CDS documented item cap. The byte/value ceiling is the
+        # binding constraint for realistic requests; this is the backstop.
+        assert DEFAULT_MAX_REQUEST_FIELDS == 12_000
+
+
+class TestSizeEstimateFieldsCount:
+    """Tests for SizeEstimate.fields_count + exceeds_field_limit."""
+
+    def test_fields_count_populated(self):
+        est = estimate_request_size(
+            num_variables=4, num_hours=24, num_days=31,
+            area=[6.0, -74.0, -34.0, -34.0], dataset="era5-land",
+        )
+        assert est.fields_count == 2976
+
+    def test_field_limit_breach_flips_exceeds(self):
+        est = estimate_request_size(
+            num_variables=50, num_hours=24, num_days=31,
+            area=[0.0, 0.0, 0.0, 0.0],  # single point → bytes irrelevant
+            dataset="era5",
+            max_bytes=10**12,            # effectively unlimited
+            max_fields=10_000,
+        )
+        assert est.fields_count == 50 * 24 * 31
+        assert est.exceeds_field_limit is True
+        assert est.exceeds_bytes_limit is False
+        assert est.exceeds_limit is True
+
+    def test_bytes_limit_only(self):
+        est = estimate_request_size(
+            num_variables=2, num_hours=4, num_days=2,
+            area=[6.0, -74.0, -34.0, -34.0],
+            dataset="era5-land",
+            max_bytes=1_000,             # silly-low byte ceiling
+            max_fields=10_000,
+        )
+        assert est.exceeds_bytes_limit is True
+        assert est.exceeds_field_limit is False
+        assert est.exceeds_limit is True
 
 
 class TestEstimateGridPoints:

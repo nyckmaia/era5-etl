@@ -159,6 +159,7 @@ export function InmetDownloadFlow() {
               <span className="font-mono">{runMutation.data.run_id}</span>
             </p>
             <RunProgress
+              key={runMutation.data.run_id}
               runId={runMutation.data.run_id}
               dataset="inmet"
               kind="station"

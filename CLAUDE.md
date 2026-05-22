@@ -71,7 +71,11 @@ a Typer CLI, and a FastAPI + React/Vite web UI.
   Adding GRIB support would mean changing the converter, the size estimator,
   and the manifest -- and was deliberately deferred.
 - **Request size is bounded by `request_planner.py`.** It applies a fixed
-  cascade: area 2x2 -> day blocks -> per-variable. Never bypass it -- raise
+  cascade: greedy day blocks -> area 2x2 -> per-variable. Day-split runs
+  first and greedily packs consecutive days up to the byte/field ceiling
+  (largest, fewest chunks; disjoint `date=` partitions); area-split is
+  the fallback when a single day of the full area is still too big;
+  per-variable is the last resort. Never bypass it -- raise
   `DownloadSizeError` instead of issuing an unsplit request.
 - **Manifest is the source of truth for "chunk done".** `storage/manifest.py`
   stores chunk_id -> ChunkRecord. The `update` command and the download

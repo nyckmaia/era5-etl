@@ -79,6 +79,47 @@ def test_pipeline_estimate(client: TestClient):
     assert payload["chunks"][0]["dataset" if False else "year"] == 2024
 
 
+def test_pipeline_estimate_exposes_fields_count(client: TestClient):
+    """Each EstimateChunkOut returns `fields_count` (var × hour × day)."""
+    body = {
+        "dataset": "era5-land",
+        "variables": ["2m_temperature", "2m_dewpoint_temperature"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-05",
+        "area": [-10.0, -50.0, -20.0, -40.0],
+        "hours": ["00:00", "12:00"],
+    }
+    r = client.post("/api/pipeline/estimate", json=body)
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["total_chunks"] >= 1
+    for c in payload["chunks"]:
+        assert "fields_count" in c
+        # 2 vars × 2 hours × n_days_in_chunk
+        assert c["fields_count"] == 2 * 2 * len(c["days"])
+
+
+def test_pipeline_estimate_tight_field_budget_forces_split(client: TestClient):
+    """Setting max_request_fields below the natural request forces splits."""
+    body = {
+        "dataset": "era5-land",
+        "variables": ["2m_temperature", "2m_dewpoint_temperature", "skin_temperature"],
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31",
+        "area": [0.5, 0.0, 0.0, 0.5],
+        "hours": [f"{h:02d}:00" for h in range(24)],
+        "max_request_fields": 100,
+        "max_request_bytes": 1024 * 1024 * 1024,
+    }
+    r = client.post("/api/pipeline/estimate", json=body)
+    assert r.status_code == 200
+    payload = r.json()
+    # 3 vars × 24h × 31d = 2232 fields → must split into many chunks.
+    assert payload["total_chunks"] >= 22
+    for c in payload["chunks"]:
+        assert c["fields_count"] <= 100
+
+
 def test_pipeline_estimate_accepts_clip_regions(client: TestClient):
     body = {
         "dataset": "era5-land",

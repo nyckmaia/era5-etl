@@ -87,9 +87,28 @@ class DownloadConfig(BaseModel):
         description="Base delay between retries in seconds (exponential backoff)",
     )
     max_request_bytes: int = Field(
-        default=500 * 1024 * 1024,
+        default=300 * 1024 * 1024,
         ge=1024 * 1024,
-        description="Maximum estimated request size in bytes before auto-splitting",
+        description=(
+            "Maximum estimated request size in bytes. The planner greedily "
+            "packs each chunk up to this ceiling. The estimate is "
+            "total_values × 8; ERA5-LAND NetCDF compresses ~12×, so 300 MB "
+            "downloads as ~25 MB — the CDS per-request file cap. The "
+            "adaptive split in CDSDownloader recovers from any remaining "
+            "cost-exceeded errors at runtime."
+        ),
+    )
+    max_request_fields: int = Field(
+        default=12_000,
+        ge=1,
+        description=(
+            "Maximum CDS 'fields' (variables × hours × days) per request "
+            "before auto-splitting kicks in — the CDS documented item cap. "
+            "For realistic requests the byte/value ceiling above is the "
+            "binding constraint; this guards the tiny-area / many-variable "
+            "case where the value count stays low. Both limits apply; "
+            "planner splits on whichever is tighter."
+        ),
     )
     years: list[int] | None = Field(
         default=None,
@@ -242,6 +261,8 @@ class PipelineConfig(BaseModel):
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
         years: list[int] | None = None,
         clip_regions: list[str] | None = None,
+        max_request_bytes: int = 300 * 1024 * 1024,
+        max_request_fields: int = 12_000,
     ) -> PipelineConfig:
         """Assemble a full ``PipelineConfig`` from a ``base_dir`` and options.
 
@@ -289,6 +310,8 @@ class PipelineConfig(BaseModel):
                 hours=hours if hours is not None else list(HOURS_ALL),
                 years=years,
                 override=override,
+                max_request_bytes=max_request_bytes,
+                max_request_fields=max_request_fields,
             ),
             transform=TransformConfig(override=override, clip_regions=clip_regions),
             storage=StorageConfig(

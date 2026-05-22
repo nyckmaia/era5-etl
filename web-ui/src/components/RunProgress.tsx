@@ -12,7 +12,7 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react";
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/format";
@@ -227,6 +227,25 @@ export function RunProgress({
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const sourceRef = useRef<EventSource | null>(null);
 
+  // Whole-pipeline wall clock: starts when this run mounts, ticks every
+  // second while running, and freezes at the exact end time so the user
+  // sees the total download + processing duration.
+  const startedAtRef = useRef<number>(Date.now());
+  const [endedAt, setEndedAt] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (state.status !== "running") {
+      // Freeze the clock the moment the run ends (first non-running tick).
+      setEndedAt((prev) => prev ?? Date.now());
+      return;
+    }
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [state.status]);
+
+  const elapsedMs = (endedAt ?? now) - startedAtRef.current;
+
   useEffect(() => {
     const src = new EventSource(`/api/pipeline/runs/${runId}/progress`);
     sourceRef.current = src;
@@ -339,7 +358,13 @@ export function RunProgress({
                         })}
             </div>
           </div>
-          <StatusIndicator status={state.status} />
+          <div className="flex flex-col items-end gap-2">
+            <StatusIndicator status={state.status} />
+            <ElapsedTimer
+              elapsedMs={elapsedMs}
+              running={state.status === "running"}
+            />
+          </div>
         </div>
 
         <div className="mt-5 space-y-4">
@@ -496,6 +521,60 @@ export function RunProgress({
         </ul>
       </section>
     </div>
+  );
+}
+
+function formatHMS(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+function ElapsedTimer({
+  elapsedMs,
+  running,
+}: {
+  elapsedMs: number;
+  running: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-1.5 rounded-full border px-2.5 py-1",
+        running
+          ? "border-ink-100 bg-ink-50"
+          : "border-emerald-200 bg-emerald-50",
+      )}
+    >
+      <Clock
+        className={cn(
+          "h-3.5 w-3.5",
+          running ? "text-ink-400" : "text-emerald-600",
+        )}
+      />
+      <span
+        className={cn(
+          "text-[10px] font-medium uppercase tracking-wide",
+          running ? "text-ink-400" : "text-emerald-700",
+        )}
+      >
+        {running
+          ? t("runProgress.timer.elapsed")
+          : t("runProgress.timer.total")}
+      </span>
+      <span
+        className={cn(
+          "font-mono text-xs tabular-nums",
+          running ? "text-ink-700" : "text-emerald-800",
+        )}
+      >
+        {formatHMS(elapsedMs)}
+      </span>
+    </span>
   );
 }
 

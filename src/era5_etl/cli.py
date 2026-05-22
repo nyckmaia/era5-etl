@@ -303,6 +303,15 @@ def pipeline(
         "--no-clip",
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
+    max_fields: int = typer.Option(
+        12_000,
+        "--max-fields",
+        help=(
+            "Max CDS fields per request (variables × hours × days). The "
+            "request planner auto-splits any larger request to keep each "
+            "chunk under this ceiling. CDS documents a ~12,000 cap."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -329,6 +338,7 @@ def pipeline(
             compression=compression,  # type: ignore[arg-type]
             area=area,
             clip_regions=clip_regions,
+            max_request_fields=max_fields,
         )
         config.transform.max_workers = workers
 
@@ -378,6 +388,7 @@ def _print_plan(
             area=list(c.area),
             dataset=c.dataset,
             max_bytes=config.download.max_request_bytes,
+            max_fields=config.download.max_request_fields,
         )
         total_mb += est.estimated_mb
 
@@ -489,6 +500,15 @@ def download(
         "--no-clip",
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
+    max_fields: int = typer.Option(
+        12_000,
+        "--max-fields",
+        help=(
+            "Max CDS fields per request (variables × hours × days). The "
+            "planner auto-splits any larger request to keep each chunk "
+            "under this ceiling. CDS documents a ~12,000 cap."
+        ),
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, do not download"),
     apply_diff: bool = typer.Option(
         True,
@@ -519,6 +539,7 @@ def download(
             override=override,
             area=area,
             clip_regions=clip_regions if _is_gridded(ds_name) else None,
+            max_request_fields=max_fields,
         )
 
         if dry_run:
@@ -648,6 +669,15 @@ def update(
         "--no-clip",
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
+    max_fields: int = typer.Option(
+        12_000,
+        "--max-fields",
+        help=(
+            "Max CDS fields per request (variables × hours × days). The "
+            "planner auto-splits any larger request to keep each chunk "
+            "under this ceiling."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Only list the chunks that would be downloaded"
     ),
@@ -688,6 +718,7 @@ def update(
             variables=variables,
             area=area,
             clip_regions=clip_regions,
+            max_request_fields=max_fields,
         )
         manifest = Manifest(data_dir, ds_name)
         missing = plan_incremental_requests(config.download, manifest)
