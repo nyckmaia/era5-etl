@@ -62,6 +62,8 @@ interface Props {
   onInsert: (text: string) => void;
   onNewView: () => void;
   onEditView: (o: UserObject) => void;
+  /** Load an object's defining SQL into the editor (system builtins). */
+  onOpenSql: (o: UserObject) => void;
 }
 
 function ColumnList({
@@ -235,10 +237,12 @@ function UserObjectNode({
   obj,
   onInsert,
   onEditView,
+  onOpenSql,
 }: {
   obj: UserObject;
   onInsert: (text: string) => void;
   onEditView: (o: UserObject) => void;
+  onOpenSql: (o: UserObject) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -259,7 +263,13 @@ function UserObjectNode({
       <div className="flex w-full items-center gap-1 rounded px-1 py-1 text-xs font-medium text-ink-700 hover:bg-ink-100">
         <button
           type="button"
-          onClick={() => !isMacro && setOpen((o) => !o)}
+          // Builtins: clicking loads their defining SQL into the editor
+          // (read-only objects — there is nothing to expand/edit).
+          onClick={() => {
+            if (obj.builtin) onOpenSql(obj);
+            else if (!isMacro) setOpen((o) => !o);
+          }}
+          title={obj.builtin ? t("query.schema.builtinOpenSql") : undefined}
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
         >
           {isMacro ? (
@@ -277,22 +287,33 @@ function UserObjectNode({
           <span className="truncate">{obj.name}</span>
         </button>
         {!obj.ok ? <WarnBadge obj={obj} /> : null}
-        <button
-          type="button"
-          title={t("common.edit")}
-          onClick={() => onEditView(obj)}
-          className="hidden text-ink-400 hover:text-ink-700 group-hover:block"
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          title={t("common.delete")}
-          onClick={() => del.mutate()}
-          className="hidden text-ink-400 hover:text-rose-500 group-hover:block"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+        {obj.builtin ? (
+          <span
+            className="shrink-0 rounded bg-ink-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-ink-500"
+            title={t("query.schema.builtinHint")}
+          >
+            {t("query.schema.builtinBadge")}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              title={t("common.edit")}
+              onClick={() => onEditView(obj)}
+              className="hidden text-ink-400 hover:text-ink-700 group-hover:block"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              title={t("common.delete")}
+              onClick={() => del.mutate()}
+              className="hidden text-ink-400 hover:text-rose-500 group-hover:block"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </>
+        )}
       </div>
       {open && !isMacro ? (
         <ColumnList cols={obj.columns} loading={false} onInsert={onInsert} />
@@ -309,6 +330,7 @@ export function SchemaSidebar({
   onInsert,
   onNewView,
   onEditView,
+  onOpenSql,
 }: Props) {
   const { t } = useTranslation();
   const schemaQs = useQueries({
@@ -432,6 +454,7 @@ export function SchemaSidebar({
               obj={o}
               onInsert={onInsert}
               onEditView={onEditView}
+              onOpenSql={onOpenSql}
             />
           ))
         )}

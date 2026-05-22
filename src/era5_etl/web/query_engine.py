@@ -26,6 +26,7 @@ from era5_etl.datasets import DatasetRegistry
 from era5_etl.storage.parquet_manager import ParquetManager
 from era5_etl.storage.paths import view_name_for
 from era5_etl.web import user_views_store as uvs
+from era5_etl.web.builtin_objects import BUILTIN_NAMES, BUILTIN_OBJECTS
 
 
 class _Engine:
@@ -33,6 +34,11 @@ class _Engine:
         self.data_dir = data_dir
         self.lock = threading.RLock()
         self.conn = duckdb.connect(":memory:")
+        # System-provided objects (e.g. the bilinear_weights macro) — no
+        # dependency on parquet, so register them once up front; they are
+        # then available to every query, export and validation path.
+        for _o in BUILTIN_OBJECTS:
+            self.conn.execute(_o["sql"])
         self.base_views: set[str] = set()
         # Datasets without parquet yet — re-checked cheaply each call so a
         # dataset downloaded while the UI is open eventually registers.
@@ -79,7 +85,13 @@ class _Engine:
             self._user_sig = None
 
     def _ensure_user(self) -> None:
-        objs = sorted(uvs.list_objects(), key=lambda x: x["created_ts"])
+        # A user object whose name collides with a builtin is ignored —
+        # the builtin (registered in __init__) is authoritative.
+        objs = [
+            o
+            for o in sorted(uvs.list_objects(), key=lambda x: x["created_ts"])
+            if o["name"].lower() not in BUILTIN_NAMES
+        ]
         sig = tuple((o["id"], o["updated_ts"], o["sql"]) for o in objs)
         if sig == self._user_sig:
             return
@@ -100,9 +112,11 @@ class _Engine:
         self._user_results = results
 
     def registered(self) -> list[str]:
-        return list(self.base_views) + [
-            r["name"] for r in self._user_results if r["ok"]
-        ]
+        return (
+            list(self.base_views)
+            + [o["name"] for o in BUILTIN_OBJECTS]
+            + [r["name"] for r in self._user_results if r["ok"]]
+        )
 
 
 _CACHE: dict[str, _Engine] = {}

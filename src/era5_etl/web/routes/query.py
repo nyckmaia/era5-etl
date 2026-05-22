@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -157,7 +158,9 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
                 eng.cancel_requested = False
                 timer = _make_timer()
                 try:
+                    _t0 = time.perf_counter()
                     conn.execute(body.sql)
+                    elapsed_ms = (time.perf_counter() - _t0) * 1000.0
                 finally:
                     if timer is not None:
                         timer.cancel()
@@ -187,13 +190,19 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
             row_count=1,
             truncated=False,
             total_rows=1,
+            elapsed_ms=elapsed_ms,
         )
 
     _validate_sql(body.sql)
 
     try:
         with query_conn(data_dir) as (conn, registered):
-            if not registered:
+            # Builtin objects (e.g. the bilinear_weights macro) are always
+            # registered — they must NOT mask the "nothing downloaded yet"
+            # state, which is keyed on base views / user objects existing.
+            from era5_etl.web.builtin_objects import BUILTIN_NAMES
+
+            if not [r for r in registered if r.lower() not in BUILTIN_NAMES]:
                 raise HTTPException(
                     status_code=404,
                     detail="No Parquet data for any dataset yet.",
@@ -203,7 +212,9 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
             eng.cancel_requested = False
             timer = _make_timer()
             try:
+                _t0 = time.perf_counter()
                 result = conn.execute(body.sql).fetch_arrow_table()
+                elapsed_ms = (time.perf_counter() - _t0) * 1000.0
                 arrow_schema = result.schema
                 df = result.to_pandas()
             finally:
@@ -229,6 +240,7 @@ def run_query(body: QueryIn, request: Request) -> QueryOut:
         row_count=len(df),
         truncated=truncated,
         total_rows=total_rows,
+        elapsed_ms=elapsed_ms,
     )
 
 

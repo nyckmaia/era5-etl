@@ -29,7 +29,7 @@ class UserConfig:
     last_pick_dir: str = ""
     #: Seconds after which a Run query is interrupted server-side. The
     #: ``/query`` page exposes this in Settings; ``0`` disables the timer.
-    query_timeout_s: int = 10
+    query_timeout_s: int = 120
     # Per-dataset display precision (Melhoria 02b). Render-only -- never
     # mutates stored data. Shape:
     #   {<dataset>: {"default_decimals": int, "default_method": "round"|"truncate",
@@ -68,9 +68,9 @@ def load_user_config() -> UserConfig:
         return UserConfig()
     dp = data.get("display_precision", {})
     try:
-        timeout = int(data.get("query_timeout_s", 10))
+        timeout = int(data.get("query_timeout_s", 120))
     except (TypeError, ValueError):
-        timeout = 10
+        timeout = 120
     return UserConfig(
         data_dir=str(data.get("data_dir", "")),
         default_dataset=str(data.get("default_dataset", "era5-land")),

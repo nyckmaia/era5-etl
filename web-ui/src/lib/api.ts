@@ -246,6 +246,8 @@ export interface UserObject {
   ok: boolean;
   error: string | null;
   columns: { name: string; type: string }[];
+  /** System-provided object (defined in code) — read-only, not editable. */
+  builtin?: boolean;
 }
 
 export interface UserObjectBody {
@@ -416,6 +418,7 @@ export const api = {
       row_count: number;
       truncated: boolean;
       total_rows: number;
+      elapsed_ms: number;
     }>("/api/query", {
       method: "POST",
       body: JSON.stringify(body),

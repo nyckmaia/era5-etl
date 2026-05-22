@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
+import duckdb
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.datasets import DatasetRegistry
@@ -108,7 +109,13 @@ def meta(request: Request) -> TimeseriesMetaOut:
     out: list[TSViewMetaOut] = []
     with query_conn(data_dir) as (conn, registered):
         for view in sorted(set(registered)):
-            cols = _view_columns(conn, view)
+            try:
+                cols = _view_columns(conn, view)
+            except duckdb.Error:
+                # A registered user MACRO (not SELECT-able) — or a view
+                # that has since become broken — is not a time-series
+                # source. Skip it instead of 500-ing the whole endpoint.
+                continue
             numeric = [
                 SchemaColumn(name=n, type=t)
                 for (n, t) in cols

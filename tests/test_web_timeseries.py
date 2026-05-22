@@ -20,7 +20,10 @@ from era5_etl.web.server import create_app
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # Isolate the user-views store: without this the test reads the real
+    # user's ~/.era5-etl/user_views.json and any object there leaks in.
+    monkeypatch.setenv("ERA5_ETL_CONFIG_DIR", str(tmp_path / "cfg"))
     return TestClient(create_app(tmp_path))
 
 
@@ -99,6 +102,24 @@ def test_meta_lists_views(client: TestClient, tmp_path: Path):
     assert "temp_ar" in inmet_cols
     # neighbour/dist bookkeeping columns excluded from Y choices
     assert not (set(NEIGHBOUR_COL_NAMES) & inmet_cols)
+
+
+def test_meta_skips_user_macro_without_500(client: TestClient, tmp_path: Path):
+    """A registered user MACRO is not SELECT-able; the meta endpoint must
+    skip it gracefully, not crash with HTTP 500."""
+    from era5_etl.web import user_views_store as store
+
+    _seed_era5(tmp_path)
+    store.add_object(
+        name="weights_macro",
+        kind="macro",
+        sql="CREATE OR REPLACE MACRO weights_macro(x) AS x * 2",
+    )
+    r = client.get("/api/timeseries/meta")
+    assert r.status_code == 200, r.text
+    views = {v["view"] for v in r.json()["views"]}
+    assert "era5" in views
+    assert "weights_macro" not in views  # macro skipped, not listed
 
 
 # --- POST /api/timeseries --------------------------------------------

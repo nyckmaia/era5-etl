@@ -26,6 +26,32 @@ def test_user_view_is_queryable(client):
     assert r.json()["rows"] == [[42]]
 
 
+def test_query_response_reports_execution_time(client):
+    """Every query response carries the server-side DuckDB execution
+    time so the SQL editor can show it next to the row count."""
+    store.add_object(
+        name="ones2",
+        kind="view",
+        sql="CREATE OR REPLACE VIEW ones2 AS SELECT 1 AS n",
+    )
+    r = client.post(
+        "/api/query", json={"sql": "SELECT n FROM ones2", "limit": 10}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "elapsed_ms" in body
+    assert isinstance(body["elapsed_ms"], (int, float))
+    assert body["elapsed_ms"] >= 0
+
+    # The DDL-through-Run-query path reports timing too.
+    ddl = client.post(
+        "/api/query",
+        json={"sql": "CREATE OR REPLACE VIEW tv AS SELECT 1 AS a"},
+    )
+    assert ddl.status_code == 200, ddl.text
+    assert ddl.json()["elapsed_ms"] >= 0
+
+
 def test_user_macro_is_callable(client):
     store.add_object(
         name="addone",

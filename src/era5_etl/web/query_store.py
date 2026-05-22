@@ -145,6 +145,267 @@ def clear_history(view: str) -> list[dict[str, Any]]:
 
 # --- Templates (server-defined, read-only) --------------------------------
 
+# Bilinear interpolation of every ERA5-LAND variable onto each INMET
+# station, using the 4 enclosing grid corners and the built-in
+# `bilinear_weights` macro. Exact-equality joins are safe here: the
+# corner coords come straight from inmet's own `era5_land_*` columns.
+_INMET_ERA5_LAND_INTERPOLATED_VIEW_SQL = """\
+CREATE OR REPLACE VIEW vw_inmet_vs_era5_land_interpolated AS
+WITH
+  base AS (
+    SELECT
+      i.*,
+      -- normalized longitude weight
+      (
+        (i.longitude - i.era5_land_lon_left) / NULLIF(i.era5_land_lon_right - i.era5_land_lon_left, 0)
+      ) AS wx,
+      -- normalized latitude weight
+      (
+        (i.era5_land_lat_top - i.latitude) / NULLIF(i.era5_land_lat_top - i.era5_land_lat_bottom, 0)
+      ) AS wy
+    FROM
+      inmet i
+  )
+SELECT
+  -- =====================================================
+  -- IDENTIFICATION
+  -- =====================================================
+  b.station,
+  b.date,
+  b.hour_utc,
+  -- =====================================================
+  -- STATION LOCATION
+  -- =====================================================
+  b.latitude AS station_lat,
+  b.longitude AS station_lon,
+  -- =====================================================
+  -- ORIGINAL OBSERVATION
+  -- =====================================================
+  b.temp_ar AS inmet_temperature,
+  b.temp_orvalho AS inmet_temp_orvalho,
+  b.umidade_relativa AS inmet_umidade_relativa,
+  b.vento_direcao AS inmet_vento_direcao,
+  b.vento_velocidade AS inmet_vento_velocidade,
+  b.radiacao_global AS inmet_radicao_global,
+  -- =====================================================
+  -- INTERPOLATED ERA5 VARIABLES
+  -- =====================================================
+  -- ---------------------------------
+  -- TEMPERATURE
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.temperature_2m,
+    e_tr.temperature_2m,
+    e_bl.temperature_2m,
+    e_br.temperature_2m
+  ) AS era5_temperature_2m_bilinear,
+  -- ---------------------------------
+  -- DEWPOINT
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.dewpoint_2m,
+    e_tr.dewpoint_2m,
+    e_bl.dewpoint_2m,
+    e_br.dewpoint_2m
+  ) AS era5_dewpoint_2m_bilinear,
+  -- ---------------------------------
+  -- WIND U
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.wind_u_10m,
+    e_tr.wind_u_10m,
+    e_bl.wind_u_10m,
+    e_br.wind_u_10m
+  ) AS era5_wind_u_10m_bilinear,
+  -- ---------------------------------
+  -- WIND V
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.wind_v_10m,
+    e_tr.wind_v_10m,
+    e_bl.wind_v_10m,
+    e_br.wind_v_10m
+  ) AS era5_wind_v_10m_bilinear,
+  -- ---------------------------------
+  -- SKIN TEMPERATURE
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.skin_temperature,
+    e_tr.skin_temperature,
+    e_bl.skin_temperature,
+    e_br.skin_temperature
+  ) AS era5_skin_temperature_bilinear,
+  -- ---------------------------------
+  -- TOTAL EVAPORATION
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.total_evaporation,
+    e_tr.total_evaporation,
+    e_bl.total_evaporation,
+    e_br.total_evaporation
+  ) AS era5_total_evaporation_bilinear,
+  -- ---------------------------------
+  -- FORECAST ALBEDO
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.forecast_albedo,
+    e_tr.forecast_albedo,
+    e_bl.forecast_albedo,
+    e_br.forecast_albedo
+  ) AS era5_forecast_albedo_bilinear,
+  -- ---------------------------------
+  -- NET SOLAR RADIATION
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.surface_net_solar_radiation,
+    e_tr.surface_net_solar_radiation,
+    e_bl.surface_net_solar_radiation,
+    e_br.surface_net_solar_radiation
+  ) AS era5_surface_net_solar_radiation_bilinear,
+  -- ---------------------------------
+  -- NET THERMAL RADIATION
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.surface_net_thermal_radiation,
+    e_tr.surface_net_thermal_radiation,
+    e_bl.surface_net_thermal_radiation,
+    e_br.surface_net_thermal_radiation
+  ) AS era5_surface_net_thermal_radiation_bilinear,
+  -- ---------------------------------
+  -- SENSIBLE HEAT FLUX
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.surface_sensible_heat_flux,
+    e_tr.surface_sensible_heat_flux,
+    e_bl.surface_sensible_heat_flux,
+    e_br.surface_sensible_heat_flux
+  ) AS era5_surface_sensible_heat_flux_bilinear,
+  -- ---------------------------------
+  -- LAI HIGH VEGETATION
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.leaf_area_index_high_vegetation,
+    e_tr.leaf_area_index_high_vegetation,
+    e_bl.leaf_area_index_high_vegetation,
+    e_br.leaf_area_index_high_vegetation
+  ) AS era5_leaf_area_index_high_vegetation_bilinear,
+  -- ---------------------------------
+  -- LAI LOW VEGETATION
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.leaf_area_index_low_vegetation,
+    e_tr.leaf_area_index_low_vegetation,
+    e_bl.leaf_area_index_low_vegetation,
+    e_br.leaf_area_index_low_vegetation
+  ) AS era5_leaf_area_index_low_vegetation_bilinear,
+  -- ---------------------------------
+  -- WIND SPEED
+  -- ---------------------------------
+  bilinear_weights (
+    b.wx,
+    b.wy,
+    e_tl.wind_speed_10m,
+    e_tr.wind_speed_10m,
+    e_bl.wind_speed_10m,
+    e_br.wind_speed_10m
+  ) AS era5_wind_speed_10m_bilinear
+FROM
+  base b
+  -- =====================================================
+  -- TOP LEFT
+  -- =====================================================
+  LEFT JOIN era5_land e_tl ON e_tl.date = b.date
+  AND e_tl.hour_utc = b.hour_utc
+  AND e_tl.latitude = b.era5_land_lat_top
+  AND e_tl.longitude = b.era5_land_lon_left
+  -- =====================================================
+  -- TOP RIGHT
+  -- =====================================================
+  LEFT JOIN era5_land e_tr ON e_tr.date = b.date
+  AND e_tr.hour_utc = b.hour_utc
+  AND e_tr.latitude = b.era5_land_lat_top
+  AND e_tr.longitude = b.era5_land_lon_right
+  -- =====================================================
+  -- BOTTOM LEFT
+  -- =====================================================
+  LEFT JOIN era5_land e_bl ON e_bl.date = b.date
+  AND e_bl.hour_utc = b.hour_utc
+  AND e_bl.latitude = b.era5_land_lat_bottom
+  AND e_bl.longitude = b.era5_land_lon_left
+  -- =====================================================
+  -- BOTTOM RIGHT
+  -- =====================================================
+  LEFT JOIN era5_land e_br ON e_br.date = b.date
+  AND e_br.hour_utc = b.hour_utc
+  AND e_br.latitude = b.era5_land_lat_bottom
+  AND e_br.longitude = b.era5_land_lon_right;"""
+
+# Companion query: read the interpolated view back, compute the INMET vs
+# ERA5-LAND temperature gap for one station + year.
+_INMET_ERA5_LAND_INTERPOLATED_QUERY_SQL = """\
+SELECT
+  station,
+  "date",
+  hour_utc,
+  station_lat,
+  station_lon,
+  -- INMET
+  inmet_temperature,
+  inmet_temp_orvalho,
+  inmet_umidade_relativa,
+  inmet_vento_direcao,
+  inmet_vento_velocidade,
+  inmet_radicao_global,
+  -- ERA5-LAND
+  era5_temperature_2m_bilinear,
+  era5_dewpoint_2m_bilinear,
+  era5_wind_u_10m_bilinear,
+  era5_wind_v_10m_bilinear,
+  era5_skin_temperature_bilinear,
+  era5_total_evaporation_bilinear,
+  era5_forecast_albedo_bilinear,
+  era5_surface_net_solar_radiation_bilinear,
+  era5_surface_net_thermal_radiation_bilinear,
+  era5_surface_sensible_heat_flux_bilinear,
+  era5_leaf_area_index_high_vegetation_bilinear,
+  era5_leaf_area_index_low_vegetation_bilinear,
+  era5_wind_speed_10m_bilinear,
+  -- DIFFERENCES
+  (inmet_temperature - era5_temperature_2m_bilinear) AS temp_diff
+FROM
+  vw_inmet_vs_era5_land_interpolated
+WHERE
+  temp_diff IS NOT NULL
+  AND date BETWEEN '2025-01-01' AND '2025-12-31'
+  AND station = 'A726'
+ORDER BY
+  date,
+  hour_utc;"""
+
 _TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "era5-land-recent",
@@ -249,6 +510,24 @@ _TEMPLATES: list[dict[str, Any]] = [
             "  AND abs(l_br.latitude-i.era5_land_lat_bottom)<1e-4\n"
             "  AND abs(l_br.longitude-i.era5_land_lon_right)<1e-4;"
         ),
+    },
+    {
+        "id": "inmet-era5-land-interpolated-view",
+        "name": (
+            "vw_inmet_vs_era5_land_interpolated — INMET vs ERA5-LAND "
+            "(bilinear)"
+        ),
+        "category": "join",
+        "sql": _INMET_ERA5_LAND_INTERPOLATED_VIEW_SQL,
+    },
+    {
+        "id": "inmet-era5-land-interpolated-query",
+        "name": (
+            "Query vw_inmet_vs_era5_land_interpolated — temp diff "
+            "(station A726)"
+        ),
+        "category": "join",
+        "sql": _INMET_ERA5_LAND_INTERPOLATED_QUERY_SQL,
     },
 ]
 

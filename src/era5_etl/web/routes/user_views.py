@@ -10,12 +10,14 @@ rejected at save time without rebuilding the (expensive) base views.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal, cast
 
 import duckdb
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.web import user_views_store as store
 from era5_etl.web._types import arrow_type_to_python
+from era5_etl.web.builtin_objects import BUILTIN_OBJECTS
 from era5_etl.web.models import (
     BuildSpec,
     BuildSqlOut,
@@ -68,10 +70,29 @@ def _validate_against_db(
         ) from exc
 
 
+def _builtin_outputs() -> list[UserObjectOut]:
+    """Read-only SCHEMA entries for the system-provided objects."""
+    return [
+        UserObjectOut(
+            id=f"builtin:{b['name']}",
+            name=b["name"],
+            kind=cast("Literal['view', 'macro']", b["kind"]),
+            sql=b["sql"],
+            builder_spec=None,
+            ok=True,
+            error=None,
+            columns=[],
+            builtin=True,
+        )
+        for b in BUILTIN_OBJECTS
+    ]
+
+
 @router.get("", response_model=list[UserObjectOut])
 def list_user_views(request: Request) -> list[UserObjectOut]:
     data_dir: Path = request.app.state.data_dir
-    out: list[UserObjectOut] = []
+    # System objects first — always present, read-only.
+    out: list[UserObjectOut] = _builtin_outputs()
     status = user_object_status(data_dir)
     with query_conn(data_dir) as (conn, _registered):
         for r in status:
@@ -108,13 +129,27 @@ def create_user_view(body: UserObjectIn, request: Request) -> UserObjectOut:
     spec_dump = (
         body.builder_spec.model_dump() if body.builder_spec else None
     )
+    # `CREATE OR REPLACE VIEW/MACRO` means exactly that: if an object of
+    # this name already exists, overwrite it rather than rejecting the
+    # save. A plain `CREATE VIEW` still fails on a name collision — that
+    # is the SQL-standard contract the user opts into with `OR REPLACE`.
+    existing = store.find_by_name(body.name)
     try:
-        obj = store.add_object(
-            name=body.name,
-            kind=body.kind,
-            sql=body.sql,
-            builder_spec=spec_dump,
-        )
+        if existing is not None and store.is_or_replace(body.sql):
+            obj = store.update_object(
+                existing["id"],
+                name=body.name,
+                kind=body.kind,
+                sql=body.sql,
+                builder_spec=spec_dump,
+            )
+        else:
+            obj = store.add_object(
+                name=body.name,
+                kind=body.kind,
+                sql=body.sql,
+                builder_spec=spec_dump,
+            )
     except store.UserObjectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return UserObjectOut(**obj, ok=True, columns=cols)

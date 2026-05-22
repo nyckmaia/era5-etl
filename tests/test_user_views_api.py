@@ -39,7 +39,121 @@ def test_crud_and_validation(client):
     assert bad.status_code == 400
 
     assert client.delete(f"/api/user-views/{oid}").status_code == 200
-    assert client.get("/api/user-views").json() == []
+    # Only the system-provided builtin objects remain; no user objects.
+    remaining = client.get("/api/user-views").json()
+    assert [o for o in remaining if not o.get("builtin")] == []
+
+
+def test_builtin_macro_listed_and_readonly(client):
+    """The bilinear_weights macro is a system builtin: it shows up in the
+    user-views list flagged read-only and is callable from a query."""
+    import era5_etl.web.user_views_store as store
+
+    listed = client.get("/api/user-views").json()
+    builtin = next((o for o in listed if o["name"] == "bilinear_weights"), None)
+    assert builtin is not None, "bilinear_weights builtin must be listed"
+    assert builtin["builtin"] is True
+    assert builtin["kind"] == "macro"
+    assert builtin["ok"] is True
+
+    # The name is reserved — a user cannot shadow it.
+    clash = client.post(
+        "/api/user-views",
+        json={
+            "name": "bilinear_weights",
+            "kind": "macro",
+            "sql": "CREATE OR REPLACE MACRO bilinear_weights(x) AS x",
+        },
+    )
+    assert clash.status_code == 400
+
+    # Callable: register a trivial object so the "no data yet" 404 gate
+    # opens, then check 4 equal corners interpolate to the same value
+    # (the exact numeric type depends on inputs — compare numerically).
+    store.add_object(
+        name="gate", kind="view", sql="CREATE OR REPLACE VIEW gate AS SELECT 1 AS a"
+    )
+    r = client.post(
+        "/api/query",
+        json={"sql": "SELECT bilinear_weights(0.5, 0.5, 10, 10, 10, 10) AS v"},
+    )
+    assert r.status_code == 200, r.text
+    assert float(r.json()["rows"][0][0]) == 10.0
+
+
+def test_create_or_replace_overwrites_existing(client):
+    """Re-saving a view via POST with `CREATE OR REPLACE` must overwrite
+    the existing object instead of erroring on the name collision."""
+    first = client.post(
+        "/api/user-views",
+        json={
+            "name": "myview",
+            "kind": "view",
+            "sql": "CREATE OR REPLACE VIEW myview AS SELECT 1 AS a",
+        },
+    )
+    assert first.status_code == 200, first.text
+    original_id = first.json()["id"]
+
+    # Same name, new SQL, still CREATE OR REPLACE -> overwrite, no error.
+    second = client.post(
+        "/api/user-views",
+        json={
+            "name": "myview",
+            "kind": "view",
+            "sql": "CREATE OR REPLACE VIEW myview AS SELECT 2 AS b",
+        },
+    )
+    assert second.status_code == 200, second.text
+    # Same object updated in place (id preserved), SQL replaced.
+    assert second.json()["id"] == original_id
+    assert "SELECT 2 AS b" in second.json()["sql"]
+
+    listed = client.get("/api/user-views").json()
+    assert len([o for o in listed if o["name"] == "myview"]) == 1
+
+
+def test_plain_create_still_rejects_duplicate(client):
+    """A plain `CREATE VIEW` (no OR REPLACE) must still fail on a name
+    collision — only OR REPLACE opts into overwriting."""
+    r = client.post(
+        "/api/user-views",
+        json={
+            "name": "dup",
+            "kind": "view",
+            "sql": "CREATE OR REPLACE VIEW dup AS SELECT 1 AS a",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    clash = client.post(
+        "/api/user-views",
+        json={
+            "name": "dup",
+            "kind": "view",
+            "sql": "CREATE VIEW dup AS SELECT 2 AS b",
+        },
+    )
+    assert clash.status_code == 400
+    assert "already exists" in clash.json()["detail"]
+
+
+def test_builtin_objects_carry_didactic_docs():
+    """Every system builtin must ship didactic SQL comments: a parameter
+    section and a usage example. Clicking a builtin in SCHEMA loads this
+    text into the editor, so it must teach the user how to use it."""
+    from era5_etl.web.builtin_objects import BUILTIN_OBJECTS
+
+    assert BUILTIN_OBJECTS, "expected at least one builtin object"
+    for obj in BUILTIN_OBJECTS:
+        sql_upper = obj["sql"].upper()
+        assert "--" in obj["sql"], f"{obj['name']} must have SQL comments"
+        assert "PARAMETER" in sql_upper, (
+            f"builtin {obj['name']} must document its parameters"
+        )
+        assert "USAGE EXAMPLE" in sql_upper, (
+            f"builtin {obj['name']} must include a usage example"
+        )
 
 
 def test_build_sql_endpoint(client):
@@ -89,7 +203,8 @@ def test_builder_spec_roundtrip(client):
     assert obj["builder_spec"]["name"] == "v"
 
     listed = client.get("/api/user-views").json()
-    assert listed[0]["builder_spec"]["sources"][0]["columns"] == ["a"]
+    v_obj = next(o for o in listed if o["name"] == "v")
+    assert v_obj["builder_spec"]["sources"][0]["columns"] == ["a"]
 
     # Editing without builder_spec wipes the snapshot (the SQL came from
     # the SQL editor, not the builder).

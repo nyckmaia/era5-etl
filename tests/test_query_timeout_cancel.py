@@ -13,10 +13,10 @@ def client(tmp_path, monkeypatch):
 
 
 def test_query_timeout_default_and_roundtrip(client):
-    # Default is 10 s.
+    # Default is 120 s.
     r = client.get("/api/settings")
     assert r.status_code == 200
-    assert r.json()["query_timeout_s"] == 10
+    assert r.json()["query_timeout_s"] == 120
 
     # Set a new value.
     r = client.post("/api/settings", json={"query_timeout_s": 30})

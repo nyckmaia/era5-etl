@@ -5,7 +5,6 @@ import {
   Download,
   Loader2,
   Play,
-  Save,
   SlidersHorizontal,
   WandSparkles,
   XCircle,
@@ -16,7 +15,6 @@ import { toast } from "sonner";
 import { QueryBuilderPanel } from "@/components/query/QueryBuilderPanel";
 import { QueryTabsBar, type PersistedTab } from "@/components/query/QueryTabsBar";
 import { RightSidebar } from "@/components/query/RightSidebar";
-import { SaveObjectDialog } from "@/components/query/SaveObjectDialog";
 import { SchemaSidebar } from "@/components/query/SchemaSidebar";
 import { ViewBuilderModal } from "@/components/query/ViewBuilderModal";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -36,6 +34,13 @@ const datasetToView = (d: string) => d.replace(/-/g, "_");
 const viewToDataset = (v: string) => v.replace(/_/g, "-");
 
 const defaultSql = (view: string) => `SELECT *\nFROM ${view}\nLIMIT 100;`;
+
+/** Server-side DuckDB execution time, human-readable. */
+function formatExecTime(ms: number): string {
+  if (ms < 1) return "<1 ms";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
 
 function formatCell(
   raw: string | number | null,
@@ -63,8 +68,10 @@ export function QueryPage() {
     queryFn: () => api.userViews.list(),
   });
   const [builderOpen, setBuilderOpen] = useState(false);
-  const [saveOpen, setSaveOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<UserObject | null>(null);
+  // SQL/timeout errors render in the result area (stable + selectable),
+  // not as a transient toast.
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Focused dataset: drives autocomplete/builder/history bucket/precision.
   // It does NOT scope query execution (M02a: every view is registered).
@@ -88,7 +95,7 @@ export function QueryPage() {
     false,
   );
   const [showBuilder, setShowBuilder] = useState(false);
-  const [limit, setLimit] = useState(1000);
+  const [limit, setLimit] = useState(10000);
 
   // One-time bootstrap: seed tab 1 from ?view= (M01) or the focused view.
   const seeded = useRef(false);
@@ -155,6 +162,11 @@ export function QueryPage() {
         abortRef.current = null;
       }
     },
+    onMutate: () => {
+      // Clear any previous error so the result area doesn't show a
+      // stale failure while the new run is in flight.
+      setErrorMsg(null);
+    },
     onError: (e) => {
       const err = e as Error & { name?: string };
       const msg = err.message ?? "";
@@ -165,17 +177,16 @@ export function QueryPage() {
         toast.info("Query cancelada");
         return;
       }
-      if (msg.startsWith("Tempo limite")) {
-        toast.warning(msg);
-        return;
-      }
       if (msg.startsWith("Query cancelada")) {
         toast.info(msg);
         return;
       }
-      toast.error(msg || "Erro ao executar a query");
+      // SQL and timeout errors: show the description stably in the
+      // result area (selectable text), not as a transient toast.
+      setErrorMsg(msg || "Erro ao executar a query");
     },
     onSuccess: (r) => {
+      setErrorMsg(null);
       // DDL through Run query (CREATE VIEW/MACRO) returns a 1-row status
       // table. Surface a friendly toast AND refresh the SCHEMA sidebar
       // so the new/updated object shows up under Minhas views & macros.
@@ -224,6 +235,19 @@ export function QueryPage() {
       },
     ]);
     setActiveId(id);
+  }
+
+  // Open an object's defining SQL in a fresh tab — used to inspect a
+  // system builtin (e.g. the bilinear_weights macro) without disturbing
+  // the SQL the user is currently editing.
+  function openObjectSql(obj: UserObject) {
+    const id = uid();
+    setTabs((prev) => [
+      ...prev,
+      { id, name: obj.name, sql: obj.sql, userEdited: false },
+    ]);
+    setActiveId(id);
+    toast.success(`SQL de "${obj.name}" aberto em uma nova aba`);
   }
 
   function closeTab(id: string) {
@@ -335,6 +359,7 @@ export function QueryPage() {
             setEditTarget(o);
             setBuilderOpen(true);
           }}
+          onOpenSql={openObjectSql}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -426,32 +451,6 @@ export function QueryPage() {
                   <Download className="h-4 w-4" />
                   CSV
                 </button>
-                <button
-                  className="btn-outline"
-                  type="button"
-                  disabled={!activeTab}
-                  onClick={() =>
-                    activeTab &&
-                    api
-                      .exportQuery("parquet", activeTab.sql)
-                      .catch((e) => toast.error((e as Error).message))
-                  }
-                >
-                  <Download className="h-4 w-4" />
-                  Parquet
-                </button>
-                <button
-                  className="btn-outline"
-                  onClick={() => {
-                    setEditTarget(null);
-                    setSaveOpen(true);
-                  }}
-                  disabled={!activeTab}
-                  title="Salvar a SQL atual como VIEW/MACRO"
-                >
-                  <Save className="h-4 w-4" />
-                  Salvar VIEW
-                </button>
                 {runQuery.isPending ? (
                   <button
                     type="button"
@@ -498,7 +497,17 @@ export function QueryPage() {
               </div>
             ) : null}
 
-            {runQuery.data ? (
+            {errorMsg ? (
+              <div className="mt-4 overflow-hidden rounded-lg border border-rose-200">
+                <div className="flex items-center gap-2 border-b border-rose-200 bg-rose-50 px-5 py-3 text-xs font-semibold text-rose-700">
+                  <XCircle className="h-4 w-4 shrink-0" />
+                  Erro ao executar a query
+                </div>
+                <pre className="max-h-[40vh] select-text overflow-auto whitespace-pre-wrap break-words px-5 py-4 font-mono text-xs leading-relaxed text-rose-800">
+                  {errorMsg}
+                </pre>
+              </div>
+            ) : runQuery.data ? (
               <div className="mt-4 overflow-hidden rounded-lg border border-ink-100">
                 {runQuery.data.truncated ? (
                   <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs text-amber-800">
@@ -515,6 +524,12 @@ export function QueryPage() {
                       linhas. Aumente o limite de linhas ou refine a query
                       (ex.: filtros / agregação) para ver o restante.
                     </span>
+                    <span
+                      className="ml-auto shrink-0 tabular-nums text-amber-600"
+                      title="Tempo de execução no DuckDB"
+                    >
+                      {formatExecTime(runQuery.data.elapsed_ms)}
+                    </span>
                   </div>
                 ) : (
                   <div className="border-b border-ink-100 px-5 py-3 text-xs text-ink-500">
@@ -522,21 +537,25 @@ export function QueryPage() {
                       {runQuery.data.row_count.toLocaleString()}
                     </span>{" "}
                     linhas
+                    <span className="mx-1.5 text-ink-300">·</span>
+                    <span
+                      className="tabular-nums text-ink-400"
+                      title="Tempo de execução no DuckDB"
+                    >
+                      {formatExecTime(runQuery.data.elapsed_ms)}
+                    </span>
                   </div>
                 )}
                 <div className="max-h-[40vh] overflow-auto">
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 bg-ink-50">
                       <tr>
-                        {runQuery.data.columns.map((c, i) => (
+                        {runQuery.data.columns.map((c) => (
                           <th
                             key={c}
                             className="px-3 py-2 text-left font-medium"
                           >
-                            <div>{c}</div>
-                            <div className="text-[10px] font-normal text-ink-400">
-                              {runQuery.data.column_types[i]}
-                            </div>
+                            {c}
                           </th>
                         ))}
                       </tr>
@@ -595,12 +614,6 @@ export function QueryPage() {
         />
       </div>
 
-      <SaveObjectDialog
-        open={saveOpen}
-        onOpenChange={setSaveOpen}
-        initialSql={activeTab?.sql ?? ""}
-        editing={editTarget}
-      />
       <ViewBuilderModal
         open={builderOpen}
         onOpenChange={setBuilderOpen}

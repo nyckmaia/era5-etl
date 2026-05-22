@@ -31,6 +31,7 @@ _DDL_RE = re.compile(
     r"^\s*CREATE\s+(OR\s+REPLACE\s+)?(TEMP\s+|TEMPORARY\s+)?(VIEW|MACRO)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_OR_REPLACE_RE = re.compile(r"^\s*CREATE\s+OR\s+REPLACE\b", re.IGNORECASE)
 # Block anything that could mutate state or read/write outside the
 # read-only parquet sandbox. Parity with query._validate_sql plus DDL.
 _DENIED_RE = re.compile(
@@ -73,14 +74,17 @@ def _save(data: dict[str, Any]) -> None:
 
 
 def _reserved_names() -> set[str]:
-    # Only the Parquet-backed base views are reserved. `era5_inmet` is
-    # NOT reserved — it is a user-created view (the era5-inmet-compare
+    # The Parquet-backed base views plus the system-provided builtin
+    # objects (e.g. the bilinear_weights macro) are reserved. `era5_inmet`
+    # is NOT reserved — it is a user-created view (the era5-inmet-compare
     # template exists precisely so the user can save it under that name).
-    return {view_name_for(n) for n in DatasetRegistry.names()} | {
-        "era5",
-        "era5_land",
-        "inmet",
-    }
+    from era5_etl.web.builtin_objects import BUILTIN_NAMES
+
+    return (
+        {view_name_for(n) for n in DatasetRegistry.names()}
+        | {"era5", "era5_land", "inmet"}
+        | set(BUILTIN_NAMES)
+    )
 
 
 def validate_ddl(name: str, kind: str, sql: str) -> None:
@@ -107,6 +111,17 @@ def validate_ddl(name: str, kind: str, sql: str) -> None:
     body = _DDL_RE.sub("", sql, count=1).strip().rstrip(";")
     if _DENIED_RE.search(body):
         raise UserObjectError("SQL contains a disallowed statement.")
+
+
+def is_or_replace(sql: str) -> bool:
+    """True when the DDL starts with ``CREATE OR REPLACE``.
+
+    SQL semantics: ``CREATE OR REPLACE VIEW`` means "create it, or
+    overwrite the existing one of the same name". Callers use this to
+    decide whether a name collision is an error (plain ``CREATE``) or an
+    intentional overwrite (``CREATE OR REPLACE``).
+    """
+    return bool(_OR_REPLACE_RE.match(sql))
 
 
 def add_object(
@@ -217,6 +232,8 @@ __all__ = [
     "UserObjectError",
     "add_object",
     "delete_object",
+    "find_by_name",
+    "is_or_replace",
     "list_objects",
     "register_user_objects",
     "update_object",

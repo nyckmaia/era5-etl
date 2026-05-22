@@ -278,6 +278,7 @@ class QueryOut(BaseModel):
     row_count: int  # rows actually returned (== min(total_rows, limit))
     truncated: bool
     total_rows: int  # rows the query would return without the limit
+    elapsed_ms: float  # server-side DuckDB execution time in milliseconds
 
 
 class DatasetDeleteOut(BaseModel):
@@ -339,6 +340,8 @@ class UserObjectOut(BaseModel):
     ok: bool = True
     error: str | None = None
     columns: list[SchemaColumn] = []
+    #: System-provided object (defined in code, not user-editable).
+    builtin: bool = False
 
 
 class BuildSqlOut(BaseModel):

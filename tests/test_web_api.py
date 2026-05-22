@@ -18,7 +18,11 @@ from era5_etl.web.server import create_app
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # Isolate the user-views store so the suite never reads the real
+    # user's ~/.era5-etl/user_views.json (a persisted view/macro there
+    # would leak into "no data" assertions).
+    monkeypatch.setenv("ERA5_ETL_CONFIG_DIR", str(tmp_path / "cfg"))
     app = create_app(tmp_path)
     return TestClient(app)
 
