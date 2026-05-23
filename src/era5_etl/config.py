@@ -171,8 +171,10 @@ class TransformConfig(BaseModel):
         default=None,
         description=(
             "Brazilian UF sigla(s) (e.g. ['SP', 'RJ']) or ['BR']. When set, "
-            "grid points outside the polygon (with half-cell buffer) are dropped "
-            "before writing Parquet. Gridded CDS datasets only. See "
+            "only grid points whose center falls strictly inside the polygon "
+            "are kept; all others are dropped before writing Parquet. UF "
+            "memberships are mutually exclusive — adjacent states do not share "
+            "points. Gridded CDS datasets only. See "
             ":mod:`era5_etl.regions.membership` for the pre-computed lookup."
         ),
     )

@@ -38,16 +38,42 @@ def test_available_regions_same_for_both_datasets():
 
 
 def test_latlon_set_dedupes_overlapping_regions():
-    # SP and RJ are adjacent; their unioned latlon_set must dedupe.
+    # SP and RJ are adjacent. With the strict "center inside polygon" rule
+    # (no half-cell buffer) UF polygons are disjoint, so the union must
+    # equal the sum — no shared points.
     sp = latlon_set("era5", ["SP"]).height
     rj = latlon_set("era5", ["RJ"]).height
     both = latlon_set("era5", ["SP", "RJ"]).height
-    assert both <= sp + rj  # union must not exceed sum
+    assert both == sp + rj
     # Result schema invariants are preserved.
     df = latlon_set("era5", ["SP", "RJ"])
     assert df.schema["latitude"] == pl.Float32
     assert df.schema["longitude"] == pl.Float32
     assert df.columns == ["latitude", "longitude"]
+
+
+@pytest.mark.parametrize(
+    ("dataset", "a", "b"),
+    [
+        ("era5", "SP", "MG"),
+        ("era5", "SP", "RJ"),
+        ("era5", "RS", "SC"),
+        ("era5", "BA", "MG"),
+        ("era5", "AM", "PA"),
+        ("era5-land", "SP", "RJ"),
+        ("era5-land", "RS", "SC"),
+    ],
+)
+def test_adjacent_ufs_share_no_grid_points(dataset, a, b):
+    # Each grid point must belong to at most one UF — this is the whole
+    # point of removing the half-cell buffer. Adjacent UFs are the hardest
+    # case.
+    only_a = latlon_set(dataset, [a]).height
+    only_b = latlon_set(dataset, [b]).height
+    union = latlon_set(dataset, [a, b]).height
+    assert union == only_a + only_b, (
+        f"{dataset}: {a} and {b} share {only_a + only_b - union} grid point(s)"
+    )
 
 
 def test_latlon_set_era5_land_is_denser_than_era5():

@@ -1,8 +1,11 @@
 """Build the grid_membership parquet from Brazilian IBGE shapefiles.
 
 For each combination of (gridded ERA5 dataset, Brazilian region), this script
-emits the set of CDS-native grid cells whose center falls inside the region
-polygon expanded by a half-cell buffer. The result is a single Parquet file at:
+emits the set of CDS-native grid cells whose center falls strictly inside
+the region polygon. Because UF polygons are disjoint, each grid point
+belongs to at most one UF — so downloading adjacent UFs at different times
+no longer produces overlapping points in the resulting Parquet. The result
+is a single Parquet file at:
 
     src/era5_etl/_data/regions/grid_membership.parquet
 
@@ -134,26 +137,34 @@ def _build_membership_for_region(
 ) -> list[pl.DataFrame]:
     """Generate one DataFrame per dataset for the given region.
 
-    The polygon is buffered by half a grid cell so coastal/border cells
-    whose footprint overlaps the region are kept (matches the spec).
+    A grid cell is kept iff its center point falls strictly inside the
+    polygon — no half-cell buffer. This makes UF memberships mutually
+    exclusive, so the same cell cannot belong to two adjacent states.
     """
     minx, miny, maxx, maxy = geometry.bounds
-    # Add a small safety margin to the bounds to capture buffered border points.
+    # Small margin to absorb snap_up/snap_down rounding of the bounds.
     bounds = (minx - 0.5, miny - 0.5, maxx + 0.5, maxy + 0.5)
 
     out: list[pl.DataFrame] = []
     for dataset_name, resolution, decimals in DATASETS:
-        half_cell = resolution / 2.0
-        buffered = geometry.buffer(half_cell)
         lats, lons = _grid_points_in_bbox(bounds, resolution, decimals)
-        mask = _points_inside(buffered, lats, lons)
+        mask = _points_inside(geometry, lats, lons)
         kept_lats = lats[mask].astype(np.float32)
         kept_lons = lons[mask].astype(np.float32)
         if kept_lats.size == 0:
             log.warning(
-                "Region %s (%s) produced 0 grid cells — verify polygon geometry.",
+                "Region %s (%s) produced 0 grid cells — too small for this "
+                "resolution, or verify polygon geometry.",
                 region_code,
                 dataset_name,
+            )
+        elif kept_lats.size < 3:
+            log.warning(
+                "Region %s (%s) produced only %d grid cell(s) — small region "
+                "at this resolution; consider a denser dataset.",
+                region_code,
+                dataset_name,
+                kept_lats.size,
             )
         else:
             log.info(

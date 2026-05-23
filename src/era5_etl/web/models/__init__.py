@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,32 @@ class DatasetOut(BaseModel):
 
 class InmetYearsOut(BaseModel):
     years: list[int]
+
+
+InmetYearStatus = Literal["complete", "partial", "stale", "current"]
+
+
+class InmetYearStatusItem(BaseModel):
+    """Completeness summary for a single INMET year in the local database."""
+
+    year: int
+    status: InmetYearStatus
+    n_stations: int
+    n_stations_complete: int
+    min_date_max: date | None
+    max_date_max: date | None
+    downloaded_at: datetime | None
+
+
+class InmetYearStatusOut(BaseModel):
+    items: list[InmetYearStatusItem]
+    current_year: int
+    #: INMET typically publishes a year's December data ~3 months later.
+    expected_publish_lag_days: int = 90
+
+
+class InmetUpdateYearsIn(BaseModel):
+    years: list[int] = Field(..., min_length=1)
 
 
 class StationPointOut(BaseModel):
@@ -207,8 +234,17 @@ class PipelineRunIn(BaseModel):
         default=None,
         description=(
             "Brazilian UF sigla(s) (e.g. ['SP','RJ']) or ['BR']. When set, "
-            "grid points outside the polygon (with half-cell buffer) are "
-            "dropped before Parquet write. Gridded datasets only."
+            "only grid points whose center falls strictly inside the polygon "
+            "are kept; all others are dropped before Parquet write. UF "
+            "memberships are mutually exclusive. Gridded datasets only."
+        ),
+    )
+    override: bool = Field(
+        default=False,
+        description=(
+            "Force re-download even when the manifest already lists the "
+            "request. Used to refresh INMET years whose ZIP has been "
+            "updated upstream."
         ),
     )
 
@@ -501,6 +537,9 @@ __all__ = [
     "EstimateChunkOut",
     "EstimateIn",
     "EstimateOut",
+    "InmetUpdateYearsIn",
+    "InmetYearStatusItem",
+    "InmetYearStatusOut",
     "InmetYearsOut",
     "PathValidationOut",
     "PipelineRunIn",

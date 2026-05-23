@@ -194,6 +194,7 @@ def _build_phases(body: PipelineRunIn, data_dir: Path) -> list[_Phase]:
         hours=body.hours,
         years=body.years,
         clip_regions=body.clip_regions,
+        override=body.override,
     )
     main_phase = _Phase(
         name=body.dataset if body.dataset != "inmet" else "inmet",

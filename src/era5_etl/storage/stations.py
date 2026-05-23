@@ -308,6 +308,30 @@ class StationIndex:
             [station_id],
         ).pl()
 
+    def query_year_status(self) -> pl.DataFrame:
+        """Per-year aggregate: how many stations exist and how many reached Dec 31.
+
+        Columns: ``year, n_stations, n_stations_complete, min_date_max,
+        max_date_max``. ``n_stations_complete`` counts stations whose
+        ``date_max`` reaches ``year-12-31``. The caller classifies each
+        year as complete/partial/stale/current.
+        """
+        conn = self._connect()
+        return conn.execute(
+            """
+            SELECT
+                year,
+                COUNT(*)                       AS n_stations,
+                SUM(CASE WHEN date_max >= make_date(year, 12, 31)
+                         THEN 1 ELSE 0 END)    AS n_stations_complete,
+                MIN(date_max)                  AS min_date_max,
+                MAX(date_max)                  AS max_date_max
+            FROM station_coverage
+            GROUP BY year
+            ORDER BY year DESC
+            """
+        ).pl()
+
     def schema_version_on_disk(self) -> str | None:
         conn = self._connect()
         try:

@@ -46,6 +46,18 @@ def available_regions(dataset: str) -> list[str]:
     return sorted(_load_all(dataset)["region"].unique().to_list())
 
 
+def region_counts(dataset: str) -> dict[str, int]:
+    """Return ``{region: cell_count}`` for ``dataset``.
+
+    Regions with zero grid cells (too small for the dataset's resolution)
+    are not present in the parquet and therefore not in the dict — callers
+    should treat a missing key as zero.
+    """
+    df = _load_all(dataset)
+    grouped = df.group_by("region").len().to_dicts()
+    return {str(r["region"]): int(r["len"]) for r in grouped}
+
+
 def validate_regions(dataset: str, regions: list[str]) -> None:
     """Raise ValueError if any region is not available for ``dataset``."""
     known = set(available_regions(dataset))

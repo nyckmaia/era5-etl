@@ -191,6 +191,7 @@ export function DownloadWizardPage() {
         )}
         {step === 2 && (
           <StepArea
+            dataset={dataset}
             value={area}
             onChange={setArea}
             clipRegions={clipRegions}
@@ -587,11 +588,13 @@ const UF_LIST = [
 ];
 
 function StepArea({
+  dataset,
   value,
   onChange,
   clipRegions,
   onClipRegionsChange,
 }: {
+  dataset: string;
   value: [number, number, number, number];
   onChange: (v: [number, number, number, number]) => void;
   clipRegions: string[];
@@ -605,6 +608,11 @@ function StepArea({
   const { data: ufBboxes } = useQuery({
     queryKey: ["regions-uf"],
     queryFn: api.regions.uf,
+  });
+  const { data: ufCellCounts } = useQuery({
+    queryKey: ["regions-uf-cell-counts", dataset],
+    queryFn: () => api.regions.ufCellCounts(dataset),
+    enabled: Boolean(dataset),
   });
 
   function applyUfs(ufs: string[]) {
@@ -687,18 +695,37 @@ function StepArea({
         <div className="flex flex-wrap gap-1.5">
           {UF_LIST.map((uf) => {
             const on = !brSelected && selectedUfs.includes(uf);
+            const count = ufCellCounts?.[uf];
+            const isZero = count === 0;
+            const baseClass = on
+              ? "bg-ocean-600 text-white"
+              : isZero
+                ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
+                : "bg-ink-100 text-ink-600 hover:bg-ink-200";
             return (
               <button
                 key={uf}
                 type="button"
                 onClick={() => toggleUf(uf)}
-                className={
-                  on
-                    ? "rounded-md bg-ocean-600 px-2.5 py-1 text-xs font-medium text-white"
-                    : "rounded-md bg-ink-100 px-2.5 py-1 text-xs font-medium text-ink-600 hover:bg-ink-200"
+                title={
+                  count === undefined
+                    ? uf
+                    : isZero
+                      ? `${uf} — 0 grid points for ${dataset}`
+                      : `${uf} — ${count} grid points`
                 }
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ${baseClass}`}
               >
                 {uf}
+                {count !== undefined && (
+                  <span
+                    className={`ml-1.5 tabular-nums ${
+                      on ? "opacity-80" : "opacity-70"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                )}
               </button>
             );
           })}

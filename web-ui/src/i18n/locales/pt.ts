@@ -126,7 +126,7 @@ export const pt = {
       allUfs: "Todas as UFs",
       noClip: "Sem recorte",
       brazilClipNote:
-        "Recorte ao polígono do Brasil (com buffer de meia célula). Pontos de grade fora do território serão descartados antes do Parquet.",
+        "Recorte ao polígono do Brasil. Apenas pontos de grade cujo centro está dentro do território são mantidos; os demais serão descartados antes do Parquet.",
       ufsClipNote:
         "{{count}} UF(s) selecionada(s) — bbox ajustado para a união, e pontos fora do polígono serão descartados antes do Parquet.",
       noClipNote: "Sem recorte: o retângulo abaixo será baixado por inteiro.",
@@ -180,8 +180,8 @@ export const pt = {
       area: "Área",
       polygonClip: "Recorte por polígono",
       polygonNoClip: "Sem recorte (bbox bruto)",
-      polygonBrazil: "Brasil (polígono, buffer de meia célula)",
-      polygonUfs: "UF(s): {{ufs}} (buffer de meia célula)",
+      polygonBrazil: "Brasil (polígono, estrito)",
+      polygonUfs: "UF(s): {{ufs}} (polígono estrito)",
       smartDiff: "Smart Diff",
       estimateSize: "Estimar tamanho",
       startDownload: "Iniciar download",
@@ -210,11 +210,40 @@ export const pt = {
       selectAll: "Marcar todos",
       deselectAll: "Desmarcar todos",
     },
+    status: {
+      lagNoticeTitle: "Atraso de publicação do INMET",
+      lagNoticeBody:
+        "O INMET publica os dados de dezembro de cada ano com cerca de 3 meses de atraso. O ano corrente está sempre em curso; anos recentes podem precisar de atualização por volta de março/abril.",
+      legendLabel: "Status do ano:",
+      complete: "Completo",
+      partial: "Possivelmente incompleto",
+      stale: "Desatualizado",
+      current: "Em curso (ano corrente)",
+      tooltip: {
+        lastRecord: "Último registro: {{date}}",
+        stationsComplete:
+          "{{n}}/{{total}} estações chegaram a 31/dez",
+        downloadedAt: "Baixado: {{when}}",
+        neverDownloaded: "Não está no banco local",
+      },
+      updateAllStale: "Atualizar {{count}} ano(s) desatualizado(s)",
+      updateCurrent: "Atualizar o ano corrente",
+      updateRunning: "Atualização em curso…",
+      partialDialog: {
+        title: "O ano {{year}} está parcialmente completo",
+        body:
+          "{{missing}} de {{total}} estações não chegaram a 31 de dezembro. Podem ter sido desativadas, ou o ZIP pode estar desatualizado. Como deseja proceder?",
+        update: "Atualizar (re-baixar)",
+        dismiss: "Ignorar (provavelmente estações desativadas)",
+        cancel: "Cancelar",
+      },
+    },
     run: {
       title: "2. Executar",
       selectAtLeastOne: "Selecione ao menos um ano.",
       yearsSelected: "{{count}} ano(s) selecionado(s).",
       button: "Baixar + processar INMET",
+      buttonUpdate: "Atualizar + reprocessar anos selecionados",
       failure: "Falha ao iniciar: {{message}}",
       runStarted: "Run iniciado:",
       nextSteps: "Próximos passos",

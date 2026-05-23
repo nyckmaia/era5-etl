@@ -460,6 +460,10 @@ export const api = {
       request<{ regions: string[] }>(
         `/api/regions/clip-available?dataset=${encodeURIComponent(dataset)}`,
       ),
+    ufCellCounts: (dataset: string) =>
+      request<Record<string, number>>(
+        `/api/regions/uf-cell-counts?dataset=${encodeURIComponent(dataset)}`,
+      ),
   },
   queryTemplates: () => request<TemplateItem[]>("/api/query/templates"),
   userViews: {
@@ -624,6 +628,28 @@ export const api = {
   // prerequisite call any more.
   inmet: {
     years: () => request<{ years: number[] }>("/api/inmet/years"),
+    yearStatus: () =>
+      request<{
+        items: Array<{
+          year: number;
+          status: "complete" | "partial" | "stale" | "current";
+          n_stations: number;
+          n_stations_complete: number;
+          min_date_max: string | null;
+          max_date_max: string | null;
+          downloaded_at: string | null;
+        }>;
+        current_year: number;
+        expected_publish_lag_days: number;
+      }>("/api/inmet/year-status"),
+    updateYears: (years: number[]) =>
+      request<{ run_id: string; dataset: string; status: string }>(
+        "/api/inmet/update-years",
+        {
+          method: "POST",
+          body: JSON.stringify({ years }),
+        },
+      ),
     run: (years: number[]) =>
       request<{ run_id: string; dataset: string; status: string }>(
         "/api/pipeline/run",

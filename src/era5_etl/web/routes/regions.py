@@ -46,3 +46,24 @@ def clip_available(dataset: str) -> dict[str, list[str]]:
     from era5_etl.regions.membership import available_regions
 
     return {"regions": available_regions(dataset)}
+
+
+@router.get("/uf-cell-counts")
+def uf_cell_counts(dataset: str) -> dict[str, int]:
+    """Grid-cell count per region for ``dataset``.
+
+    Returns ``{"SP": 460, "RJ": 91, ...}``. Regions with zero cells are
+    still present in the response (value ``0``) so the UI can flag them.
+    Stations sources (e.g. INMET) return an empty dict — clipping by UF
+    polygon does not apply to them.
+    """
+    if dataset not in DatasetRegistry.names():
+        raise HTTPException(status_code=400, detail=f"Unknown dataset: {dataset}")
+    if not DatasetRegistry.get(dataset).is_gridded:
+        return {}
+    from era5_etl.regions.membership import region_counts
+
+    counts = region_counts(dataset)
+    df_uf = load_region_data(RegionType.UF)
+    all_ufs = [str(r["uf"]) for r in df_uf.to_dicts()]
+    return {uf: counts.get(uf, 0) for uf in all_ufs}

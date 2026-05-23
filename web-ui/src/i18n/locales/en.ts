@@ -127,7 +127,7 @@ export const en: Dictionary = {
       allUfs: "All states",
       noClip: "No clipping",
       brazilClipNote:
-        "Clip to Brazil polygon (with half-cell buffer). Grid points outside the territory are discarded before Parquet.",
+        "Clip to Brazil polygon. Only grid points whose center falls inside the territory are kept; the rest are discarded before Parquet.",
       ufsClipNote:
         "{{count}} state(s) selected — bbox adjusted to the union, and points outside the polygon are discarded before Parquet.",
       noClipNote: "No clipping: the rectangle below will be downloaded as-is.",
@@ -180,8 +180,8 @@ export const en: Dictionary = {
       area: "Area",
       polygonClip: "Polygon clip",
       polygonNoClip: "No clip (raw bbox)",
-      polygonBrazil: "Brazil (polygon, half-cell buffer)",
-      polygonUfs: "State(s): {{ufs}} (half-cell buffer)",
+      polygonBrazil: "Brazil (polygon, strict)",
+      polygonUfs: "State(s): {{ufs}} (strict polygon)",
       smartDiff: "Smart Diff",
       estimateSize: "Estimate size",
       startDownload: "Start download",
@@ -210,11 +210,40 @@ export const en: Dictionary = {
       selectAll: "Select all",
       deselectAll: "Deselect all",
     },
+    status: {
+      lagNoticeTitle: "INMET publication lag",
+      lagNoticeBody:
+        "INMET publishes each year's December data ~3 months later. The current year is always in progress; recent years may need an update around March/April.",
+      legendLabel: "Year status:",
+      complete: "Complete",
+      partial: "Possibly incomplete",
+      stale: "Outdated",
+      current: "In progress (current year)",
+      tooltip: {
+        lastRecord: "Last record: {{date}}",
+        stationsComplete:
+          "{{n}}/{{total}} stations reached Dec 31",
+        downloadedAt: "Downloaded: {{when}}",
+        neverDownloaded: "Not in local database",
+      },
+      updateAllStale: "Update {{count}} outdated year(s)",
+      updateCurrent: "Update current year",
+      updateRunning: "Update in progress…",
+      partialDialog: {
+        title: "Year {{year}} is partially complete",
+        body:
+          "{{missing}} of {{total}} stations did not reach December 31. They may have been deactivated, or the ZIP may be outdated. Choose how to proceed:",
+        update: "Update (re-download)",
+        dismiss: "Ignore (likely deactivated stations)",
+        cancel: "Cancel",
+      },
+    },
     run: {
       title: "2. Run",
       selectAtLeastOne: "Pick at least one year.",
       yearsSelected: "{{count}} year(s) selected.",
       button: "Download + process INMET",
+      buttonUpdate: "Update + re-process selected years",
       failure: "Failed to start: {{message}}",
       runStarted: "Run started:",
       nextSteps: "Next steps",
