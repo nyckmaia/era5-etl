@@ -1,0 +1,46 @@
+{
+  "name": "XGBoost — INMET temperature from ERA5-LAND neighbours",
+  "description": "Train an XGBoost regressor that predicts a chosen INMET station's air temperature using the 4 surrounding ERA5-LAND grid cells. Each run is logged in this notebook's history panel.",
+  "cells": [
+    {
+      "type": "markdown",
+      "source": "# Predicting INMET temperature from the 4 ERA5-LAND neighbours\n\nThis template:\n\n1. Loads INMET observations joined with the 4 enclosing ERA5-LAND cells for one station.\n2. Builds simple features (the 4 neighbour temperatures + hour-of-day + day-of-year).\n3. Splits **temporally** (last `TEST_FRACTION` of the period is the test set).\n4. Trains XGBoost with sane defaults.\n5. Reports RMSE / MAE / R² and plots predictions and residuals.\n6. Logs the run so you can compare hyperparameters over time in the **Model runs** panel.\n\n**Edit the `STATION_ID`, `DATE_START`, `DATE_END` and re-run all.**"
+    },
+    {
+      "type": "code",
+      "source": "# --- Configuration --------------------------------------------------\nSTATION_ID    = \"A001\"          # change to your station of interest\nDATE_START    = \"2022-01-01\"\nDATE_END      = \"2024-12-31\"\nTARGET_VAR    = \"temp_ar\"       # INMET 2-m air temperature column\nTEST_FRACTION = 0.2             # last 20% of the period is held out\nprint(f\"Station {STATION_ID}, {DATE_START} → {DATE_END}, target={TARGET_VAR}\")"
+    },
+    {
+      "type": "code",
+      "source": "# --- Load: INMET joined with the 4 surrounding ERA5-LAND cells ------\ndf = inmet_with_era5_land(STATION_ID, DATE_START, DATE_END)\nprint(f\"{len(df):,} hourly rows\")\ndf.head()"
+    },
+    {
+      "type": "code",
+      "source": "# --- Feature engineering -------------------------------------------\nimport pandas as pd\n\ndf = df.dropna(subset=[TARGET_VAR, \"era5_land_temp_tl\", \"era5_land_temp_tr\",\n                       \"era5_land_temp_bl\", \"era5_land_temp_br\"]).copy()\ndf[\"date\"] = pd.to_datetime(df[\"date\"])\ndf[\"hour\"] = df[\"hour_utc\"].astype(int)\ndf[\"month\"] = df[\"date\"].dt.month\ndf[\"dayofyear\"] = df[\"date\"].dt.dayofyear\n\nfeature_cols = [\n    \"era5_land_temp_tl\", \"era5_land_temp_tr\",\n    \"era5_land_temp_bl\", \"era5_land_temp_br\",\n    \"hour\", \"month\", \"dayofyear\", \"altitude\",\n]\ntarget_col = TARGET_VAR\ndf[feature_cols + [target_col]].describe()"
+    },
+    {
+      "type": "code",
+      "source": "# --- Temporal train/test split -------------------------------------\nn = len(df)\nn_test = max(1, int(n * TEST_FRACTION))\ntrain = df.iloc[: n - n_test].reset_index(drop=True)\ntest  = df.iloc[n - n_test :].reset_index(drop=True)\nprint(f\"train: {len(train):,} rows ({train['date'].min().date()} → {train['date'].max().date()})\")\nprint(f\"test : {len(test):,} rows ({test['date'].min().date()} → {test['date'].max().date()})\")"
+    },
+    {
+      "type": "code",
+      "source": "# --- Train XGBoost --------------------------------------------------\nimport time\nimport xgboost as xgb\n\nparams = dict(\n    n_estimators=400,\n    max_depth=6,\n    learning_rate=0.05,\n    subsample=0.9,\n    colsample_bytree=0.9,\n    tree_method=\"hist\",\n    random_state=42,\n)\nmodel = xgb.XGBRegressor(**params)\nt0 = time.perf_counter()\nmodel.fit(train[feature_cols], train[target_col])\nduration_s = time.perf_counter() - t0\nprint(f\"Trained in {duration_s:.2f}s\")"
+    },
+    {
+      "type": "code",
+      "source": "# --- Metrics --------------------------------------------------------\nimport numpy as np\nfrom sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score\n\ny_true = test[target_col].to_numpy()\ny_pred = model.predict(test[feature_cols])\nrmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))\nmae  = float(mean_absolute_error(y_true, y_pred))\nr2   = float(r2_score(y_true, y_pred))\nmetrics = {\"rmse\": rmse, \"mae\": mae, \"r2\": r2, \"n_test\": int(len(test))}\nprint(metrics)"
+    },
+    {
+      "type": "code",
+      "source": "# --- Predictions vs reality + residuals (Plotly) -------------------\nfig = plot_predictions(test, y_true, y_pred)\nfig"
+    },
+    {
+      "type": "code",
+      "source": "# --- Feature importance --------------------------------------------\nimport plotly.graph_objects as go\n\nimportance = sorted(zip(feature_cols, model.feature_importances_),\n                    key=lambda kv: kv[1], reverse=True)\nfig2 = go.Figure(go.Bar(x=[v for _, v in importance], y=[k for k, _ in importance],\n                        orientation=\"h\"))\nfig2.update_layout(template=\"plotly_white\", height=380, title=\"Feature importance\",\n                   yaxis=dict(autorange=\"reversed\"), margin=dict(l=120, r=20, t=50, b=40))\nfig2"
+    },
+    {
+      "type": "code",
+      "source": "# --- Log this run in the notebook's history panel -------------------\nlog_model_run(\n    params=params,\n    metrics=metrics,\n    duration_s=duration_s,\n    notes=f\"station={STATION_ID}, period={DATE_START}..{DATE_END}\",\n    model_name=\"xgboost\",\n)\nprint(\"Logged. Open the Model runs panel to compare with previous runs.\")"
+    }
+  ]
+}

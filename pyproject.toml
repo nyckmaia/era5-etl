@@ -77,6 +77,12 @@ regions-build = [
     "geopandas>=1.0",
     "shapely>=2.0",
 ]
+notebooks = [
+    "pandas>=2.0",
+    "plotly>=5.0",
+    "scikit-learn>=1.3",
+    "xgboost>=2.0",
+]
 
 [project.scripts]
 era5 = "era5_etl.cli:app"

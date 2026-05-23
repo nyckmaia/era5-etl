@@ -55,6 +55,7 @@ export const pt = {
       download: "Download",
       query: "Consulta",
       timeseries: "Séries temporais",
+      notebooks: "Notebooks",
       settings: "Configurações",
     },
     expandMenu: "Expandir menu",
@@ -727,6 +728,60 @@ export const pt = {
     downloadAllNote: "Re-baixa também os dados já presentes.",
     nothingMissing:
       "Nada faltando — todos os pontos/datas/horas/variáveis já estão no banco.",
+  },
+
+  notebooks: {
+    title: "Notebooks",
+    subtitle:
+      "Células estilo Jupyter já conectadas ao DuckDB do sistema (com suas views/macros). Use Python + pandas + Plotly, ou rode SQL direto.",
+    new: "Novo notebook",
+    loading: "Carregando notebooks…",
+    emptyHint: "Sem notebooks ainda. Crie um em branco ou parta de um template.",
+    card: {
+      cells: "{{count}} célula(s)",
+      delete: "Apagar notebook",
+      deleteConfirm: "Apagar \"{{name}}\"? Esta ação não pode ser desfeita.",
+    },
+    picker: {
+      title: "Escolha um ponto de partida",
+      body: "Templates já trazem código pronto que você pode editar.",
+      blankName: "Notebook em branco",
+      blankDescription: "Uma única célula Python vazia. Os imports são seus.",
+      cancel: "Cancelar",
+    },
+    editor: {
+      loading: "Carregando notebook…",
+      notFound: "Notebook não encontrado. Pode ter sido apagado em outra aba.",
+      save: "Salvar",
+      runCell: "Executar",
+      runCellTitle: "Executar célula (Ctrl/Cmd+Enter)",
+      addBelow: "Adicionar célula abaixo",
+      removeCell: "Apagar célula",
+      addCell: "Adicionar célula",
+    },
+    kernel: {
+      idle: "Kernel: pronto",
+      busy: "Kernel: executando…",
+      dead: "Kernel: parado",
+      restart: "Reiniciar",
+      restartTitle: "Mata e re-inicia o kernel (limpa todas as variáveis)",
+      stop: "Parar",
+      stopTitle: "Desligar o kernel",
+    },
+    runs: {
+      section: "Histórico de modelos",
+      title: "Runs de modelo ({{count}})",
+      empty:
+        "Nenhum run logado ainda. Chame log_model_run(params, metrics, duration_s).",
+      metricLabel: "Métrica:",
+      xAxis: "Run #",
+      col: {
+        when: "Quando",
+        model: "Modelo",
+        duration: "Duração",
+        notes: "Notas",
+      },
+    },
   },
 };
 

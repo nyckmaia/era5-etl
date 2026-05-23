@@ -81,6 +81,77 @@ class InmetUpdateYearsIn(BaseModel):
     years: list[int] = Field(..., min_length=1)
 
 
+class NotebookCellOut(BaseModel):
+    id: str
+    type: Literal["code", "sql", "markdown"]
+    source: str
+    outputs: list[dict] = Field(default_factory=list)
+
+
+class NotebookRunOut(BaseModel):
+    id: str
+    ts: int
+    model_name: str
+    params: dict
+    metrics: dict
+    duration_s: float
+    notes: str
+
+
+class NotebookOut(BaseModel):
+    id: str
+    name: str
+    cells: list[NotebookCellOut]
+    runs: list[NotebookRunOut]
+    created_ts: int
+    updated_ts: int
+
+
+class NotebookListItemOut(BaseModel):
+    id: str
+    name: str
+    updated_ts: int
+    created_ts: int
+    n_cells: int
+
+
+class NotebookCreateIn(BaseModel):
+    name: str = "Untitled notebook"
+    template_id: str | None = None
+
+
+class NotebookSaveIn(BaseModel):
+    name: str | None = None
+    cells: list[NotebookCellOut] | None = None
+
+
+class NotebookRunCellIn(BaseModel):
+    cell_id: str
+    code: str
+    lang: Literal["python", "sql"] = "python"
+
+
+class NotebookTemplateOut(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class NotebookRunRecordIn(BaseModel):
+    """Body posted by the in-kernel ``log_model_run`` helper."""
+
+    params: dict
+    metrics: dict
+    duration_s: float
+    notes: str = ""
+    model_name: str = "xgboost"
+
+
+class NotebookKernelStatusOut(BaseModel):
+    notebook_id: str
+    status: Literal["idle", "busy", "dead"]
+
+
 class StationPointOut(BaseModel):
     """One INMET station for the inventory map."""
 
@@ -541,6 +612,16 @@ __all__ = [
     "InmetYearStatusItem",
     "InmetYearStatusOut",
     "InmetYearsOut",
+    "NotebookCellOut",
+    "NotebookCreateIn",
+    "NotebookKernelStatusOut",
+    "NotebookListItemOut",
+    "NotebookOut",
+    "NotebookRunCellIn",
+    "NotebookRunOut",
+    "NotebookRunRecordIn",
+    "NotebookSaveIn",
+    "NotebookTemplateOut",
     "PathValidationOut",
     "PipelineRunIn",
     "PipelineRunOut",

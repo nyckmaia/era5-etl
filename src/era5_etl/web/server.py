@@ -28,6 +28,9 @@ from era5_etl.web.routes import (
     inmet as inmet_routes,
 )
 from era5_etl.web.routes import (
+    notebooks as notebooks_routes,
+)
+from era5_etl.web.routes import (
     inventory as inventory_routes,
 )
 from era5_etl.web.routes import (
@@ -96,6 +99,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(export_routes.router)
     app.include_router(inventory_routes.router)
     app.include_router(inmet_routes.router)
+    app.include_router(notebooks_routes.router)
     app.include_router(timeseries_routes.router)
 
     @app.exception_handler(404)

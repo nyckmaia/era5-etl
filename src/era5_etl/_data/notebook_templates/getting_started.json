@@ -1,0 +1,18 @@
+{
+  "name": "Getting started",
+  "description": "A 3-cell intro to running SQL and Python in a notebook.",
+  "cells": [
+    {
+      "type": "markdown",
+      "source": "# Getting started\n\nThis notebook has a DuckDB connection ready as `con`. Try SQL or Python cells below.\n\n- Use **SQL cells** to query the base views (`era5`, `era5_land`, `inmet`) and any user views you defined on `/query`.\n- Use **Python cells** for `pandas`, `plotly`, and other analysis libraries (install with `pip install -e '.[notebooks]'`).\n\nTip: the last expression of a Python cell is auto-displayed."
+    },
+    {
+      "type": "sql",
+      "source": "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name"
+    },
+    {
+      "type": "code",
+      "source": "import pandas as pd\n\n# Run any SQL with `con.execute(...)`.\ndf = con.execute(\"SELECT current_date AS today, 1 + 1 AS two\").df()\ndf"
+    }
+  ]
+}

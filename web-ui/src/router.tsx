@@ -10,6 +10,8 @@ import { Layout } from "./components/Layout";
 import { DashboardPage } from "./pages/Dashboard";
 import { DownloadWizardPage } from "./pages/DownloadWizard";
 import { InventoryPage } from "./pages/Inventory";
+import { NotebookEditorPage } from "./pages/NotebookEditor";
+import { NotebooksPage } from "./pages/Notebooks";
 import { QueryPage } from "./pages/Query";
 import { SettingsPage } from "./pages/Settings";
 import { TimeseriesPage } from "./pages/Timeseries";
@@ -78,6 +80,18 @@ const timeseriesRoute = createRoute({
   component: TimeseriesPage,
 });
 
+const notebooksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/notebooks",
+  component: NotebooksPage,
+});
+
+const notebookEditorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/notebooks/$notebookId",
+  component: NotebookEditorPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -91,5 +105,7 @@ export const routeTree = rootRoute.addChildren([
   downloadRoute,
   queryRoute,
   timeseriesRoute,
+  notebooksRoute,
+  notebookEditorRoute,
   settingsRoute,
 ]);

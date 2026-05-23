@@ -677,4 +677,167 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+
+  notebooks: {
+    list: () => request<NotebookListItem[]>("/api/notebooks"),
+    get: (id: string) => request<Notebook>(`/api/notebooks/${id}`),
+    create: (body: { name?: string; template_id?: string | null }) =>
+      request<Notebook>("/api/notebooks", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    save: (id: string, body: { name?: string; cells?: NotebookCell[] }) =>
+      request<Notebook>(`/api/notebooks/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    remove: (id: string) =>
+      request<{ deleted: boolean }>(`/api/notebooks/${id}`, {
+        method: "DELETE",
+      }),
+    templates: () =>
+      request<Array<{ id: string; name: string; description: string }>>(
+        "/api/notebooks/templates",
+      ),
+    kernel: {
+      status: (id: string) =>
+        request<{ notebook_id: string; status: KernelStatus }>(
+          `/api/notebooks/${id}/kernel/status`,
+        ),
+      restart: (id: string) =>
+        request<{ notebook_id: string; status: KernelStatus }>(
+          `/api/notebooks/${id}/kernel/restart`,
+          { method: "POST" },
+        ),
+      stop: (id: string) =>
+        request<{ notebook_id: string; status: KernelStatus }>(
+          `/api/notebooks/${id}/kernel`,
+          { method: "DELETE" },
+        ),
+    },
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Notebook types
+// ---------------------------------------------------------------------------
+
+export type KernelStatus = "idle" | "busy" | "dead";
+
+export type CellOutput =
+  | { type: "stream"; name: "stdout" | "stderr"; text: string }
+  | {
+      type: "display";
+      mime:
+        | "application/vnd.dataframe+json"
+        | "application/vnd.plotly.v1+json"
+        | "text/plain";
+      data: unknown;
+    }
+  | { type: "error"; ename: string; evalue: string; traceback: string[] };
+
+export type NotebookCell = {
+  id: string;
+  type: "code" | "sql" | "markdown";
+  source: string;
+  outputs?: CellOutput[];
+};
+
+export type NotebookRun = {
+  id: string;
+  ts: number;
+  model_name: string;
+  params: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  duration_s: number;
+  notes: string;
+};
+
+export type Notebook = {
+  id: string;
+  name: string;
+  cells: NotebookCell[];
+  runs: NotebookRun[];
+  created_ts: number;
+  updated_ts: number;
+};
+
+export type NotebookListItem = {
+  id: string;
+  name: string;
+  updated_ts: number;
+  created_ts: number;
+  n_cells: number;
+};
+
+/**
+ * Stream a cell execution via SSE. Returns a `cancel` function that closes
+ * the EventSource on the client (the kernel keeps running until its current
+ * cell finishes — there is no abort mid-cell on the server side yet).
+ */
+export function streamRunCell(
+  notebookId: string,
+  cellId: string,
+  code: string,
+  lang: "python" | "sql",
+  onEvent: (ev: { type: string; data: unknown }) => void,
+  onDone: () => void,
+): () => void {
+  // SSE clients only support GET. We POST first to start, but FastAPI's
+  // EventSourceResponse on POST also works with EventSource via fetch +
+  // ReadableStream. To keep it simple we use fetch streaming here.
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const resp = await fetch(`/api/notebooks/${notebookId}/run-cell`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ cell_id: cellId, code, lang }),
+        signal: controller.signal,
+      });
+      if (!resp.ok || !resp.body) {
+        const text = await resp.text();
+        onEvent({ type: "error", data: { ename: "HTTPError", evalue: text, traceback: [] } });
+        onDone();
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentEvent = "message";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            const data = line.slice(5).trim();
+            try {
+              onEvent({ type: currentEvent, data: JSON.parse(data) });
+            } catch {
+              onEvent({ type: currentEvent, data });
+            }
+            if (currentEvent === "done") {
+              onDone();
+              return;
+            }
+          }
+        }
+      }
+      onDone();
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        onEvent({
+          type: "error",
+          data: { ename: "FetchError", evalue: (err as Error).message, traceback: [] },
+        });
+      }
+      onDone();
+    }
+  })();
+  return () => controller.abort();
+}

@@ -56,6 +56,7 @@ export const en: Dictionary = {
       download: "Download",
       query: "Query",
       timeseries: "Time series",
+      notebooks: "Notebooks",
       settings: "Settings",
     },
     expandMenu: "Expand menu",
@@ -723,5 +724,58 @@ export const en: Dictionary = {
     downloadAllNote: "Re-downloads data already present.",
     nothingMissing:
       "Nothing missing — every point/date/hour/variable is already in the database.",
+  },
+
+  notebooks: {
+    title: "Notebooks",
+    subtitle:
+      "Jupyter-style cells with the DuckDB catalog and your user views already wired in. Use Python + pandas + Plotly, or run SQL directly.",
+    new: "New notebook",
+    loading: "Loading notebooks…",
+    emptyHint: "No notebooks yet. Create one from a blank cell or a template.",
+    card: {
+      cells: "{{count}} cell(s)",
+      delete: "Delete notebook",
+      deleteConfirm: "Delete \"{{name}}\"? This cannot be undone.",
+    },
+    picker: {
+      title: "Pick a starting point",
+      body: "Templates pre-fill the notebook with code that you can edit.",
+      blankName: "Blank notebook",
+      blankDescription: "A single empty Python cell. You bring the imports.",
+      cancel: "Cancel",
+    },
+    editor: {
+      loading: "Loading notebook…",
+      notFound: "Notebook not found. It may have been deleted in another tab.",
+      save: "Save",
+      runCell: "Run",
+      runCellTitle: "Run cell (Ctrl/Cmd+Enter)",
+      addBelow: "Add cell below",
+      removeCell: "Delete cell",
+      addCell: "Add cell",
+    },
+    kernel: {
+      idle: "Kernel: idle",
+      busy: "Kernel: running…",
+      dead: "Kernel: stopped",
+      restart: "Restart",
+      restartTitle: "Kill and re-start the kernel (clears all variables)",
+      stop: "Stop",
+      stopTitle: "Shut down the kernel",
+    },
+    runs: {
+      section: "Model runs",
+      title: "Model runs ({{count}})",
+      empty: "No model runs logged yet. Call log_model_run(params, metrics, duration_s).",
+      metricLabel: "Metric:",
+      xAxis: "Run #",
+      col: {
+        when: "When",
+        model: "Model",
+        duration: "Duration",
+        notes: "Notes",
+      },
+    },
   },
 };

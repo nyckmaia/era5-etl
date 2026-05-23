@@ -3,6 +3,7 @@ import {
   CloudDownload,
   BarChart3,
   Database,
+  NotebookPen,
   Settings as SettingsIcon,
   Globe2,
   LineChart,
@@ -24,6 +25,7 @@ const NAV = [
   { to: "/download", labelKey: "layout.nav.download", icon: CloudDownload },
   { to: "/query", labelKey: "layout.nav.query", icon: Database },
   { to: "/timeseries", labelKey: "layout.nav.timeseries", icon: LineChart },
+  { to: "/notebooks", labelKey: "layout.nav.notebooks", icon: NotebookPen },
   { to: "/settings", labelKey: "layout.nav.settings", icon: SettingsIcon },
 ] as const;
 
