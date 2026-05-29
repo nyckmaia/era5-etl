@@ -1,16 +1,24 @@
-import { CircleDot, Loader2, Power, RotateCcw } from "lucide-react";
+import { CircleDot, Cpu, Loader2, Power, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { KernelStatus } from "@/lib/api";
 
 interface Props {
   status: KernelStatus;
+  /** Human-readable kernel name, e.g. "Python 3.12". */
+  kernelName?: string;
   onRestart: () => void;
   onStop: () => void;
   disabled?: boolean;
 }
 
-export function KernelStatusBadge({ status, onRestart, onStop, disabled }: Props) {
+export function KernelStatusBadge({
+  status,
+  kernelName,
+  onRestart,
+  onStop,
+  disabled,
+}: Props) {
   const { t } = useTranslation();
   const Icon = status === "busy" ? Loader2 : CircleDot;
   const tone =
@@ -21,6 +29,15 @@ export function KernelStatusBadge({ status, onRestart, onStop, disabled }: Props
         : "border-ink-200 bg-ink-50 text-ink-600";
   return (
     <div className="flex items-center gap-2">
+      {kernelName && (
+        <span
+          className="inline-flex items-center gap-1.5 rounded-md border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-700"
+          title={kernelName}
+        >
+          <Cpu className="h-3 w-3 text-ink-400" />
+          {kernelName}
+        </span>
+      )}
       <span
         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${tone}`}
       >

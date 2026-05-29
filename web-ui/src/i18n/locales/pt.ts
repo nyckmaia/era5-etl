@@ -758,6 +758,12 @@ export const pt = {
       addBelow: "Adicionar célula abaixo",
       removeCell: "Apagar célula",
       addCell: "Adicionar célula",
+      runAll: "Rodar tudo",
+      runAllTitle: "Executar todas as células em ordem",
+      runAllRunning: "Rodando tudo…",
+      runStatusDone: "Executada",
+      runStatusPending: "Ainda não executada",
+      runStatusRunning: "Executando…",
     },
     kernel: {
       idle: "Kernel: pronto",

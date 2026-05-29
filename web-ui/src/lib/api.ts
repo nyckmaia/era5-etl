@@ -714,6 +714,10 @@ export const api = {
           `/api/notebooks/${id}/kernel`,
           { method: "DELETE" },
         ),
+      info: (id: string) =>
+        request<{ notebook_id: string; kernel_name: string }>(
+          `/api/notebooks/${id}/kernel/info`,
+        ),
     },
   },
 };

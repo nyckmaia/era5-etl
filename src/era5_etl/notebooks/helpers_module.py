@@ -39,7 +39,7 @@ def install_helpers(
         except ImportError as exc:
             raise ModuleNotFoundError(
                 f"Notebook helpers require '{mod}'. Install with: "
-                f"pip install -e '.[notebooks]'"
+                f"pip install -e ."
             ) from exc
 
     def inmet_with_era5_land(

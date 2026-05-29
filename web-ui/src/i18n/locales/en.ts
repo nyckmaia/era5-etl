@@ -754,6 +754,12 @@ export const en: Dictionary = {
       addBelow: "Add cell below",
       removeCell: "Delete cell",
       addCell: "Add cell",
+      runAll: "Run all",
+      runAllTitle: "Run every cell in order",
+      runAllRunning: "Running all…",
+      runStatusDone: "Executed",
+      runStatusPending: "Not executed yet",
+      runStatusRunning: "Running…",
     },
     kernel: {
       idle: "Kernel: idle",

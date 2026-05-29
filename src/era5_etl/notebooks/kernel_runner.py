@@ -202,7 +202,7 @@ def _exec_sql(code: str) -> None:
         import pandas as pd  # type: ignore  # noqa: F401
     except ImportError:
         raise RuntimeError(
-            "SQL cells require pandas; install with: pip install -e '.[notebooks]'"
+            "SQL cells require pandas; install with: pip install -e ."
         ) from None
     df = con.execute(code).df()
     _display(df)

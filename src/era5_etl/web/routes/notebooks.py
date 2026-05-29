@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -132,6 +133,19 @@ def kernel_status(notebook_id: str) -> NotebookKernelStatusOut:
     return NotebookKernelStatusOut(
         notebook_id=notebook_id, status=MANAGER.status(notebook_id)
     )
+
+
+@router.get("/{notebook_id}/kernel/info")
+def kernel_info(notebook_id: str) -> dict[str, str]:
+    """Human-readable kernel name shown at the top of the notebook.
+
+    The kernel subprocess runs ``sys.executable`` — the same interpreter as
+    the server — so the server's Python version is the one in use.
+    """
+    return {
+        "notebook_id": notebook_id,
+        "kernel_name": f"Python {platform.python_version()}",
+    }
 
 
 @router.post("/{notebook_id}/kernel/restart", response_model=NotebookKernelStatusOut)
