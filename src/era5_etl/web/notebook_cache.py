@@ -15,6 +15,7 @@ unit-test directly. All deletes are best-effort and path-safe.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ def scan(data_dir: str | Path, notebook_names: dict[str, str]) -> dict[str, Any]
     for sub in sorted(p for p in root.iterdir() if p.is_dir()):
         files = [
             _file_entry(f, f"{sub.name}/{f.name}")
-            for f in sorted(sub.glob("*.parquet"))
+            for f in sub.glob("*.parquet")
             if f.is_file()
         ]
         if not files:
@@ -70,7 +71,7 @@ def scan(data_dir: str | Path, notebook_names: dict[str, str]) -> dict[str, Any]
     # Loose root files from the old flat layout.
     root_files = [
         _file_entry(f, f.name)
-        for f in sorted(root.glob("*.parquet"))
+        for f in root.glob("*.parquet")
         if f.is_file()
     ]
     if root_files:
@@ -131,8 +132,6 @@ def delete_notebook(data_dir: str | Path, notebook_id: str) -> int:
     for f in sub.rglob("*"):
         if f.is_file():
             freed += int(f.stat().st_size)
-    import shutil
-
     shutil.rmtree(sub)
     return freed
 
@@ -145,8 +144,6 @@ def clear_all(data_dir: str | Path) -> int:
     freed = sum(
         int(f.stat().st_size) for f in root.rglob("*") if f.is_file()
     )
-    import shutil
-
     shutil.rmtree(root)
     return freed
 
