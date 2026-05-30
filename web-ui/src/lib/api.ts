@@ -93,6 +93,31 @@ export interface CredentialTestResult {
   status_code: number | null;
 }
 
+export interface NotebookCacheFile {
+  name: string;
+  rel_path: string;
+  size_bytes: number;
+  modified_ts: number;
+}
+
+export interface NotebookCacheGroup {
+  notebook_id: string;
+  notebook_name: string | null;
+  is_orphan: boolean;
+  subtotal_bytes: number;
+  files: NotebookCacheFile[];
+}
+
+export interface NotebookCache {
+  groups: NotebookCacheGroup[];
+  total_bytes: number;
+}
+
+export interface CacheDelete {
+  deleted: boolean;
+  freed_bytes: number;
+}
+
 // --- Inventory (v0.6.0) ---------------------------------------------------
 
 export interface GridPoint {
@@ -537,6 +562,21 @@ export const api = {
         method: "POST",
         body: JSON.stringify(body),
       }),
+  },
+  nbCache: {
+    list: () => request<NotebookCache>("/api/settings/nb-cache"),
+    deleteFile: (relPath: string) =>
+      request<CacheDelete>(
+        `/api/settings/nb-cache/file?path=${encodeURIComponent(relPath)}`,
+        { method: "DELETE" },
+      ),
+    deleteNotebook: (id: string) =>
+      request<CacheDelete>(
+        `/api/settings/nb-cache/notebook/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    clearAll: () =>
+      request<CacheDelete>("/api/settings/nb-cache", { method: "DELETE" }),
   },
   credentialStatus: () => request<CredentialStatus>("/api/credentials/status"),
   saveCredentials: (body: { url: string; key: string }) =>
