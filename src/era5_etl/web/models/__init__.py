@@ -152,6 +152,31 @@ class NotebookKernelStatusOut(BaseModel):
     status: Literal["idle", "busy", "dead"]
 
 
+class NotebookCacheFileOut(BaseModel):
+    name: str
+    rel_path: str
+    size_bytes: int
+    modified_ts: int
+
+
+class NotebookCacheGroupOut(BaseModel):
+    notebook_id: str
+    notebook_name: str | None
+    is_orphan: bool
+    subtotal_bytes: int
+    files: list[NotebookCacheFileOut]
+
+
+class NotebookCacheOut(BaseModel):
+    groups: list[NotebookCacheGroupOut]
+    total_bytes: int
+
+
+class CacheDeleteOut(BaseModel):
+    deleted: bool
+    freed_bytes: int
+
+
 class StationPointOut(BaseModel):
     """One INMET station for the inventory map."""
 
@@ -596,6 +621,7 @@ class CredentialTestOut(BaseModel):
 
 
 __all__ = [
+    "CacheDeleteOut",
     "CredentialStatusOut",
     "CredentialTestOut",
     "CredentialsIn",
@@ -612,6 +638,9 @@ __all__ = [
     "InmetYearStatusItem",
     "InmetYearStatusOut",
     "InmetYearsOut",
+    "NotebookCacheFileOut",
+    "NotebookCacheGroupOut",
+    "NotebookCacheOut",
     "NotebookCellOut",
     "NotebookCreateIn",
     "NotebookKernelStatusOut",
