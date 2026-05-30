@@ -183,6 +183,14 @@ export function ModelRunsPanel({ runs }: Props) {
     return arr;
   }, [runs, columns, sort]);
 
+  function toggleSort(colId: string) {
+    setSort((prev) =>
+      prev.colId === colId
+        ? { colId, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { colId, dir: "asc" },
+    );
+  }
+
   if (runs.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-ink-200 p-4 text-center text-xs text-ink-500">
@@ -197,14 +205,6 @@ export function ModelRunsPanel({ runs }: Props) {
     const v = r.metrics?.[metric];
     return typeof v === "number" ? v : null;
   });
-
-  function toggleSort(colId: string) {
-    setSort((prev) =>
-      prev.colId === colId
-        ? { colId, dir: prev.dir === "asc" ? "desc" : "asc" }
-        : { colId, dir: "asc" },
-    );
-  }
 
   return (
     <div className="space-y-3">
@@ -263,7 +263,11 @@ export function ModelRunsPanel({ runs }: Props) {
               {columns.map((c) => {
                 const active = c.id === sort.colId;
                 return (
-                  <th key={c.id} className="font-medium text-ink-700">
+                  <th
+                    key={c.id}
+                    aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+                    className="font-medium text-ink-700"
+                  >
                     <button
                       type="button"
                       onClick={() => toggleSort(c.id)}
