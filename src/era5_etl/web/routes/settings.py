@@ -10,12 +10,15 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from era5_etl.web.models import (
+    CacheDeleteOut,
     DatasetPrecisionIn,
     DatasetPrecisionOut,
+    NotebookCacheOut,
     PathValidationOut,
     UserConfigIn,
     UserConfigOut,
 )
+from era5_etl.web import notebook_cache, notebook_store
 from era5_etl.web.user_config import (
     get_dataset_precision,
     load_user_config,
@@ -167,3 +170,48 @@ def save_precision(body: DatasetPrecisionIn) -> DatasetPrecisionOut:
         default_method=p["default_method"],
         columns=p["columns"],
     )
+
+
+@router.get("/nb-cache", response_model=NotebookCacheOut)
+def list_nb_cache(request: Request) -> NotebookCacheOut:
+    """List notebook Parquet caches grouped per notebook, with sizes."""
+    data_dir = request.app.state.data_dir
+    names = {n["id"]: n["name"] for n in notebook_store.list_notebooks()}
+    return NotebookCacheOut(**notebook_cache.scan(data_dir, names))
+
+
+@router.delete("/nb-cache/file", response_model=CacheDeleteOut)
+def delete_nb_cache_file(path: str, request: Request) -> CacheDeleteOut:
+    """Delete one cache file by its scan ``rel_path``."""
+    data_dir = request.app.state.data_dir
+    try:
+        freed = notebook_cache.delete_file(data_dir, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CacheDeleteOut(deleted=freed > 0, freed_bytes=freed)
+
+
+@router.delete("/nb-cache/notebook/{notebook_id}", response_model=CacheDeleteOut)
+def delete_nb_cache_notebook(notebook_id: str, request: Request) -> CacheDeleteOut:
+    """Delete all cache files for one notebook id (or the ``_root`` orphans)."""
+    data_dir = request.app.state.data_dir
+    try:
+        freed = notebook_cache.delete_notebook(data_dir, notebook_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CacheDeleteOut(deleted=freed > 0, freed_bytes=freed)
+
+
+@router.delete("/nb-cache", response_model=CacheDeleteOut)
+def clear_nb_cache(request: Request) -> CacheDeleteOut:
+    """Delete the entire notebook cache tree."""
+    data_dir = request.app.state.data_dir
+    try:
+        freed = notebook_cache.clear_all(data_dir)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CacheDeleteOut(deleted=freed > 0, freed_bytes=freed)

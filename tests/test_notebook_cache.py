@@ -93,3 +93,53 @@ def test_delete_missing_returns_zero(tmp_path):
     assert nc.delete_file(tmp_path, "nbA/nope.parquet") == 0
     assert nc.delete_notebook(tmp_path, "ghost") == 0
     assert nc.clear_all(tmp_path) == 0  # empty dir -> 0 bytes freed (dir removed)
+
+
+# --- route smoke tests -------------------------------------------------------
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from era5_etl.web.server import create_app  # noqa: E402
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    import era5_etl.web.notebook_store as ns
+
+    monkeypatch.setattr(ns, "_config_dir", lambda: tmp_path / "cfg")
+    app = create_app(tmp_path / "data")
+    # cache lives under app.state.data_dir; create some files there
+    data_dir = tmp_path / "data"
+    root = data_dir / "_nb_cache" / "nbX"
+    root.mkdir(parents=True)
+    (root / "a.parquet").write_bytes(b"x" * 200)
+    with TestClient(app) as c:
+        yield c, data_dir
+
+
+def test_route_list_and_delete_file(client):
+    c, data_dir = client
+    r = c.get("/api/settings/nb-cache")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_bytes"] == 200
+    assert body["groups"][0]["notebook_id"] == "nbX"
+    rel = body["groups"][0]["files"][0]["rel_path"]
+    d = c.request("DELETE", f"/api/settings/nb-cache/file", params={"path": rel})
+    assert d.status_code == 200
+    assert d.json() == {"deleted": True, "freed_bytes": 200}
+
+
+def test_route_delete_file_traversal_400(client):
+    c, _ = client
+    d = c.request("DELETE", "/api/settings/nb-cache/file", params={"path": "../x"})
+    assert d.status_code == 400
+
+
+def test_route_delete_notebook_and_clear(client):
+    c, data_dir = client
+    d = c.request("DELETE", "/api/settings/nb-cache/notebook/nbX")
+    assert d.status_code == 200 and d.json()["freed_bytes"] == 200
+    # clear-all on now-empty tree
+    d2 = c.request("DELETE", "/api/settings/nb-cache")
+    assert d2.status_code == 200
