@@ -620,7 +620,6 @@ export const en: Dictionary = {
       orphans: "Orphans / unknown",
       empty: "No notebook cache yet.",
       freed: "Freed {{size}}.",
-      subtotal: "{{size}}",
     },
     danger: {
       title: "Danger zone",

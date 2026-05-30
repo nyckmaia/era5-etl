@@ -623,7 +623,6 @@ export const pt = {
       orphans: "Órfãos / desconhecido",
       empty: "Nenhum cache de notebook ainda.",
       freed: "Liberados {{size}}.",
-      subtotal: "{{size}}",
     },
     danger: {
       title: "Zona de perigo",
