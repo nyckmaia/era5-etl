@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
+  Database,
   ExternalLink,
   Folder,
   KeyRound,
@@ -55,8 +56,156 @@ export function SettingsPage() {
       <QueryTimeoutSection />
       <CredentialsSection />
       <PrecisionSection />
+      <NotebookCacheSection />
       <DangerZoneSection />
     </div>
+  );
+}
+
+function NotebookCacheSection() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["nb-cache"],
+    queryFn: api.nbCache.list,
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["nb-cache"] });
+
+  const clearAll = useMutation({
+    mutationFn: () => api.nbCache.clearAll(),
+    onSuccess: (r) => {
+      toast.success(t("pageSettings.nbCache.freed", { size: formatBytes(r.freed_bytes) }));
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const delNotebook = useMutation({
+    mutationFn: (id: string) => api.nbCache.deleteNotebook(id),
+    onSuccess: (r) => {
+      toast.success(t("pageSettings.nbCache.freed", { size: formatBytes(r.freed_bytes) }));
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const delFile = useMutation({
+    mutationFn: (rel: string) => api.nbCache.deleteFile(rel),
+    onSuccess: (r) => {
+      toast.success(t("pageSettings.nbCache.freed", { size: formatBytes(r.freed_bytes) }));
+      invalidate();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const groups = data?.groups ?? [];
+
+  return (
+    <section className="card space-y-5 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-ocean-50 p-3 text-ocean-700">
+            <Database className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-medium text-ink-900">
+              {t("pageSettings.nbCache.title")}
+            </h2>
+            <p className="mt-1 text-sm text-ink-500">
+              {t("pageSettings.nbCache.body")}
+            </p>
+            <p className="mt-1 text-xs font-medium text-ink-600">
+              {t("pageSettings.nbCache.total", {
+                size: formatBytes(data?.total_bytes ?? 0),
+              })}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn-outline border-rose-300 text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+          disabled={groups.length === 0 || clearAll.isPending}
+          onClick={() => {
+            if (confirm(t("pageSettings.nbCache.clearAllConfirm"))) clearAll.mutate();
+          }}
+        >
+          {clearAll.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
+          {t("pageSettings.nbCache.clearAll")}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="h-24 animate-pulse rounded-lg bg-ink-100" />
+      ) : groups.length === 0 ? (
+        <p className="text-sm text-ink-400">{t("pageSettings.nbCache.empty")}</p>
+      ) : (
+        <div className="space-y-3">
+          {groups.map((g) => {
+            const title = g.is_orphan
+              ? `${t("pageSettings.nbCache.orphans")} (${g.notebook_id})`
+              : g.notebook_name ?? g.notebook_id;
+            return (
+              <div
+                key={g.notebook_id}
+                className="rounded-xl border border-ink-200 bg-white p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-ink-900">{title}</div>
+                    <div className="text-xs text-ink-500">
+                      {formatBytes(g.subtotal_bytes)} · {g.files.length}{" "}
+                      {t("common.files")}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md border border-ink-200 px-2 py-1 text-xs text-rose-600 hover:bg-rose-50"
+                    title={t("pageSettings.nbCache.deleteNotebook")}
+                    disabled={delNotebook.isPending}
+                    onClick={() => {
+                      if (confirm(t("pageSettings.nbCache.deleteNotebookConfirm", { name: title })))
+                        delNotebook.mutate(g.notebook_id);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="mt-3 divide-y divide-ink-100 border-t border-ink-100">
+                  {g.files.map((f) => (
+                    <div
+                      key={f.rel_path}
+                      className="flex items-center justify-between gap-3 py-1.5 text-xs"
+                    >
+                      <span className="truncate font-mono text-ink-600">{f.name}</span>
+                      <div className="flex shrink-0 items-center gap-3">
+                        <span className="tabular-nums text-ink-500">
+                          {formatBytes(f.size_bytes)}
+                        </span>
+                        <span className="text-ink-400">
+                          {new Date(f.modified_ts * 1000).toLocaleString()}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-rose-500 hover:text-rose-700"
+                          title={t("pageSettings.nbCache.deleteFile")}
+                          disabled={delFile.isPending}
+                          onClick={() => delFile.mutate(f.rel_path)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
