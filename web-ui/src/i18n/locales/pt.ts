@@ -785,6 +785,8 @@ export const pt = {
         when: "Quando",
         model: "Modelo",
         duration: "Duração",
+        loadSource: "Carregamento",
+        loadTime: "Tempo de carga",
         notes: "Notas",
       },
     },

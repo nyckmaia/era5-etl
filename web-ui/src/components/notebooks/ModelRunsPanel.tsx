@@ -13,10 +13,32 @@ interface Props {
   runs: NotebookRun[];
 }
 
+// Metrics rendered in their own dedicated columns, not the generic metric grid.
+const LOAD_KEYS = new Set(["load_source", "load_duration_s"]);
+
 function metricKeys(runs: NotebookRun[]): string[] {
   const keys = new Set<string>();
-  runs.forEach((r) => Object.keys(r.metrics ?? {}).forEach((k) => keys.add(k)));
+  runs.forEach((r) =>
+    Object.keys(r.metrics ?? {}).forEach((k) => {
+      if (!LOAD_KEYS.has(k)) keys.add(k);
+    }),
+  );
   return Array.from(keys);
+}
+
+// Format a metric value: integers without decimals, floats to 4 places.
+function fmtMetric(v: unknown): string {
+  if (typeof v !== "number") return "—";
+  return Number.isInteger(v) ? String(v) : v.toFixed(4);
+}
+
+// Read a run's load provenance with safe defaults for older runs.
+function loadInfo(r: NotebookRun): { source: string; seconds: number | null } {
+  const m = r.metrics ?? {};
+  const src = typeof m.load_source === "string" ? m.load_source : "—";
+  const sec =
+    typeof m.load_duration_s === "number" ? m.load_duration_s : null;
+  return { source: src, seconds: sec };
 }
 
 export function ModelRunsPanel({ runs }: Props) {
@@ -104,6 +126,12 @@ export function ModelRunsPanel({ runs }: Props) {
               <th className="px-2 py-1 text-right font-medium text-ink-700">
                 {t("notebooks.runs.col.duration")}
               </th>
+              <th className="px-2 py-1 text-left font-medium text-ink-700">
+                {t("notebooks.runs.col.loadSource")}
+              </th>
+              <th className="px-2 py-1 text-right font-medium text-ink-700">
+                {t("notebooks.runs.col.loadTime")}
+              </th>
               {allKeys.map((k) => (
                 <th key={k} className="px-2 py-1 text-right font-medium text-ink-700">
                   {k}
@@ -126,14 +154,19 @@ export function ModelRunsPanel({ runs }: Props) {
                   <td className="px-2 py-1 text-right text-ink-600">
                     {r.duration_s.toFixed(2)}s
                   </td>
-                  {allKeys.map((k) => {
-                    const v = r.metrics?.[k];
-                    return (
-                      <td key={k} className="px-2 py-1 text-right text-ink-600">
-                        {typeof v === "number" ? v.toFixed(4) : "—"}
-                      </td>
-                    );
-                  })}
+                  <td className="px-2 py-1 text-ink-600">
+                    {loadInfo(r).source}
+                  </td>
+                  <td className="px-2 py-1 text-right text-ink-600">
+                    {loadInfo(r).seconds === null
+                      ? "—"
+                      : `${loadInfo(r).seconds!.toFixed(2)}s`}
+                  </td>
+                  {allKeys.map((k) => (
+                    <td key={k} className="px-2 py-1 text-right text-ink-600">
+                      {fmtMetric(r.metrics?.[k])}
+                    </td>
+                  ))}
                   <td className="px-2 py-1 text-ink-500">{r.notes || ""}</td>
                 </tr>
               ))}

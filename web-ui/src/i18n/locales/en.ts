@@ -780,6 +780,8 @@ export const en: Dictionary = {
         when: "When",
         model: "Model",
         duration: "Duration",
+        loadSource: "Load",
+        loadTime: "Load time",
         notes: "Notes",
       },
     },
