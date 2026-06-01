@@ -200,7 +200,21 @@ class NetCDFToParquetConverter:
                 _tick(nc_file.name)
         else:
             # Parallel conversion
+            import multiprocessing as mp
             from concurrent.futures import ProcessPoolExecutor, as_completed
+
+            # Force the "spawn" start method. On Linux, multiprocessing
+            # (and thus ProcessPoolExecutor) defaults to "fork". When the
+            # pipeline runs inside the web server's worker thread -- or any
+            # multithreaded process -- forking copies a *frozen* snapshot of
+            # every lock other threads hold at fork time. The worker then logs
+            # "Converting:" and calls ``xr.open_dataset(engine="netcdf4")``,
+            # which initializes HDF5 (not fork-safe) and deadlocks on an
+            # inherited lock (HDF5 global mutex / glibc malloc arena / polars
+            # thread pool) -- so not even the first file completes. "spawn"
+            # boots a fresh interpreter with no inherited locks; it is exactly
+            # what Windows does by default, where this path already works.
+            mp_context = mp.get_context("spawn")
 
             effective_workers = max_workers  # None lets ProcessPoolExecutor choose
 
@@ -210,7 +224,9 @@ class NetCDFToParquetConverter:
             )
 
             futures = {}
-            with ProcessPoolExecutor(max_workers=effective_workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=effective_workers, mp_context=mp_context
+            ) as executor:
                 for nc_file in netcdf_files:
                     future = executor.submit(
                         _convert_single_file,

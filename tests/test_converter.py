@@ -215,6 +215,67 @@ def test_converter_convert_directory_with_files(
     assert stats["failed"] == 0
 
 
+def test_parallel_conversion_does_not_use_fork(
+    converter: NetCDFToParquetConverter, sample_netcdf_file: Path, monkeypatch
+):
+    """Parallel conversion must NOT use the 'fork' start method.
+
+    On Linux, ProcessPoolExecutor defaults to 'fork'. When the pipeline runs
+    inside the web server's worker thread (any multithreaded process),
+    forking and then initializing HDF5 via xarray's netcdf4 engine deadlocks
+    the workers on inherited, frozen locks. Windows is immune because it only
+    has 'spawn'. The converter must force a non-fork context so Linux matches
+    the validated Windows path.
+    """
+    import concurrent.futures as cf
+
+    captured: dict[str, str | None] = {}
+
+    class _InlineExecutor:
+        """Stand-in that runs work in-process so the test never forks/spawns
+        a real subprocess; it only records which start method was requested."""
+
+        def __init__(self, *args, mp_context=None, **kwargs):
+            captured["start_method"] = (
+                mp_context.get_start_method() if mp_context is not None else None
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            fut: cf.Future = cf.Future()
+            try:
+                fut.set_result(fn(*args, **kwargs))
+            except Exception as exc:  # pragma: no cover - defensive
+                fut.set_exception(exc)
+            return fut
+
+    monkeypatch.setattr(cf, "ProcessPoolExecutor", _InlineExecutor)
+
+    # Force the parallel branch: needs >1 file and max_workers != 1.
+    import shutil
+
+    nc_dir = sample_netcdf_file.parent
+    shutil.copy(sample_netcdf_file, nc_dir / "second.nc")
+
+    stats = converter.convert_directory(nc_dir, max_workers=2)
+
+    assert stats["failed"] == 0
+    assert captured.get("start_method") is not None, (
+        "Parallel conversion passed no mp_context, so ProcessPoolExecutor uses "
+        "the OS default ('fork' on Linux) -> deadlocks under HDF5."
+    )
+    assert captured["start_method"] != "fork", (
+        f"Parallel conversion must not use 'fork' (got "
+        f"{captured['start_method']!r}); fork-in-multithreaded-process "
+        "deadlocks the HDF5/netcdf4 workers on Linux."
+    )
+
+
 def test_convert_directory_cleanup_removes_nc_on_success(
     converter: NetCDFToParquetConverter, sample_netcdf_file: Path
 ):
