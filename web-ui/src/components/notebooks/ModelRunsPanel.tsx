@@ -1,7 +1,9 @@
+import { Sliders } from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { RunInputsDialog } from "@/components/notebooks/RunInputsDialog";
 import type { NotebookRun } from "@/lib/api";
 
 const Plot = lazy(async () => {
@@ -99,6 +101,7 @@ export function ModelRunsPanel({ runs }: Props) {
     colId: "start",
     dir: "desc",
   });
+  const [inputsRun, setInputsRun] = useState<NotebookRun | null>(null);
 
   const columns = useMemo<Col[]>(() => {
     const metricCols: Col[] = [...FIXED_METRIC_ORDER, ...extraKeys].map(
@@ -158,7 +161,20 @@ export function ModelRunsPanel({ runs }: Props) {
         label: t("notebooks.runs.col.notes"),
         align: "left",
         sortValue: (r) => r.notes ?? "",
-        render: (r) => r.notes || "",
+        render: (r) => (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setInputsRun(r)}
+              title={t("notebooks.runs.inputs.button")}
+              aria-label={t("notebooks.runs.inputs.button")}
+              className="shrink-0 rounded p-0.5 text-ink-400 hover:bg-ink-100 hover:text-ocean-600"
+            >
+              <Sliders className="h-3.5 w-3.5" />
+            </button>
+            <span className="truncate">{r.notes || ""}</span>
+          </div>
+        ),
       },
     ];
   }, [t, extraKeys]);
@@ -308,6 +324,7 @@ export function ModelRunsPanel({ runs }: Props) {
           </tbody>
         </table>
       </div>
+      <RunInputsDialog run={inputsRun} onClose={() => setInputsRun(null)} />
     </div>
   );
 }
