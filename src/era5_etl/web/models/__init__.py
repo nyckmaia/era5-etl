@@ -480,6 +480,36 @@ class BuildSqlOut(BaseModel):
     sql: str
 
 
+# --- Variable presets (download wizard) -------------------------------
+
+
+class VariablePresetIn(BaseModel):
+    """Create a named variable preset for one gridded dataset."""
+
+    dataset: str
+    name: str
+    variables: list[str] = Field(default_factory=list)
+
+
+class VariablePresetUpdateIn(BaseModel):
+    """Rename / re-set the variables of an existing preset.
+
+    The preset's ``dataset`` is immutable, so it is not part of the body.
+    """
+
+    name: str
+    variables: list[str] = Field(default_factory=list)
+
+
+class VariablePresetOut(BaseModel):
+    id: str
+    dataset: str
+    name: str
+    variables: list[str]
+    created_ts: int
+    updated_ts: int
+
+
 # --- Time-series charting (notebook page) -----------------------------
 
 
@@ -674,5 +704,8 @@ __all__ = [
     "UserConfigIn",
     "UserConfigOut",
     "VariableGroupOut",
+    "VariablePresetIn",
+    "VariablePresetOut",
+    "VariablePresetUpdateIn",
     "VersionOut",
 ]

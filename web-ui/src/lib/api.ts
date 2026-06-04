@@ -288,6 +288,17 @@ export interface UserObjectPreview {
   columns: { name: string; type: string }[];
 }
 
+/** A saved, named variable selection for one gridded dataset (download
+ *  wizard). Scoped per dataset — ERA5 presets never appear under ERA5-LAND. */
+export interface VariablePreset {
+  id: string;
+  dataset: string;
+  name: string;
+  variables: string[];
+  created_ts: number;
+  updated_ts: number;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, {
     ...init,
@@ -518,6 +529,27 @@ export const api = {
         method: "POST",
         body: JSON.stringify(spec),
       }),
+  },
+  variablePresets: {
+    list: (dataset: string) =>
+      request<VariablePreset[]>(
+        `/api/variable-presets?dataset=${encodeURIComponent(dataset)}`,
+      ),
+    create: (b: { dataset: string; name: string; variables: string[] }) =>
+      request<VariablePreset>("/api/variable-presets", {
+        method: "POST",
+        body: JSON.stringify(b),
+      }),
+    update: (id: string, b: { name: string; variables: string[] }) =>
+      request<VariablePreset>(
+        `/api/variable-presets/${encodeURIComponent(id)}`,
+        { method: "PUT", body: JSON.stringify(b) },
+      ),
+    del: (id: string) =>
+      request<{ ok: boolean }>(
+        `/api/variable-presets/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
   },
   queryHistory: {
     list: (view: string) =>

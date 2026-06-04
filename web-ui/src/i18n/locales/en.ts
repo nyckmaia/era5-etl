@@ -119,6 +119,22 @@ export const en: Dictionary = {
       allVariables: "All variables",
       nothingMatches:
         'Nothing matches "{{query}}". Clear the filter or try another term.',
+      presets: {
+        label: "Saved presets",
+        placeholder: "Load a preset…",
+        none: "No saved presets yet",
+        save: "Save as preset",
+        update: "Update",
+        delete: "Delete",
+        loaded: "Loaded preset {{name}} ({{count}} variables)",
+        namePrompt: "Name for this preset:",
+        updateConfirm:
+          'Overwrite preset "{{name}}" with the current selection ({{count}} variables)?',
+        deleteConfirm: 'Delete preset "{{name}}"?',
+        empty: "Select at least one variable before saving a preset.",
+        duplicate: 'A preset named "{{name}}" already exists.',
+        saved: "Preset {{name}} saved.",
+      },
     },
 
     area: {

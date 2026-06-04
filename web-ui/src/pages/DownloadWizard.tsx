@@ -1,12 +1,15 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   Loader2,
   MapPin,
+  Pencil,
   Play,
   Sparkles,
+  Trash2,
   TrendingDown,
 } from "lucide-react";
 import { getRouteApi } from "@tanstack/react-router";
@@ -446,6 +449,8 @@ function StepVariables({
         </div>
       </div>
 
+      <VariablePresetBar dataset={dataset.name} value={value} onChange={onChange} />
+
       <input
         type="search"
         value={query}
@@ -531,6 +536,162 @@ function StepVariables({
           </p>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Save / load / update / delete named variable presets for the current
+ * (gridded) dataset. Presets are persisted server-side (per dataset) so the
+ * same selection can be reused across downloads. Loading a preset replaces
+ * the current checkbox selection; "Update" overwrites the loaded preset with
+ * whatever is selected now.
+ */
+function VariablePresetBar({
+  dataset,
+  value,
+  onChange,
+}: {
+  dataset: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string>("");
+
+  const presetsQ = useQuery({
+    queryKey: ["variable-presets", dataset],
+    queryFn: () => api.variablePresets.list(dataset),
+    enabled: Boolean(dataset),
+  });
+  const presets = presetsQ.data ?? [];
+  const selected = presets.find((p) => p.id === selectedId) ?? null;
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["variable-presets", dataset] });
+
+  const createMut = useMutation({
+    mutationFn: (name: string) =>
+      api.variablePresets.create({ dataset, name, variables: value }),
+    onSuccess: (preset) => {
+      invalidate();
+      setSelectedId(preset.id);
+    },
+    onError: (err) => alert((err as Error).message),
+  });
+  const updateMut = useMutation({
+    mutationFn: (vars: string[]) =>
+      api.variablePresets.update(selectedId, {
+        name: selected?.name ?? "",
+        variables: vars,
+      }),
+    onSuccess: () => invalidate(),
+    onError: (err) => alert((err as Error).message),
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.variablePresets.del(id),
+    onSuccess: () => {
+      invalidate();
+      setSelectedId("");
+    },
+    onError: (err) => alert((err as Error).message),
+  });
+
+  function loadPreset(id: string) {
+    setSelectedId(id);
+    const preset = presets.find((p) => p.id === id);
+    if (preset) onChange(preset.variables);
+  }
+
+  function saveNew() {
+    if (value.length === 0) {
+      alert(t("wizard.variables.presets.empty"));
+      return;
+    }
+    const name = window.prompt(t("wizard.variables.presets.namePrompt"));
+    if (name && name.trim()) createMut.mutate(name.trim());
+  }
+
+  function updateSelected() {
+    if (!selected) return;
+    if (
+      window.confirm(
+        t("wizard.variables.presets.updateConfirm", {
+          name: selected.name,
+          count: value.length,
+        }),
+      )
+    ) {
+      updateMut.mutate(value);
+    }
+  }
+
+  function deleteSelected() {
+    if (!selected) return;
+    if (
+      window.confirm(
+        t("wizard.variables.presets.deleteConfirm", { name: selected.name }),
+      )
+    ) {
+      deleteMut.mutate(selected.id);
+    }
+  }
+
+  const busy =
+    createMut.isPending || updateMut.isPending || deleteMut.isPending;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-ink-50/50 p-3">
+      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        <Bookmark className="h-3.5 w-3.5" />
+        {t("wizard.variables.presets.label")}
+      </span>
+      <select
+        className="input h-9 min-w-[12rem] flex-1 py-1 text-sm"
+        value={selectedId}
+        disabled={busy}
+        onChange={(e) => loadPreset(e.target.value)}
+      >
+        <option value="">
+          {presets.length === 0
+            ? t("wizard.variables.presets.none")
+            : t("wizard.variables.presets.placeholder")}
+        </option>
+        {presets.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} ({p.variables.length})
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="btn-outline h-9 py-1 text-xs"
+        onClick={saveNew}
+        disabled={busy}
+      >
+        <Bookmark className="h-3.5 w-3.5" />
+        {t("wizard.variables.presets.save")}
+      </button>
+      <button
+        type="button"
+        className="btn-outline h-9 py-1 text-xs"
+        onClick={updateSelected}
+        disabled={busy || !selected}
+        title={selected?.name}
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        {t("wizard.variables.presets.update")}
+      </button>
+      <button
+        type="button"
+        className="btn-outline h-9 py-1 text-xs text-rose-600 hover:bg-rose-50"
+        onClick={deleteSelected}
+        disabled={busy || !selected}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        {t("wizard.variables.presets.delete")}
+      </button>
     </div>
   );
 }

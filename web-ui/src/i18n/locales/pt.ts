@@ -118,6 +118,22 @@ export const pt = {
       allVariables: "Todas as variáveis",
       nothingMatches:
         'Nada corresponde a "{{query}}". Limpe o filtro ou tente outro termo.',
+      presets: {
+        label: "Presets salvos",
+        placeholder: "Carregar um preset…",
+        none: "Nenhum preset salvo ainda",
+        save: "Salvar como preset",
+        update: "Atualizar",
+        delete: "Excluir",
+        loaded: "Preset {{name}} carregado ({{count}} variáveis)",
+        namePrompt: "Nome para este preset:",
+        updateConfirm:
+          'Sobrescrever o preset "{{name}}" com a seleção atual ({{count}} variáveis)?',
+        deleteConfirm: 'Excluir o preset "{{name}}"?',
+        empty: "Selecione ao menos uma variável antes de salvar um preset.",
+        duplicate: 'Já existe um preset chamado "{{name}}".',
+        saved: "Preset {{name}} salvo.",
+      },
     },
 
     area: {

@@ -28,10 +28,10 @@ from era5_etl.web.routes import (
     inmet as inmet_routes,
 )
 from era5_etl.web.routes import (
-    notebooks as notebooks_routes,
+    inventory as inventory_routes,
 )
 from era5_etl.web.routes import (
-    inventory as inventory_routes,
+    notebooks as notebooks_routes,
 )
 from era5_etl.web.routes import (
     pipeline as pipeline_routes,
@@ -56,6 +56,9 @@ from era5_etl.web.routes import (
 )
 from era5_etl.web.routes import (
     user_views as user_views_routes,
+)
+from era5_etl.web.routes import (
+    variable_presets as variable_presets_routes,
 )
 from era5_etl.web.routes import (
     version as version_routes,
@@ -95,6 +98,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(query_routes.router)
     app.include_router(query_store_routes.router)
     app.include_router(user_views_routes.router)
+    app.include_router(variable_presets_routes.router)
     app.include_router(regions_routes.router)
     app.include_router(export_routes.router)
     app.include_router(inventory_routes.router)
