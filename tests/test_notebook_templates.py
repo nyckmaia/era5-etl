@@ -110,6 +110,21 @@ def test_optuna_template_detects_device():
     assert "device=DEVICE" in src
 
 
+def test_optuna_template_aligns_device_for_prediction():
+    """A GPU-trained booster must predict on the data's device, so we don't
+    emit XGBoost's 'mismatched devices' warning / pay a host->device copy.
+
+    Regression guard for the predict_aligned helper (the fix XGBoost itself
+    recommends: set the booster device before inplace_predict).
+    """
+    src = _code_sources("xgboost_optuna_forecast")
+    assert "predict_aligned" in src
+    assert 'set_param({"device": "cpu"})' in src
+    # The helper is actually used for both validation and test prediction.
+    assert "predict_aligned(model, _tv_val[feats])" in src
+    assert "predict_aligned(final_model, test[best_feats])" in src
+
+
 def test_optuna_template_builds_cyclical_features():
     src = _code_sources("xgboost_optuna_forecast")
     for feat in ("hora_sin", "hora_cos", "dia_ano_sin", "dia_ano_cos"):
