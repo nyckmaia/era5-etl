@@ -62,13 +62,15 @@ dependencies = [
     "filelock>=3.0",
     "beautifulsoup4>=4.12",
     "tenacity>=8.2",
-    # Notebook runtime stack (kernel helpers + bundled XGBoost example).
-    # Core, not optional: the /notebooks feature ships an example that uses
-    # these out of the box, so a plain ``pip install -e .`` must run it.
+    # Notebook runtime stack (kernel helpers + bundled XGBoost examples).
+    # Core, not optional: the /notebooks feature ships examples that use
+    # these out of the box, so a plain ``pip install -e .`` must run them.
+    # ``optuna`` powers the "XGBoost with Optuna" template's search.
     "pandas>=2.0",
     "plotly>=5.0",
     "scikit-learn>=1.3",
     "xgboost>=2.0",
+    "optuna>=3.0",
 ]
 
 [project.optional-dependencies]
