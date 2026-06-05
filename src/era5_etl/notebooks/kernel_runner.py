@@ -22,7 +22,7 @@ Display MIME types
 ------------------
 
 - ``application/vnd.dataframe+json``: ``{schema: [{name, dtype}, ...], rows: [...], truncated: bool, total_rows: int}``
-- ``application/vnd.plotly.v1+json``: ``{figure: <fig.to_dict()>}``
+- ``application/vnd.plotly.v1+json``: ``{figure: <json.loads(fig.to_json())>}``
 - ``text/plain``: ``{text: "..."}``
 
 A cell whose final statement is an expression has its value auto-displayed
@@ -64,7 +64,7 @@ def _stream(name: str, text: str) -> None:
 
 def _serialize_dataframe(df: Any) -> dict[str, Any]:
     """Serialize a pandas DataFrame into a compact JSON shape."""
-    total = int(len(df))
+    total = len(df)
     truncated = total > MAX_DATAFRAME_ROWS
     head = df.head(MAX_DATAFRAME_ROWS) if truncated else df
     schema = [{"name": str(c), "dtype": str(head[c].dtype)} for c in head.columns]
@@ -119,11 +119,19 @@ def _display(value: Any) -> None:
         import plotly.graph_objects as go  # type: ignore
 
         if isinstance(value, go.Figure):
+            # Serialize via Plotly's own JSON encoder, NOT ``to_dict()``.
+            # ``to_dict()`` keeps numpy/``datetime64`` arrays as-is, and the
+            # outer ``json.dumps(..., default=str)`` then stringifies a whole
+            # array into a single ``"[...]"`` string — which a Plotly date
+            # axis can't parse, collapsing every point onto epoch 0
+            # (1969-12-31). ``to_json()`` emits proper JSON (datetimes as
+            # ISO-8601 strings, numpy arrays as lists); ``json.loads`` turns
+            # it back into plain dict/list/str so the outer dump is a no-op.
             _send(
                 {
                     "type": "display",
                     "mime": "application/vnd.plotly.v1+json",
-                    "data": {"figure": value.to_dict()},
+                    "data": {"figure": json.loads(value.to_json())},
                 }
             )
             return

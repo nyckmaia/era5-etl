@@ -68,6 +68,37 @@ def test_kernel_reports_errors(kernel):
     assert errors and errors[0]["ename"] == "ZeroDivisionError"
 
 
+def test_kernel_plotly_datetime_x_serializes_as_iso_list(kernel):
+    """Regression: a Plotly figure with a datetime x-axis must serialize the
+    x array as a list of ISO strings.
+
+    ``fig.to_dict()`` + ``json.dumps(default=str)`` used to stringify the
+    whole numpy ``datetime64`` array into one ``"[...]"`` string, which a
+    Plotly date axis can't parse — every point collapsed onto epoch 0
+    (1969-12-31). The kernel now serializes via ``fig.to_json()``.
+    """
+    pytest.importorskip("plotly")
+    pytest.importorskip("pandas")
+    code = (
+        "import pandas as pd\n"
+        "import plotly.graph_objects as go\n"
+        "x = pd.to_datetime(pd.Series(pd.date_range('2025-06-13 22:00', periods=4, freq='h')))\n"
+        "go.Figure(go.Scatter(x=x, y=[1.0, 2.0, 3.0, 4.0], mode='lines'))\n"
+    )
+    events = _events(kernel.run_cell("plt", code, "python"))
+    figs = [
+        e
+        for e in events
+        if e["type"] == "display"
+        and e.get("mime") == "application/vnd.plotly.v1+json"
+    ]
+    assert figs, "expected a plotly display event"
+    xs = figs[0]["data"]["figure"]["data"][0]["x"]
+    assert isinstance(xs, list) and len(xs) == 4, f"x must be a 4-item list, got {xs!r}"
+    assert all(isinstance(v, str) for v in xs), f"x must be ISO strings, got {xs!r}"
+    assert xs[0].startswith("2025-06-13T22:00"), xs[0]
+
+
 def test_kernel_busy_raises_for_concurrent_calls(kernel):
     # Start a cell but don't drain it — the lock is held inside run_cell.
     gen = kernel.run_cell("slow", "import time; time.sleep(0.3); 1", "python")
