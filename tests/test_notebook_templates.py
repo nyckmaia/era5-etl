@@ -139,3 +139,37 @@ def test_optuna_template_builds_cutoff_offset_lags():
     assert "_lag_" in src
     # The shift is cutoff + lag, not just the raw lag.
     assert "cutoff + lag" in src
+
+
+# --- INMET variable selector + pure-date column (both templates) ----------
+
+ALL_TEMPLATES = ("xgboost_temperature_forecast", "xgboost_optuna_forecast")
+
+
+def test_templates_have_inmet_vars_selector():
+    """Both templates expose an ``inmet_vars`` dict (default: only ``temp_ar``)
+    that controls which INMET columns are read from the view. ``date`` and
+    ``hour_utc`` are JOIN keys, always read (never toggled)."""
+    for tid in ALL_TEMPLATES:
+        src = _code_sources(tid)
+        assert "inmet_vars = {" in src, f"{tid}: missing inmet_vars dict"
+        assert '"temp_ar": True' in src, f"{tid}: temp_ar must default True"
+        # Every other INMET variable defaults to False.
+        assert '"umidade_relativa": False' in src, tid
+        assert '"vento_velocidade": False' in src, tid
+        # JOIN keys are structural, not part of the toggle dict.
+        assert "_INMET_KEY_COLS" in src, tid
+        assert '"date", "hour_utc"' in src, tid
+        # The selection drives the inmet SELECT (so extras stay out).
+        assert "SELECT {inmet_select}" in src, tid
+        assert "df = inmet_with_era5_land(station_id, start, end, vars_dict, inmet_vars_dict)" in src, tid
+
+
+def test_templates_join_date_is_pure_date():
+    """After the JOIN, the joined frame's 'date' is a pure date (no time);
+    the hour lives in hour_utc."""
+    for tid in ALL_TEMPLATES:
+        src = _code_sources(tid)
+        assert 'pd.to_datetime(out["date"]).dt.date' in src, (
+            f"{tid}: joined 'date' must be converted to a pure date"
+        )
