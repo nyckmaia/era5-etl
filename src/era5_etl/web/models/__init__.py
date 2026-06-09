@@ -254,15 +254,17 @@ class EstimateIn(BaseModel):
     end_date: str | None = None
     area: list[float] = Field(min_length=4, max_length=4)
     hours: list[str]
-    max_request_bytes: int = 300 * 1024 * 1024
+    max_request_bytes: int = 128 * 1024 * 1024
     max_request_fields: int = Field(
-        default=12_000,
+        default=4_000,
         ge=1,
         description=(
             "Maximum CDS 'fields' (variables × hours × days) per request "
             "before auto-splitting kicks in. Independent of "
             "max_request_bytes; the planner splits on whichever ceiling "
-            "is tighter for this particular selection."
+            "is tighter for this particular selection. Default calibrated "
+            "to the observed ERA5-LAND cost ceiling so chunks are accepted "
+            "first-try (see size_estimator.DEFAULT_MAX_REQUEST_FIELDS)."
         ),
     )
     clip_regions: list[str] | None = Field(

@@ -36,9 +36,10 @@ class TestRequestFields:
         assert request_fields(2, 12, 10) == 240
 
     def test_default_limit_constant(self):
-        # The CDS documented item cap. The byte/value ceiling is the
-        # binding constraint for realistic requests; this is the backstop.
-        assert DEFAULT_MAX_REQUEST_FIELDS == 12_000
+        # Calibrated to the observed ERA5-LAND cost ceiling (3,360 fields
+        # accepted, 6,720 rejected) so the planner emits chunks CDS accepts
+        # first-try instead of relying on the runtime adaptive split.
+        assert DEFAULT_MAX_REQUEST_FIELDS == 4_000
 
 
 class TestSizeEstimateFieldsCount:

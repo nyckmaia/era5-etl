@@ -87,27 +87,35 @@ class DownloadConfig(BaseModel):
         description="Base delay between retries in seconds (exponential backoff)",
     )
     max_request_bytes: int = Field(
-        default=300 * 1024 * 1024,
+        default=128 * 1024 * 1024,
         ge=1024 * 1024,
         description=(
             "Maximum estimated request size in bytes. The planner greedily "
             "packs each chunk up to this ceiling. The estimate is "
-            "total_values × 8; ERA5-LAND NetCDF compresses ~12×, so 300 MB "
-            "downloads as ~25 MB — the CDS per-request file cap. The "
-            "adaptive split in CDSDownloader recovers from any remaining "
-            "cost-exceeded errors at runtime."
+            "total_values × 8 (raw double) and tracks the CDS 'cost' the "
+            "server bills per request. Calibrated against an observed "
+            "ERA5-LAND boundary: a full-SP-state 10-day × 28-var chunk "
+            "(~244 MB est) was rejected 'cost limits exceeded', while the "
+            "5-day chunk (~122 MB) succeeded — so the old 300 MB default sat "
+            "above the real ceiling and every large chunk got rejected and "
+            "recursively re-split at runtime (the cumulative slowdown). "
+            "128 MB keeps large-area chunks at ~5 days, accepted first-try. "
+            "The adaptive split in CDSDownloader remains the safety net for "
+            "the occasional over-shoot."
         ),
     )
     max_request_fields: int = Field(
-        default=12_000,
+        default=4_000,
         ge=1,
         description=(
             "Maximum CDS 'fields' (variables × hours × days) per request "
-            "before auto-splitting kicks in — the CDS documented item cap. "
-            "For realistic requests the byte/value ceiling above is the "
-            "binding constraint; this guards the tiny-area / many-variable "
-            "case where the value count stays low. Both limits apply; "
-            "planner splits on whichever is tighter."
+            "before auto-splitting kicks in. Area-independent, so it is the "
+            "binding ceiling for the tiny-area / many-variable / long-period "
+            "case where the byte estimate stays small. Calibrated against the "
+            "same observed boundary: 3,360 fields (5 days × 28 vars × 24 h) "
+            "was accepted, 6,720 (10 days) rejected — so 4,000 stays under "
+            "the reject with headroom. Both limits apply; the planner splits "
+            "on whichever is tighter."
         ),
     )
     years: list[int] | None = Field(
@@ -263,8 +271,8 @@ class PipelineConfig(BaseModel):
         compression: Literal["snappy", "zstd", "gzip"] = "zstd",
         years: list[int] | None = None,
         clip_regions: list[str] | None = None,
-        max_request_bytes: int = 300 * 1024 * 1024,
-        max_request_fields: int = 12_000,
+        max_request_bytes: int = 128 * 1024 * 1024,
+        max_request_fields: int = 4_000,
     ) -> PipelineConfig:
         """Assemble a full ``PipelineConfig`` from a ``base_dir`` and options.
 

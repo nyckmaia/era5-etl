@@ -54,6 +54,19 @@ def _is_cds_too_large(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return any(hint in msg for hint in _CDS_TOO_LARGE_HINTS)
 
+
+def _safe_member_token(member_name: str, index: int) -> str:
+    """Short, filesystem-safe, unique token for a non-primary ZIP member.
+
+    The ``index`` guarantees uniqueness; the sanitized stem tail (e.g. the
+    CDS-Beta name ``data_stream-oper_stepType-instant`` -> ``steptypeinstant``)
+    is kept only as a human hint and capped so the full output path stays well
+    under the Windows 260-char limit even for long chunk_ids.
+    """
+    stem = Path(member_name).stem.lower()
+    slug = "".join(ch for ch in stem if ch.isalnum())[-16:]
+    return f"{index:02d}-{slug}" if slug else f"{index:02d}"
+
 # CDS only accepts the literal string "netcdf"; never GRIB in this project.
 _CDS_DATA_FORMAT = "netcdf"
 _CDS_DOWNLOAD_FORMAT = "unarchived"
@@ -240,7 +253,7 @@ class CDSDownloader:
         request = self._build_cds_request_from_chunk(chunk)
         try:
             self._retrieve_with_retry(request, temp_file, chunk.year, chunk.month)
-            self._process_downloaded_file(temp_file, temp_dir, output_file)
+            written = self._process_downloaded_file(temp_file, temp_dir, output_file)
         except CDSRequestTooLargeError as exc:
             # Clean partial files before splitting.
             for p in (temp_file, output_file):
@@ -263,7 +276,7 @@ class CDSDownloader:
             record = ChunkRecord.from_request_chunk(chunk)
             record.netcdf_filename = output_file.name
             with contextlib.suppress(OSError):
-                record.size_bytes = output_file.stat().st_size
+                record.size_bytes = sum(p.stat().st_size for p in written)
             self.manifest.record(record)
             self.manifest.save()
         return output_file
@@ -430,27 +443,67 @@ class CDSDownloader:
 
     # ---- HTTP + filesystem helpers -----------------------------------------
 
-    def _process_downloaded_file(self, temp_file: Path, temp_dir: Path, output_file: Path) -> None:
+    def _process_downloaded_file(
+        self, temp_file: Path, temp_dir: Path, output_file: Path
+    ) -> list[Path]:
+        """Turn the raw CDS response into one or more NetCDF files on disk.
+
+        ERA5-LAND mixes instantaneous and accumulated variables, which the CDS
+        cannot pack into a single NetCDF hypercube ("Structural differences in
+        grib fields"). It therefore returns a ZIP holding several NetCDFs — one
+        per stepType group. We keep **every** group: discarding all but the
+        first silently dropped most of the requested variables. The first file
+        keeps the canonical ``<chunk_id>.nc`` name (the download-skip sentinel
+        and manifest provenance rely on it); the rest get
+        ``<chunk_id>__<token>.nc``. The convert stage globs every ``*.nc`` and
+        ``merge_into_partitioned_parquet`` reunifies the groups into single
+        wide rows per (lat, lon, date, hour) — the same path variable-split
+        chunks already take.
+
+        Returns the list of NetCDF files written (the converter discovers them
+        via its own glob; the list is used here only for size accounting).
+        """
+        written: list[Path]
         if zipfile.is_zipfile(temp_file):
             self.logger.info("ZIP file detected, extracting...")
             temp_dir.mkdir(exist_ok=True)
             with zipfile.ZipFile(temp_file, "r") as zip_ref:
                 zip_ref.extractall(temp_dir)
-            nc_files = list(temp_dir.glob("*.nc"))
+            nc_files = sorted(temp_dir.glob("*.nc"))
             if not nc_files:
                 raise RuntimeError("No .nc file found in ZIP archive!")
-            if len(nc_files) > 1:
-                self.logger.warning(
-                    "Multiple .nc files found (%d), using first one", len(nc_files)
+            written = []
+            for i, src in enumerate(nc_files):
+                if i == 0:
+                    dest = output_file
+                else:
+                    token = _safe_member_token(src.name, i)
+                    dest = output_file.with_name(f"{output_file.stem}__{token}.nc")
+                # Clear any stale file from a prior override run so the move
+                # doesn't trip Windows' "rename onto existing" error.
+                dest.unlink(missing_ok=True)
+                shutil.move(str(src), str(dest))
+                written.append(dest)
+            if len(written) > 1:
+                self.logger.info(
+                    "ZIP held %d NetCDF groups; kept all: %s",
+                    len(written),
+                    ", ".join(p.name for p in written),
                 )
-            shutil.move(str(nc_files[0]), str(output_file))
             shutil.rmtree(temp_dir, ignore_errors=True)
             temp_file.unlink()
         else:
             temp_file.rename(output_file)
+            written = [output_file]
 
-        size_mb = output_file.stat().st_size / 1024 / 1024
-        self.logger.info("Downloaded: %s (%.2f MB)", output_file.name, size_mb)
+        total_mb = sum(p.stat().st_size for p in written) / 1024 / 1024
+        self.logger.info(
+            "Downloaded: %s (%d file(s), %.2f MB total)",
+            output_file.name,
+            len(written),
+            total_mb,
+        )
+        return written
 
     def _retrieve_with_retry(
         self,

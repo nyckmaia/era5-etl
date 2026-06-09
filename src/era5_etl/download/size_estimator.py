@@ -39,21 +39,25 @@ PARQUET_DISK_RATIO = 0.5
 #
 # The request planner greedily packs each chunk right up to this ceiling
 # (see ``request_planner._try_day_split``), so the ceiling directly sets
-# the chunk size. ERA5-LAND NetCDF compresses ~12× off the raw-double
-# estimate, so a 300 MB estimate downloads as ~25 MB — the largest file
-# CDS will prepare per request. Calibrated there to minimise the number
-# of round-trips (each request carries non-trivial CDS prep time) while
-# staying under both the cost reject (~46M values observed) and the
-# 25 MB download cap. The adaptive split in ``CDSDownloader`` is the
-# safety net for the occasional over-shoot.
-DEFAULT_MAX_REQUEST_BYTES = 300 * 1024 * 1024
+# the chunk size. Calibrated against an observed ERA5-LAND reject
+# boundary: a full-SP-state 10-day × 28-var chunk (~244 MB est) was
+# rejected with "cost limits exceeded", while the 5-day chunk (~122 MB)
+# succeeded. The previous 300 MB default sat above that ceiling, so every
+# large chunk was rejected and recursively re-split at runtime — each
+# re-submission re-entering the CDS queue, which is the cumulative
+# slowdown users hit on multi-year area downloads. 128 MB keeps a
+# large-area chunk at ~5 days, accepted on the first try; the adaptive
+# split in ``CDSDownloader`` stays as the safety net for any over-shoot.
+DEFAULT_MAX_REQUEST_BYTES = 128 * 1024 * 1024
 
-# CDS documents a ceiling of ~12,000 "fields" (variables × hours × days)
-# per request. The byte/value ceiling above is the binding constraint
-# for realistic requests; this field cap is the documented-limit
-# backstop (it stops a many-variable request over a tiny area, where
-# the value count — and thus the byte estimate — stays low).
-DEFAULT_MAX_REQUEST_FIELDS = 12_000
+# Area-independent ceiling on CDS "fields" (variables × hours × days).
+# It is the binding constraint for the tiny-area / many-variable /
+# long-period case where the byte estimate stays small. Calibrated
+# against the same observed boundary: 3,360 fields (5 days × 28 vars ×
+# 24 h) was accepted, 6,720 (10 days) rejected — so 4,000 stays under the
+# reject with headroom. Both ceilings apply; the planner splits on
+# whichever is tighter.
+DEFAULT_MAX_REQUEST_FIELDS = 4_000
 
 
 def request_fields(num_variables: int, num_hours: int, num_days: int) -> int:

@@ -304,12 +304,13 @@ def pipeline(
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
     max_fields: int = typer.Option(
-        12_000,
+        4_000,
         "--max-fields",
         help=(
             "Max CDS fields per request (variables × hours × days). The "
             "request planner auto-splits any larger request to keep each "
-            "chunk under this ceiling. CDS documents a ~12,000 cap."
+            "chunk under this ceiling. Default 4,000, calibrated to the "
+            "observed ERA5-LAND cost ceiling so chunks are accepted first-try."
         ),
     ),
     dry_run: bool = typer.Option(
@@ -501,12 +502,13 @@ def download(
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
     max_fields: int = typer.Option(
-        12_000,
+        4_000,
         "--max-fields",
         help=(
             "Max CDS fields per request (variables × hours × days). The "
             "planner auto-splits any larger request to keep each chunk "
-            "under this ceiling. CDS documents a ~12,000 cap."
+            "under this ceiling. Default 4,000, calibrated to the observed "
+            "ERA5-LAND cost ceiling so chunks are accepted first-try."
         ),
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only, do not download"),
@@ -670,7 +672,7 @@ def update(
         help="With --region: keep the bbox-derived area but skip the polygon clip.",
     ),
     max_fields: int = typer.Option(
-        12_000,
+        4_000,
         "--max-fields",
         help=(
             "Max CDS fields per request (variables × hours × days). The "
