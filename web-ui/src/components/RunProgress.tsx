@@ -7,6 +7,7 @@ import {
   Database,
   Download,
   FileStack,
+  Hourglass,
   Loader2,
   Send,
   Sparkles,
@@ -57,6 +58,9 @@ interface ChunkState {
   phase: ChunkPhase;
   message: string;
   bytes_total: number | null;
+  bytes_downloaded: number | null; // live download progress (poller)
+  started_at: number; // epoch s of the first event seen for this chunk
+  elapsed_ms: number | null; // total wall-clock, set when terminal
   last_update: number;
 }
 
@@ -163,6 +167,8 @@ function reducer(state: RunState, action: Action): RunState {
   }
   const prev = state.chunks[p.chunk_id];
   const now = p.timestamp ?? Date.now() / 1000;
+  const startedAt = prev?.started_at ?? now;
+  const isTerminal = p.phase === "completed" || p.phase === "failed";
   const next: ChunkState = {
     chunk_id: p.chunk_id,
     chunk_index: p.chunk_index ?? prev?.chunk_index ?? null,
@@ -170,6 +176,11 @@ function reducer(state: RunState, action: Action): RunState {
     phase: p.phase,
     message: p.message ?? "",
     bytes_total: p.bytes_total ?? prev?.bytes_total ?? null,
+    bytes_downloaded: p.bytes_downloaded ?? prev?.bytes_downloaded ?? null,
+    started_at: startedAt,
+    elapsed_ms: isTerminal
+      ? Math.max(0, Math.round((now - startedAt) * 1000))
+      : (prev?.elapsed_ms ?? null),
     last_update: now,
   };
   const events = [
@@ -185,27 +196,17 @@ function reducer(state: RunState, action: Action): RunState {
   };
 }
 
-// Friendly phase-step descriptors share their order across languages;
-// the visible label is resolved via i18n at render time.
-const GRID_PHASE_STEPS: { phase: ChunkPhase; key: string }[] = [
-  { phase: "submitting", key: "runProgress.barSub.submitting" },
-  { phase: "queued", key: "runProgress.barSub.queued" },
-  { phase: "running", key: "runProgress.barSub.runningCDS" },
-  { phase: "downloading", key: "runProgress.barSub.downloadingNetcdf" },
-  { phase: "completed", key: "runProgress.barSub.completed" },
+// CDS request lifecycle in order, for the stepper above the download bar.
+// Each entry maps a pre-download phase to a short i18n label; "completed"
+// is not a step (it means every step is done) and "downloading" is the
+// point at which Bar #1 starts tracking real bytes. Order is shared across
+// languages; the visible label is resolved via i18n at render time.
+const LIFECYCLE_STEPS: { phase: ChunkPhase; key: string }[] = [
+  { phase: "submitting", key: "runProgress.lifecycle.sending" },
+  { phase: "queued", key: "runProgress.lifecycle.accepted" },
+  { phase: "running", key: "runProgress.lifecycle.processing" },
+  { phase: "downloading", key: "runProgress.lifecycle.downloading" },
 ];
-const STATION_PHASE_STEPS: { phase: ChunkPhase; key: string }[] = [
-  { phase: "downloading", key: "runProgress.barSub.downloadingYear" },
-  { phase: "completed", key: "runProgress.barSub.yearExtracted" },
-];
-
-function phaseRank(
-  phase: ChunkPhase,
-  steps: { phase: ChunkPhase; key: string }[],
-): number {
-  const idx = steps.findIndex((s) => s.phase === phase);
-  return idx < 0 ? 0 : idx;
-}
 
 export function RunProgress({
   runId,
@@ -220,7 +221,6 @@ export function RunProgress({
 }) {
   const { t } = useTranslation();
   const isStation = kind === "station";
-  const phaseSteps = isStation ? STATION_PHASE_STEPS : GRID_PHASE_STEPS;
   const unitLabel = t(
     isStation ? "runProgress.units.year" : "runProgress.units.chunk",
   );
@@ -287,20 +287,28 @@ export function RunProgress({
     (c) => c.phase !== "completed" && c.phase !== "failed",
   );
 
-  // Bar A — download group (chunks completed / total)
+  // Bar: overall download group (chunks completed / total)
   const groupPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-  // Bar B — current CDS request lifecycle (stepped)
-  const curPhase: ChunkPhase | null = active?.phase ?? null;
-  const phasePct = curPhase
-    ? Math.round(
-        (phaseRank(curPhase, phaseSteps) /
-          Math.max(1, phaseSteps.length - 1)) *
-          100,
-      )
-    : completed > 0 && completed === total
-      ? 100
+
+  // Bar: current file download. Bar #1 now tracks REAL bytes for the active
+  // chunk (the file-size monitor streams bytes_downloaded; bytes_total comes
+  // from the cdsapi "Downloading … (NN MB)" log line). Before the download
+  // phase the bar is empty — the lifecycle stepper explains the wait.
+  const dl = active?.bytes_downloaded ?? null;
+  const dlTotal = active?.bytes_total ?? null;
+  const isDownloading = active?.phase === "downloading";
+  // Real percent when both known; clamp to 99 until the chunk completes so
+  // it never claims 100% before the file is actually finished.
+  const bytePct =
+    isDownloading && dl != null && dlTotal && dlTotal > 0
+      ? Math.min(99, Math.round((dl / dlTotal) * 100))
       : 0;
-  // Bar C — NetCDF -> Parquet conversion
+  // Downloading with an unknown total → animated shimmer instead of a number.
+  const fileIndeterminate = isDownloading && (dl == null || !dlTotal);
+  const fileBarPct =
+    completed > 0 && completed === total ? 100 : isDownloading ? bytePct : 0;
+
+  // Bar: NetCDF -> Parquet conversion
   const conv = state.convert;
   const convPct =
     conv && conv.total > 0 ? Math.round((conv.done / conv.total) * 100) : 0;
@@ -313,9 +321,22 @@ export function RunProgress({
     !active &&
     completed === 0 &&
     !(conv && conv.total > 0);
-  // Show a small non-zero fill on the current-request bar while starting so
-  // the user sees motion immediately after clicking "Start download".
-  const phaseBarPct = startingUp && phasePct === 0 ? 8 : phasePct;
+
+  // ETA for the whole run = mean completed-chunk wall-clock × remaining
+  // chunks. Robust from minutes to days; null (→ "calculating") until the
+  // first chunk finishes, since chunk durations are wildly uneven (CDS queue
+  // time dominates and is unpredictable).
+  const etaMs: number | null = (() => {
+    if (state.status !== "running" || total <= 0) return null;
+    const done = chunkList.filter(
+      (c) => c.phase === "completed" && c.elapsed_ms != null,
+    );
+    if (done.length === 0) return null;
+    const avg =
+      done.reduce((acc, c) => acc + (c.elapsed_ms as number), 0) / done.length;
+    const remaining = Math.max(0, total - completed);
+    return remaining > 0 ? Math.round(avg * remaining) : 0;
+  })();
 
   return (
     <div className="space-y-6">
@@ -364,32 +385,42 @@ export function RunProgress({
               elapsedMs={elapsedMs}
               running={state.status === "running"}
             />
+            {state.status === "running" && <EtaChip etaMs={etaMs} />}
           </div>
         </div>
 
         <div className="mt-5 space-y-4">
           {!isStation && (
-            <Bar
-              icon={<Cloud className="h-4 w-4 text-amber-600" />}
-              label={t("runProgress.bars.currentRequest")}
-              pct={phaseBarPct}
-              sub={
-                curPhase
-                  ? (() => {
-                      const step = phaseSteps.find(
-                        (s) => s.phase === curPhase,
-                      );
-                      return step ? t(step.key) : curPhase;
-                    })()
-                  : state.status === "completed"
-                    ? t("runProgress.barSub.completed")
-                    : startingUp
-                      ? t("runProgress.barSub.submitting")
-                      : t("runProgress.barSub.waitingFirstRequest")
-              }
-              tone={state.status === "failed" ? "fail" : "phase"}
-              pulse={startingUp}
-            />
+            <div className="space-y-2">
+              <RequestLifecycle
+                phase={
+                  active?.phase ??
+                  (completed === total && total > 0 ? "completed" : null)
+                }
+                failed={state.status === "failed"}
+              />
+              <Bar
+                icon={<Cloud className="h-4 w-4 text-amber-600" />}
+                label={t("runProgress.bars.currentRequest")}
+                pct={fileBarPct}
+                indeterminate={fileIndeterminate}
+                sub={
+                  isDownloading
+                    ? dl != null
+                      ? dlTotal
+                        ? `${(dl / 1024 / 1024).toFixed(1)} / ${(dlTotal / 1024 / 1024).toFixed(1)} MB`
+                        : `${(dl / 1024 / 1024).toFixed(1)} MB`
+                      : t("runProgress.barSub.downloadingNetcdf")
+                    : state.status === "completed"
+                      ? t("runProgress.barSub.completed")
+                      : startingUp
+                        ? t("runProgress.barSub.submitting")
+                        : t("runProgress.barSub.waitingServer")
+                }
+                tone={state.status === "failed" ? "fail" : "phase"}
+                pulse={startingUp}
+              />
+            </div>
           )}
           <Bar
             icon={<FileStack className="h-4 w-4 text-ocean-600" />}
@@ -533,6 +564,19 @@ function formatHMS(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
+// Flexible, human-readable duration that scales from seconds to days, used
+// for per-chunk timings and the run ETA: 45s · 5m 20s · 3h 12m · 2d 4h.
+function formatDurationCompact(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
 function ElapsedTimer({
   elapsedMs,
   running,
@@ -578,6 +622,97 @@ function ElapsedTimer({
   );
 }
 
+// Estimated time remaining for the whole run. Mirrors ElapsedTimer's pill but
+// with an ocean accent so it reads as a forecast, not the live clock. Shows
+// "calculating…" until the first chunk completes and a value can be derived;
+// formatDurationCompact keeps it legible from "~45s" to "~2d 4h".
+function EtaChip({ etaMs }: { etaMs: number | null }) {
+  const { t } = useTranslation();
+  return (
+    <span className="flex items-center gap-1.5 rounded-full border border-ink-100 bg-ink-50 px-2.5 py-1">
+      <Hourglass className="h-3.5 w-3.5 text-ocean-600" />
+      <span className="text-[10px] font-medium uppercase tracking-wide text-ocean-700">
+        {t("runProgress.eta.label")}
+      </span>
+      <span className="font-mono text-xs tabular-nums text-ocean-700">
+        {etaMs == null
+          ? t("runProgress.eta.calculating")
+          : `~${formatDurationCompact(etaMs)}`}
+      </span>
+    </span>
+  );
+}
+
+// Horizontal stepper that surfaces the otherwise-invisible CDS request
+// lifecycle above the download bar: sending the request → it's accepted →
+// the server prepares the file (the long, previously-mysterious wait) →
+// the file becomes available and downloads. Grid datasets only (INMET has
+// no CDS round-trip). Done steps fill emerald; the active step pulses amber;
+// pending steps are muted; a failed run flips the "accepted" slot to a red
+// "rejected" state.
+function RequestLifecycle({
+  phase,
+  failed,
+}: {
+  phase: ChunkPhase | null;
+  failed: boolean;
+}) {
+  const { t } = useTranslation();
+  const activeIdx =
+    phase === "completed"
+      ? LIFECYCLE_STEPS.length
+      : phase
+        ? Math.max(0, LIFECYCLE_STEPS.findIndex((s) => s.phase === phase))
+        : 0;
+  return (
+    <ol className="flex items-center gap-1.5">
+      {LIFECYCLE_STEPS.map((step, i) => {
+        const done = i < activeIdx;
+        const current = i === activeIdx && !failed;
+        const rejected = failed && i === 1; // "accepted" slot → "rejected"
+        return (
+          <li key={step.phase} className="flex flex-1 items-center gap-1.5">
+            <span
+              aria-current={current ? "step" : undefined}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors",
+                rejected
+                  ? "bg-rose-100 text-rose-700"
+                  : done
+                    ? "bg-emerald-100 text-emerald-700"
+                    : current
+                      ? "bg-amber-100 text-amber-800 animate-pulse"
+                      : "bg-ink-100 text-ink-400",
+              )}
+            >
+              {rejected ? (
+                <XCircle className="h-3 w-3 shrink-0" />
+              ) : done ? (
+                <CheckCircle2 className="h-3 w-3 shrink-0" />
+              ) : current ? (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              ) : (
+                <span className="h-3 w-3 shrink-0 rounded-full border border-current" />
+              )}
+              <span className="hidden md:inline">
+                {rejected ? t("runProgress.lifecycle.rejected") : t(step.key)}
+              </span>
+            </span>
+            {i < LIFECYCLE_STEPS.length - 1 && (
+              <span
+                className={cn(
+                  "h-px flex-1 transition-colors",
+                  done ? "bg-emerald-300" : "bg-ink-200",
+                )}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function Bar({
   icon,
   label,
@@ -585,6 +720,7 @@ function Bar({
   sub,
   tone,
   pulse = false,
+  indeterminate = false,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -592,6 +728,9 @@ function Bar({
   sub: string;
   tone: "group" | "phase" | "convert" | "fail";
   pulse?: boolean;
+  // When true the total size is unknown but bytes are flowing: render a
+  // sliding shimmer instead of a fixed-width fill, and hide the percentage.
+  indeterminate?: boolean;
 }) {
   const fill = {
     group: "bg-ocean-500",
@@ -606,17 +745,28 @@ function Bar({
           {icon}
           {label}
         </span>
-        <span className="tabular-nums text-ink-500">{pct}%</span>
+        <span className="tabular-nums text-ink-500">
+          {indeterminate ? "…" : `${pct}%`}
+        </span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-ink-100">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all duration-500",
-            fill,
-            pulse && "animate-pulse",
-          )}
-          style={{ width: `${pct}%` }}
-        />
+      <div className="relative h-2 overflow-hidden rounded-full bg-ink-100">
+        {indeterminate ? (
+          <div
+            className={cn(
+              "absolute inset-y-0 w-1/3 rounded-full animate-indeterminate",
+              fill,
+            )}
+          />
+        ) : (
+          <div
+            className={cn(
+              "h-full rounded-full transition-all duration-500",
+              fill,
+              pulse && "animate-pulse",
+            )}
+            style={{ width: `${pct}%` }}
+          />
+        )}
       </div>
       <div className="mt-1 truncate text-[11px] text-ink-400">{sub}</div>
     </div>
@@ -624,6 +774,10 @@ function Bar({
 }
 
 function ChunkRow({ chunk }: { chunk: ChunkState }) {
+  const { t } = useTranslation();
+  const showTime =
+    (chunk.phase === "completed" || chunk.phase === "failed") &&
+    chunk.elapsed_ms != null;
   return (
     <li className="flex items-center gap-3 px-5 py-3 text-sm">
       <PhaseIcon phase={chunk.phase} />
@@ -631,6 +785,15 @@ function ChunkRow({ chunk }: { chunk: ChunkState }) {
         <div className="font-medium text-ink-800">{chunk.chunk_id}</div>
         <div className="truncate text-[11px] text-ink-400">{chunk.message}</div>
       </div>
+      {showTime && (
+        <span
+          className="flex items-center gap-1 text-[11px] tabular-nums text-ink-500"
+          title={t("runProgress.chunkTime")}
+        >
+          <Clock className="h-3 w-3 text-ink-400" />
+          {formatDurationCompact(chunk.elapsed_ms as number)}
+        </span>
+      )}
       <PhaseBadge phase={chunk.phase} />
       {chunk.phase === "downloading" && chunk.bytes_total != null && (
         <span className="text-[11px] text-ink-500">

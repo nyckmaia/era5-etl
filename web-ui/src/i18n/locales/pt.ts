@@ -300,9 +300,22 @@ export const pt = {
       yearExtracted: "Ano extraído",
       completed: "Concluído",
       waitingFirstRequest: "Aguardando primeira requisição…",
+      waitingServer: "Aguardando o servidor preparar o arquivo",
       waitingDownloads: "Aguardando downloads…",
       waitingYearDownloads: "Aguardando o download dos anos…",
     },
+    lifecycle: {
+      sending: "Enviando requisição",
+      accepted: "Requisição aceita",
+      rejected: "Requisição recusada",
+      processing: "Processando no servidor",
+      downloading: "Baixando arquivo",
+    },
+    eta: {
+      label: "Tempo restante (est.)",
+      calculating: "Calculando…",
+    },
+    chunkTime: "Tempo total deste arquivo",
     finalizing: {
       title: "Finalizando — aguarde",
       explanation:

@@ -41,6 +41,17 @@ export default {
         card: "0 1px 3px 0 rgba(15, 23, 42, 0.08), 0 1px 2px -1px rgba(15, 23, 42, 0.05)",
         elevated: "0 10px 25px -5px rgba(15, 23, 42, 0.15), 0 8px 10px -6px rgba(15, 23, 42, 0.1)",
       },
+      keyframes: {
+        // Sliding segment for the indeterminate download bar (shown while the
+        // CDS server prepares a file and the total size isn't known yet).
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(400%)" },
+        },
+      },
+      animation: {
+        indeterminate: "indeterminate 1.4s ease-in-out infinite",
+      },
     },
   },
   plugins: [],

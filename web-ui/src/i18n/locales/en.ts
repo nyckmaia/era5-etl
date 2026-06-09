@@ -300,9 +300,22 @@ export const en: Dictionary = {
       yearExtracted: "Year extracted",
       completed: "Completed",
       waitingFirstRequest: "Waiting for the first request…",
+      waitingServer: "Waiting for the server to prepare the file",
       waitingDownloads: "Waiting for downloads…",
       waitingYearDownloads: "Waiting for year downloads…",
     },
+    lifecycle: {
+      sending: "Sending request",
+      accepted: "Request accepted",
+      rejected: "Request rejected",
+      processing: "Processing on server",
+      downloading: "Downloading file",
+    },
+    eta: {
+      label: "Est. time remaining",
+      calculating: "Calculating…",
+    },
+    chunkTime: "Total time for this file",
     finalizing: {
       title: "Finalizing — please wait",
       explanation:
