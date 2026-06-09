@@ -462,3 +462,54 @@ class TestDownloadProgressMonitor:
         ):
             time.sleep(0.1)
         assert events == []
+
+    def test_gate_false_suppresses_emission(self, tmp_path: Path):
+        """When gated off (a better byte source is live) the poller is silent."""
+        import time
+
+        from era5_etl.download.cds_downloader import _DownloadProgressMonitor
+
+        target = tmp_path / ".tmp_gated.download"
+        events: list[dict] = []
+        with _DownloadProgressMonitor(
+            target, events.append, {"chunk_id": "c"}, interval=0.02, gate=lambda: False
+        ):
+            for i in range(1, 4):
+                target.write_bytes(b"x" * (i * 1000))
+                time.sleep(0.05)
+        assert events == []
+
+
+class TestMultiurlByteProgress:
+    """The preferred byte source: wraps multiurl's tqdm so its updates feed
+    the UI bar with both bytes_downloaded and bytes_total."""
+
+    def test_forwards_tqdm_updates_and_restores_on_exit(self):
+        import pytest
+
+        mbase = pytest.importorskip("multiurl.base")
+        from era5_etl.download.cds_downloader import _MultiurlByteProgress
+
+        events: list[dict] = []
+        ctx = {"chunk_id": "c1", "chunk_index": 1, "chunks_total": 1}
+        with _MultiurlByteProgress(events.append, lambda: ctx) as hook:
+            assert hook.available
+            # multiurl constructs DownloaderBase subclasses; our patch wraps
+            # their progress_bar. Drive it as multiurl.transfer() would.
+            dl = mbase.DownloaderBase("http://example/x")
+            with dl.progress_bar(total=1000) as bar:
+                bar.update(250)
+                bar.update(250)
+
+        dl_events = [e for e in events if e.get("phase") == "downloading"]
+        assert dl_events, "expected byte-progress events from the tqdm hook"
+        assert dl_events[-1]["bytes_downloaded"] == 500
+        assert dl_events[-1]["bytes_total"] == 1000
+        assert dl_events[-1]["chunk_id"] == "c1"
+
+        # After __exit__ the global patch is removed: no further emissions.
+        dl2 = mbase.DownloaderBase("http://example/y")
+        before = len(events)
+        with dl2.progress_bar(total=10) as bar2:
+            bar2.update(5)
+        assert len(events) == before

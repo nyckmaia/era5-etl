@@ -54,6 +54,47 @@ def test_parse_downloading_extracts_bytes_total():
     assert events[0]["bytes_total"] == int(12.34 * 1024 * 1024)
 
 
+# --- New CDS client (ecmwf.datastores) wording -----------------------------
+# The new infrastructure reports lifecycle via "status has been updated to …"
+# and a size-less "Downloading <url>" line, unlike the legacy cdsapi wording.
+
+
+def test_parse_status_accepted_yields_queued():
+    events: list[dict] = []
+    h = CDSEventCapture(events.append)
+    h.set_chunk_context("c1", 1, 1)
+    _fire(h, "status has been updated to accepted")
+    assert events[0]["phase"] == "queued"
+
+
+def test_parse_status_running_yields_running():
+    events: list[dict] = []
+    h = CDSEventCapture(events.append)
+    h.set_chunk_context("c1", 1, 1)
+    _fire(h, "status has been updated to running")
+    assert events[0]["phase"] == "running"
+
+
+def test_parse_status_successful_is_silent():
+    events: list[dict] = []
+    h = CDSEventCapture(events.append)
+    h.set_chunk_context("c1", 1, 1)
+    _fire(h, "status has been updated to successful")
+    assert events == []
+
+
+def test_parse_downloading_without_size_still_downloading():
+    events: list[dict] = []
+    h = CDSEventCapture(events.append)
+    h.set_chunk_context("c1", 1, 1)
+    _fire(
+        h,
+        "Downloading https://object-store.os-api.cci2.ecmwf.int:443/x/abc.zip",
+    )
+    assert events[0]["phase"] == "downloading"
+    assert "bytes_total" not in events[0]
+
+
 def test_unknown_message_is_silent():
     events: list[dict] = []
     h = CDSEventCapture(events.append)

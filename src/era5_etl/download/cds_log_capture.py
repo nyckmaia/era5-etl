@@ -11,14 +11,23 @@ This handler is purely additive: it does not consume the record or silence
 the underlying logger. The CLI keeps seeing the usual cdsapi messages in
 its terminal output.
 
-Recognised messages (regex, tolerant to wording drift)::
+Recognised messages, tolerant to wording drift across two client
+generations (legacy ``cdsapi`` and the newer ``ecmwf.datastores`` client)::
 
-    "Request ID is XXX"                 -> phase=submitting
-    "Request <id> is queued"            -> phase=queued
-    "Request <id> is running"           -> phase=running
+    "Request ID is XXX"                       -> phase=submitting
+    "Request <id> is queued"                  -> phase=queued
+    "status has been updated to accepted"     -> phase=queued
+    "Request <id> is running"                 -> phase=running
+    "status has been updated to running"      -> phase=running
     "Downloading https://... to ... (NN.NN MB)"
-                                        -> phase=downloading, bytes_total
-    "Download rate ... MB/s"            -> (ignored; not actionable)
+                                              -> phase=downloading, bytes_total
+    "Downloading https://...zip"              -> phase=downloading (no size)
+    "status has been updated to successful"   -> (ignored; download follows)
+    "Download rate ... MB/s"                  -> (ignored; not actionable)
+
+NOTE: the records come from several loggers (``cdsapi``,
+``ecmwf.datastores.*``, ``multiurl.*``), so the handler is attached to the
+*root* logger rather than ``cdsapi`` alone.
 """
 
 from __future__ import annotations
@@ -92,9 +101,23 @@ class CDSEventCapture(logging.Handler):
         lower = message.lower()
         if "request id is" in lower:
             return {"phase": "submitting", "message": message}
-        if "is queued" in lower or "request is queued" in lower:
+        # Two client generations emit different wording for the same states:
+        #   legacy cdsapi:        "Request <id> is queued" / "is running"
+        #   ecmwf.datastores:     "status has been updated to accepted/running"
+        # "accepted" == request admitted to the queue; "running" == the server
+        # is preparing the file. "successful"/other statuses are intentionally
+        # not steps (the "Downloading …" line below moves us to downloading).
+        if (
+            "updated to accepted" in lower
+            or "is queued" in lower
+            or "request is queued" in lower
+        ):
             return {"phase": "queued", "message": message}
-        if "is running" in lower or "request is running" in lower:
+        if (
+            "updated to running" in lower
+            or "is running" in lower
+            or "request is running" in lower
+        ):
             return {"phase": "running", "message": message}
         if lower.startswith("downloading "):
             match = _DOWNLOAD_RE.search(message)

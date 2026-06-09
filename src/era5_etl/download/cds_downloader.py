@@ -72,17 +72,23 @@ def _safe_member_token(member_name: str, index: int) -> str:
 _CDS_DATA_FORMAT = "netcdf"
 _CDS_DOWNLOAD_FORMAT = "unarchived"
 
+# Loggers that carry CDS request-lifecycle messages. The handler attaches to
+# the root logger (to catch all of them) but we ensure each emits at INFO.
+_CDS_SOURCE_LOGGERS = ("cdsapi", "ecmwf.datastores", "multiurl")
+
 
 class _DownloadProgressMonitor:
     """Approximate live download progress by polling a file's size on disk.
 
-    ``cdsapi.Client.retrieve`` blocks for the whole submit/queue/process/
-    download flow and never reports bytes transferred, so we watch the
+    A *fallback* byte-progress source for clients that don't route through
+    multiurl (see :class:`_MultiurlByteProgress`, the preferred hook). The
+    blocking ``retrieve`` never reports bytes transferred, so we watch the
     target file grow on a daemon thread and emit ``phase="downloading"``
     events carrying ``bytes_downloaded`` under the active chunk context.
-    ``bytes_total`` arrives separately from :class:`CDSEventCapture` (parsed
-    from the cdsapi "Downloading … (NN MB)" log line). Use as a context
-    manager around the blocking retrieve call.
+
+    ``gate`` lets the caller suppress emission when a better source (the
+    multiurl tqdm hook) is already reporting bytes, avoiding two producers
+    fighting over the same bar. Use as a context manager around retrieve.
     """
 
     def __init__(
@@ -91,11 +97,13 @@ class _DownloadProgressMonitor:
         emit: Callable[[dict[str, Any]], None],
         ctx: dict[str, Any],
         interval: float = 0.75,
+        gate: Callable[[], bool] | None = None,
     ) -> None:
         self._path = path
         self._emit = emit
         self._ctx = ctx
         self._interval = interval
+        self._gate = gate
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_size = -1
@@ -125,6 +133,8 @@ class _DownloadProgressMonitor:
         return best
 
     def _tick(self) -> None:
+        if self._gate is not None and not self._gate():
+            return  # a better byte-progress source is active; stand down
         size = self._current_size()
         if size > 0 and size != self._last_size:
             self._last_size = size
@@ -140,6 +150,91 @@ class _DownloadProgressMonitor:
             self._tick()
 
 
+class _MultiurlByteProgress:
+    """Forward multiurl's tqdm download-bar updates to ``on_event``.
+
+    The current CDS client (``ecmwf.datastores``) downloads via ``multiurl``,
+    which drives a tqdm progress bar it *knows the total size for* and updates
+    per chunk (``pbar.update(len(chunk))``). We patch ``DownloaderBase`` so
+    every instance's ``progress_bar`` is wrapped: the real tqdm is still
+    created (the terminal bar is preserved) but each update also emits
+    ``bytes_downloaded``/``bytes_total`` under the active chunk context — the
+    exact numbers shown in the terminal.
+
+    A context manager; a no-op (``available=False``) if multiurl can't be
+    imported or its shape changed. Patches a process-global class method, so
+    it relies on downloads being sequential (they are).
+    """
+
+    def __init__(
+        self,
+        emit: Callable[[dict[str, Any]], None],
+        ctx_getter: Callable[[], dict[str, Any]],
+    ) -> None:
+        self._emit = emit
+        self._ctx_getter = ctx_getter
+        self._base: Any = None
+        self._orig_init: Any = None
+        self.available = False
+
+    def __enter__(self) -> "_MultiurlByteProgress":
+        try:
+            from multiurl import base as mbase  # type: ignore
+
+            orig_init = mbase.DownloaderBase.__init__
+        except Exception:  # pragma: no cover - multiurl absent / shape changed
+            return self
+
+        self._base = mbase
+        self._orig_init = orig_init
+        emit = self._emit
+        ctx_getter = self._ctx_getter
+
+        def patched_init(inner_self: Any, *args: Any, **kwargs: Any) -> None:
+            orig_init(inner_self, *args, **kwargs)
+            real_factory = inner_self.progress_bar
+
+            def wrapped_factory(
+                total: Any = None, initial: int = 0, desc: Any = None
+            ) -> Any:
+                bar = real_factory(total=total, initial=initial, desc=desc)
+                orig_update = bar.update
+
+                def update(n: float = 1) -> Any:
+                    result = orig_update(n)
+                    try:
+                        bar_total = getattr(bar, "total", None)
+                        emit(
+                            {
+                                **ctx_getter(),
+                                "phase": "downloading",
+                                "bytes_downloaded": int(getattr(bar, "n", 0) or 0),
+                                "bytes_total": (
+                                    int(bar_total) if bar_total else None
+                                ),
+                            }
+                        )
+                    except Exception:  # pragma: no cover - never break download
+                        pass
+                    return result
+
+                bar.update = update  # type: ignore[method-assign]
+                return bar
+
+            inner_self.progress_bar = wrapped_factory
+
+        try:
+            mbase.DownloaderBase.__init__ = patched_init  # type: ignore[method-assign]
+            self.available = True
+        except Exception:  # pragma: no cover - defensive
+            self._orig_init = None
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._base is not None and self._orig_init is not None:
+            self._base.DownloaderBase.__init__ = self._orig_init
+
+
 class CDSDownloader:
     """Download ERA5/ERA5-Land data from Copernicus Climate Data Store."""
 
@@ -153,9 +248,12 @@ class CDSDownloader:
         self.manifest = manifest
         self.on_event = on_event
         # Active chunk context for events emitted outside CDSEventCapture
-        # (the file-size progress monitor). Set per-chunk in _download_all,
+        # (the byte-progress sources). Set per-chunk in _download_all,
         # mirroring CDSEventCapture.set_chunk_context.
         self._emit_ctx: dict[str, Any] = {}
+        # True once the multiurl tqdm hook has reported bytes for the current
+        # chunk; gates the file-size poller so they don't both drive the bar.
+        self._byte_progress_seen = False
         self.logger = logging.getLogger(__name__)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -237,24 +335,48 @@ class CDSDownloader:
         """Download a pre-built list of chunks (used by the ``update`` command)."""
         return self._download_all(chunks)
 
-    def _download_all(self, chunks: list[RequestChunk]) -> list[Path]:
-        capture: CDSEventCapture | None = None
-        cdsapi_logger = logging.getLogger("cdsapi")
-        if self.on_event is not None:
-            capture = CDSEventCapture(self.on_event)
-            cdsapi_logger.addHandler(capture)
-            # Ensure cdsapi.INFO messages reach our handler even if upstream
-            # configured the logger at WARNING.
-            if cdsapi_logger.level > logging.INFO or cdsapi_logger.level == 0:
-                self._prev_cdsapi_level: int | None = cdsapi_logger.level
-                cdsapi_logger.setLevel(logging.INFO)
-            else:
-                self._prev_cdsapi_level = None
+    def _byte_emit(self, payload: dict[str, Any]) -> None:
+        """Emit a byte-progress event and mark that a tqdm-backed source is
+        live for the current chunk (so the file-size poller stands down)."""
+        self._byte_progress_seen = True
+        self._emit(payload)
 
+    def _install_progress_capture(
+        self, stack: contextlib.ExitStack
+    ) -> CDSEventCapture | None:
+        """Attach the lifecycle log-capture to the *root* logger and ensure the
+        source loggers emit at INFO. Cleanup is registered on ``stack``.
+
+        Root (not just ``cdsapi``) because the modern client logs lifecycle
+        under ``ecmwf.datastores.*`` and the byte download under ``multiurl.*``.
+        """
+        if self.on_event is None:
+            return None
+        capture = CDSEventCapture(self.on_event)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(capture)
+        stack.callback(root_logger.removeHandler, capture)
+        for name in _CDS_SOURCE_LOGGERS:
+            lg = logging.getLogger(name)
+            if lg.level == logging.NOTSET or lg.level > logging.INFO:
+                prev = lg.level
+                lg.setLevel(logging.INFO)
+                stack.callback(lg.setLevel, prev)
+        return capture
+
+    def _download_all(self, chunks: list[RequestChunk]) -> list[Path]:
         downloaded: list[Path] = []
         total = len(chunks)
-        try:
+        with contextlib.ExitStack() as stack:
+            capture = self._install_progress_capture(stack)
+            if self.on_event is not None:
+                # Preferred byte-progress source: hook multiurl's tqdm so the
+                # numbers driving the terminal bar also feed the UI bar.
+                stack.enter_context(
+                    _MultiurlByteProgress(self._byte_emit, lambda: self._emit_ctx)
+                )
             for idx, chunk in enumerate(chunks, start=1):
+                self._byte_progress_seen = False
                 if capture is not None:
                     capture.set_chunk_context(chunk.chunk_id, idx, total)
                 self._emit_ctx = {
@@ -298,12 +420,6 @@ class CDSDownloader:
                         "message": f"{chunk.chunk_id} done",
                     }
                 )
-        finally:
-            if capture is not None:
-                cdsapi_logger.removeHandler(capture)
-                prev_level = getattr(self, "_prev_cdsapi_level", None)
-                if prev_level is not None:
-                    cdsapi_logger.setLevel(prev_level)
 
         self.logger.info("Downloaded %d/%d chunk(s)", len(downloaded), total)
         return downloaded
@@ -331,7 +447,14 @@ class CDSDownloader:
         try:
             if self.on_event is not None:
                 ctx = self._emit_ctx or {"chunk_id": chunk.chunk_id}
-                with _DownloadProgressMonitor(temp_file, self._emit, ctx):
+                # Fallback byte source; gated off once the multiurl tqdm hook
+                # reports bytes for this chunk (see _byte_emit).
+                with _DownloadProgressMonitor(
+                    temp_file,
+                    self._emit,
+                    ctx,
+                    gate=lambda: not self._byte_progress_seen,
+                ):
                     self._retrieve_with_retry(
                         request, temp_file, chunk.year, chunk.month
                     )
