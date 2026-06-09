@@ -152,6 +152,10 @@ class CDSDownloader:
         self.config = config
         self.manifest = manifest
         self.on_event = on_event
+        # Active chunk context for events emitted outside CDSEventCapture
+        # (the file-size progress monitor). Set per-chunk in _download_all,
+        # mirroring CDSEventCapture.set_chunk_context.
+        self._emit_ctx: dict[str, Any] = {}
         self.logger = logging.getLogger(__name__)
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -253,6 +257,11 @@ class CDSDownloader:
             for idx, chunk in enumerate(chunks, start=1):
                 if capture is not None:
                     capture.set_chunk_context(chunk.chunk_id, idx, total)
+                self._emit_ctx = {
+                    "chunk_id": chunk.chunk_id,
+                    "chunk_index": idx,
+                    "chunks_total": total,
+                }
                 self._emit(
                     {
                         "chunk_id": chunk.chunk_id,
@@ -320,7 +329,14 @@ class CDSDownloader:
 
         request = self._build_cds_request_from_chunk(chunk)
         try:
-            self._retrieve_with_retry(request, temp_file, chunk.year, chunk.month)
+            if self.on_event is not None:
+                ctx = self._emit_ctx or {"chunk_id": chunk.chunk_id}
+                with _DownloadProgressMonitor(temp_file, self._emit, ctx):
+                    self._retrieve_with_retry(
+                        request, temp_file, chunk.year, chunk.month
+                    )
+            else:
+                self._retrieve_with_retry(request, temp_file, chunk.year, chunk.month)
             written = self._process_downloaded_file(temp_file, temp_dir, output_file)
         except CDSRequestTooLargeError as exc:
             # Clean partial files before splitting.
