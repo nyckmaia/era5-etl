@@ -423,3 +423,42 @@ class TestDownloadConfigRetryFields:
     def test_zero_retries_allowed(self):
         config = DownloadConfig(max_retries=0)
         assert config.max_retries == 0
+
+
+class TestDownloadProgressMonitor:
+    """The poller approximates byte progress by watching the temp file grow."""
+
+    def test_emits_growing_bytes_under_chunk_context(self, tmp_path: Path):
+        import time
+
+        from era5_etl.download.cds_downloader import _DownloadProgressMonitor
+
+        target = tmp_path / ".tmp_chunk.download"
+        events: list[dict] = []
+        ctx = {"chunk_id": "c1", "chunk_index": 1, "chunks_total": 1}
+
+        with _DownloadProgressMonitor(target, events.append, ctx, interval=0.02):
+            for i in range(1, 6):
+                target.write_bytes(b"x" * (i * 1000))
+                time.sleep(0.05)
+
+        dl = [e for e in events if e.get("phase") == "downloading"]
+        sizes = [e["bytes_downloaded"] for e in dl]
+        assert sizes, "expected at least one downloading event"
+        assert sizes == sorted(sizes), "bytes must be non-decreasing"
+        assert max(sizes) == 5000, "final observed size must reach full file"
+        assert all(e["chunk_id"] == "c1" for e in dl)
+        assert all(e["chunk_index"] == 1 for e in dl)
+
+    def test_no_events_when_file_never_appears(self, tmp_path: Path):
+        import time
+
+        from era5_etl.download.cds_downloader import _DownloadProgressMonitor
+
+        target = tmp_path / ".tmp_missing.download"
+        events: list[dict] = []
+        with _DownloadProgressMonitor(
+            target, events.append, {"chunk_id": "c"}, interval=0.02
+        ):
+            time.sleep(0.1)
+        assert events == []

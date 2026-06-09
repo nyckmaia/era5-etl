@@ -13,6 +13,7 @@ import contextlib
 import logging
 import os
 import shutil
+import threading
 import time
 import zipfile
 from collections.abc import Callable
@@ -70,6 +71,73 @@ def _safe_member_token(member_name: str, index: int) -> str:
 # CDS only accepts the literal string "netcdf"; never GRIB in this project.
 _CDS_DATA_FORMAT = "netcdf"
 _CDS_DOWNLOAD_FORMAT = "unarchived"
+
+
+class _DownloadProgressMonitor:
+    """Approximate live download progress by polling a file's size on disk.
+
+    ``cdsapi.Client.retrieve`` blocks for the whole submit/queue/process/
+    download flow and never reports bytes transferred, so we watch the
+    target file grow on a daemon thread and emit ``phase="downloading"``
+    events carrying ``bytes_downloaded`` under the active chunk context.
+    ``bytes_total`` arrives separately from :class:`CDSEventCapture` (parsed
+    from the cdsapi "Downloading … (NN MB)" log line). Use as a context
+    manager around the blocking retrieve call.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        emit: Callable[[dict[str, Any]], None],
+        ctx: dict[str, Any],
+        interval: float = 0.75,
+    ) -> None:
+        self._path = path
+        self._emit = emit
+        self._ctx = ctx
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_size = -1
+
+    def __enter__(self) -> "_DownloadProgressMonitor":
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self._tick()  # final size so the bar reaches the full observed total
+
+    def _current_size(self) -> int:
+        # cdsapi/multiurl may stream to ``target`` or a ``target.*`` temp file
+        # before renaming; take the largest matching candidate so the poller
+        # is robust to either layout.
+        best = 0
+        candidates = [self._path, *self._path.parent.glob(self._path.name + "*")]
+        for p in candidates:
+            try:
+                best = max(best, p.stat().st_size)
+            except OSError:
+                continue
+        return best
+
+    def _tick(self) -> None:
+        size = self._current_size()
+        if size > 0 and size != self._last_size:
+            self._last_size = size
+            try:
+                self._emit(
+                    {**self._ctx, "phase": "downloading", "bytes_downloaded": size}
+                )
+            except Exception:  # pragma: no cover - never crash the download
+                pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            self._tick()
 
 
 class CDSDownloader:
