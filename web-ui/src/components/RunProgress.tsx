@@ -1,19 +1,32 @@
 import { Link } from "@tanstack/react-router";
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Cloud,
   Database,
   Download,
   FileStack,
+  Gauge,
+  HardDrive,
   Hourglass,
   Loader2,
   Send,
   Sparkles,
   XCircle,
 } from "lucide-react";
-import { useEffect, useReducer, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/format";
@@ -59,7 +72,9 @@ interface ChunkState {
   message: string;
   bytes_total: number | null;
   bytes_downloaded: number | null; // live download progress (poller)
-  started_at: number; // epoch s of the first event seen for this chunk
+  started_at: number; // epoch s of the first event seen for this chunk (submit)
+  download_start_at: number | null; // epoch s of the first "downloading" event
+  download_end_at: number | null; // epoch s of the terminal event
   elapsed_ms: number | null; // total wall-clock, set when terminal
   last_update: number;
 }
@@ -83,7 +98,6 @@ interface PhaseState {
 
 interface RunState {
   chunks: Record<string, ChunkState>;
-  events: { ts: number; chunk_id: string | null; phase: string | null; message: string }[];
   status: "running" | "completed" | "failed";
   error: string | null;
   chunks_total: number | null;
@@ -94,7 +108,6 @@ interface RunState {
 
 const INITIAL_STATE: RunState = {
   chunks: {},
-  events: [],
   status: "running",
   error: null,
   chunks_total: null,
@@ -133,16 +146,11 @@ function reducer(state: RunState, action: Action): RunState {
       ...state,
       pipeline_phase,
       finalizing: { message: p.message ?? "", last_update: now },
-      events: [
-        { ts: now, chunk_id: null, phase: "finalizing", message: p.message ?? "" },
-        ...state.events,
-      ].slice(0, 50),
     };
   }
 
   // Conversion-stage events carry no chunk_id; they drive a separate bar.
   if (p.stage === "convert") {
-    const now = p.timestamp ?? Date.now() / 1000;
     return {
       ...state,
       pipeline_phase,
@@ -151,10 +159,6 @@ function reducer(state: RunState, action: Action): RunState {
         total: p.files_total ?? state.convert?.total ?? 0,
         message: p.message ?? state.convert?.message ?? "",
       },
-      events: [
-        { ts: now, chunk_id: null, phase: "convert", message: p.message ?? "" },
-        ...state.events,
-      ].slice(0, 50),
     };
   }
 
@@ -178,20 +182,21 @@ function reducer(state: RunState, action: Action): RunState {
     bytes_total: p.bytes_total ?? prev?.bytes_total ?? null,
     bytes_downloaded: p.bytes_downloaded ?? prev?.bytes_downloaded ?? null,
     started_at: startedAt,
+    // First time we see real bytes flowing → start of the download leg (c2).
+    // Everything before this is queue + remote processing (the "espera" leg, c1).
+    download_start_at:
+      prev?.download_start_at ?? (p.phase === "downloading" ? now : null),
+    // Frozen at the terminal event so the download leg has a closed interval.
+    download_end_at: isTerminal ? now : (prev?.download_end_at ?? null),
     elapsed_ms: isTerminal
       ? Math.max(0, Math.round((now - startedAt) * 1000))
       : (prev?.elapsed_ms ?? null),
     last_update: now,
   };
-  const events = [
-    { ts: now, chunk_id: p.chunk_id, phase: p.phase, message: p.message ?? "" },
-    ...state.events,
-  ].slice(0, 50);
   return {
     ...state,
     pipeline_phase,
     chunks: { ...state.chunks, [p.chunk_id]: next },
-    events,
     chunks_total: p.chunks_total ?? state.chunks_total,
   };
 }
@@ -226,6 +231,10 @@ export function RunProgress({
   );
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const sourceRef = useRef<EventSource | null>(null);
+  // Chunks table is collapsed by default; the row order toggles between
+  // newest-downloaded-first (default) and oldest-first on the "#" header.
+  const [chunksCollapsed, setChunksCollapsed] = useState(true);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   // Whole-pipeline wall clock: starts when this run mounts, ticks every
   // second while running, and freezes at the exact end time so the user
@@ -510,47 +519,18 @@ export function RunProgress({
         )}
       </header>
 
-      <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
-        <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
-          {t(
-            isStation
-              ? "runProgress.listHeader.years"
-              : "runProgress.listHeader.chunks",
-          )}
-        </div>
-        <ul className="divide-y divide-ink-100">
-          {chunkList.length === 0 && (
-            <li className="px-5 py-4 text-sm text-ink-400">
-              {t(
-                isStation
-                  ? "runProgress.waitingFirstYear"
-                  : "runProgress.waitingFirstChunk",
-              )}
-            </li>
-          )}
-          {chunkList.map((c) => (
-            <ChunkRow key={c.chunk_id} chunk={c} />
-          ))}
-        </ul>
-      </section>
+      <ChunksTable
+        chunks={chunkList}
+        sortDir={sortDir}
+        onToggleSort={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+        collapsed={chunksCollapsed}
+        onToggleCollapse={() => setChunksCollapsed((c) => !c)}
+        completed={completed}
+        total={total}
+        isStation={isStation}
+      />
 
-      <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
-        <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
-          {t("runProgress.recentEvents")}
-        </div>
-        <ul className="max-h-60 divide-y divide-ink-50 overflow-y-auto font-mono text-[11px]">
-          {state.events.slice(0, 30).map((e, i) => (
-            <li key={i} className="flex gap-3 px-5 py-1.5">
-              <span className="text-ink-400">
-                {new Date(e.ts * 1000).toLocaleTimeString()}
-              </span>
-              {e.chunk_id && <span className="text-ocean-700">{e.chunk_id}</span>}
-              {e.phase && <span className="text-ink-600">→ {e.phase}</span>}
-              <span className="truncate text-ink-500">{e.message}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {!isStation && <ChunkTimingChart chunks={chunkList} />}
     </div>
   );
 }
@@ -575,6 +555,44 @@ function formatDurationCompact(ms: number): string {
   if (h < 24) return `${h}h ${m % 60}m`;
   const d = Math.floor(h / 24);
   return `${d}d ${h % 24}h`;
+}
+
+// Binary MiB, matching the "X.X MB" convention used by the live download bar.
+function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+interface ChunkMetrics {
+  totalMs: number | null; // request → end of download
+  waitMs: number | null; // request → first byte (queue + remote processing)
+  downloadMs: number | null; // first byte → last byte
+  mbPerSec: number | null; // mean throughput over the download leg
+  sizeBytes: number | null; // size of the downloaded artifact (zip or .nc)
+}
+
+// Single source of truth for the per-chunk breakdown shown in both the table
+// and the timing chart. Derives everything from the raw timestamps/byte counts
+// the reducer already captured. A leg whose inputs are missing (e.g. a manifest
+// cache-hit chunk that never entered "downloading") yields null so the UI can
+// render an em dash instead of inventing a number.
+function chunkMetrics(c: ChunkState): ChunkMetrics {
+  const end = c.download_end_at;
+  const totalMs =
+    end != null ? Math.max(0, Math.round((end - c.started_at) * 1000)) : null;
+  const waitMs =
+    c.download_start_at != null
+      ? Math.max(0, Math.round((c.download_start_at - c.started_at) * 1000))
+      : null;
+  const downloadMs =
+    c.download_start_at != null && end != null
+      ? Math.max(0, Math.round((end - c.download_start_at) * 1000))
+      : null;
+  const sizeBytes = c.bytes_total ?? c.bytes_downloaded ?? null;
+  const mbPerSec =
+    sizeBytes != null && downloadMs != null && downloadMs > 0
+      ? sizeBytes / 1024 / 1024 / (downloadMs / 1000)
+      : null;
+  return { totalMs, waitMs, downloadMs, mbPerSec, sizeBytes };
 }
 
 function ElapsedTimer({
@@ -773,34 +791,333 @@ function Bar({
   );
 }
 
-function ChunkRow({ chunk }: { chunk: ChunkState }) {
+// Collapsible, sortable per-chunk table. Each row breaks the chunk's wall-clock
+// into its two halves (queue+processing vs. actual download), plus mean
+// throughput and the downloaded-artifact size. The "#" header toggles the row
+// order; the section header toggles collapse (collapsed by default).
+function ChunksTable({
+  chunks,
+  sortDir,
+  onToggleSort,
+  collapsed,
+  onToggleCollapse,
+  completed,
+  total,
+  isStation,
+}: {
+  chunks: ChunkState[]; // canonical ascending (by chunk_index) order
+  sortDir: "asc" | "desc";
+  onToggleSort: () => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  completed: number;
+  total: number;
+  isStation: boolean;
+}) {
   const { t } = useTranslation();
-  const showTime =
-    (chunk.phase === "completed" || chunk.phase === "failed") &&
-    chunk.elapsed_ms != null;
+  // chunks is ascending; "desc" (default) shows the most-recent chunk first.
+  const rows = sortDir === "asc" ? chunks : [...chunks].reverse();
   return (
-    <li className="flex items-center gap-3 px-5 py-3 text-sm">
-      <PhaseIcon phase={chunk.phase} />
-      <div className="flex-1 truncate">
-        <div className="font-medium text-ink-800">{chunk.chunk_id}</div>
-        <div className="truncate text-[11px] text-ink-400">{chunk.message}</div>
+    <section className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={onToggleCollapse}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center gap-2 border-b border-ink-100 px-5 py-3 text-left text-xs font-medium uppercase tracking-wide text-ink-500 transition-colors hover:bg-ink-50"
+      >
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 text-ink-400 transition-transform duration-200",
+            collapsed && "-rotate-90",
+          )}
+        />
+        <span>
+          {t(
+            isStation
+              ? "runProgress.listHeader.years"
+              : "runProgress.listHeader.chunks",
+          )}
+        </span>
+        <span className="ml-1 rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-ink-500">
+          {completed}/{total || chunks.length}
+        </span>
+      </button>
+      {!collapsed &&
+        (chunks.length === 0 ? (
+          <div className="px-5 py-4 text-sm text-ink-400">
+            {t(
+              isStation
+                ? "runProgress.waitingFirstYear"
+                : "runProgress.waitingFirstChunk",
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-ink-100 text-[10px] uppercase tracking-wide text-ink-400">
+                  <th className="px-3 py-2 text-left font-medium">
+                    <button
+                      type="button"
+                      onClick={onToggleSort}
+                      title={t("runProgress.table.sortHint")}
+                      className="inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-ink-50 hover:text-ink-600"
+                    >
+                      #
+                      {sortDir === "asc" ? (
+                        <ArrowUp className="h-3 w-3" />
+                      ) : (
+                        <ArrowDown className="h-3 w-3" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="px-3 py-2 text-left font-medium">
+                    {t(
+                      isStation
+                        ? "runProgress.table.year"
+                        : "runProgress.table.chunk",
+                    )}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium"
+                    title={t("runProgress.table.totalHint")}
+                  >
+                    {t("runProgress.table.total")}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium text-amber-600"
+                    title={t("runProgress.table.waitHint")}
+                  >
+                    {t("runProgress.table.wait")}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium text-moss-600"
+                    title={t("runProgress.table.downloadHint")}
+                  >
+                    {t("runProgress.table.download")}
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium"
+                    title={t("runProgress.table.speedHint")}
+                  >
+                    <span className="inline-flex items-center justify-end gap-1">
+                      <Gauge className="h-3 w-3" />
+                      {t("runProgress.table.speed")}
+                    </span>
+                  </th>
+                  <th
+                    className="px-3 py-2 text-right font-medium"
+                    title={t("runProgress.table.sizeHint")}
+                  >
+                    <span className="inline-flex items-center justify-end gap-1">
+                      <HardDrive className="h-3 w-3" />
+                      {t("runProgress.table.size")}
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-50">
+                {rows.map((c) => (
+                  <ChunkTableRow key={c.chunk_id} chunk={c} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+    </section>
+  );
+}
+
+function ChunkTableRow({ chunk }: { chunk: ChunkState }) {
+  const m = chunkMetrics(chunk);
+  const dash = <span className="text-ink-300">—</span>;
+  return (
+    <tr className="text-ink-700 transition-colors hover:bg-ink-50/60">
+      <td className="px-3 py-2 text-left tabular-nums text-ink-400">
+        {chunk.chunk_index ?? "—"}
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-2">
+          <PhaseIcon phase={chunk.phase} />
+          <div className="min-w-0">
+            <div
+              className="max-w-[16rem] truncate font-medium text-ink-800"
+              title={chunk.message || chunk.chunk_id}
+            >
+              {chunk.chunk_id}
+            </div>
+            <div className="mt-0.5">
+              <PhaseBadge phase={chunk.phase} />
+            </div>
+          </div>
+        </div>
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums font-medium">
+        {m.totalMs != null ? formatDurationCompact(m.totalMs) : dash}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums text-amber-600">
+        {m.waitMs != null ? formatDurationCompact(m.waitMs) : dash}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums text-moss-600">
+        {m.downloadMs != null ? formatDurationCompact(m.downloadMs) : dash}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums">
+        {m.mbPerSec != null ? m.mbPerSec.toFixed(1) : dash}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums">
+        {m.sizeBytes != null ? formatMB(m.sizeBytes) : dash}
+      </td>
+    </tr>
+  );
+}
+
+// Lazy + factory over plotly.js-dist-min keeps Plotly (~1MB) out of the main
+// bundle (same pattern as components/timeseries/PlotlyChart.tsx).
+const Plot = lazy(async () => {
+  const Plotly = (await import("plotly.js-dist-min")).default;
+  const createPlotlyComponent = (await import("react-plotly.js/factory"))
+    .default;
+  return { default: createPlotlyComponent(Plotly) };
+});
+
+// Per-chunk timing chart (grid/CDS only). x = chunk index; left axis carries
+// three time curves in minutes (total / wait / download), the right axis the
+// mean MB/s. Re-renders from reducer state, so a new point appears the moment a
+// chunk completes.
+function ChunkTimingChart({ chunks }: { chunks: ChunkState[] }) {
+  const { t } = useTranslation();
+  const done = useMemo(
+    () =>
+      chunks
+        .filter((c) => c.phase === "completed")
+        .sort(
+          (a, b) =>
+            (a.chunk_index ?? Number.MAX_SAFE_INTEGER) -
+            (b.chunk_index ?? Number.MAX_SAFE_INTEGER),
+        ),
+    [chunks],
+  );
+
+  const { data, hasPoints } = useMemo(() => {
+    const x: number[] = [];
+    const total: (number | null)[] = [];
+    const wait: (number | null)[] = [];
+    const download: (number | null)[] = [];
+    const speed: (number | null)[] = [];
+    done.forEach((c, i) => {
+      const m = chunkMetrics(c);
+      x.push(c.chunk_index ?? i + 1);
+      total.push(m.totalMs != null ? m.totalMs / 60000 : null);
+      wait.push(m.waitMs != null ? m.waitMs / 60000 : null);
+      download.push(m.downloadMs != null ? m.downloadMs / 60000 : null);
+      speed.push(m.mbPerSec != null ? Number(m.mbPerSec.toFixed(1)) : null);
+    });
+    const mk = (
+      name: string,
+      y: (number | null)[],
+      color: string,
+      yaxis: "y" | "y2",
+      dash: string,
+    ): Record<string, unknown> => ({
+      type: "scattergl",
+      mode: "lines+markers",
+      name,
+      x,
+      y,
+      yaxis,
+      line: { color, width: 2, dash, shape: "spline" },
+      marker: { color, size: 7 },
+      connectgaps: false,
+    });
+    return {
+      hasPoints: x.length > 0,
+      data: [
+        mk(t("runProgress.chart.curveTotal"), total, "#0284c7", "y", "solid"),
+        mk(t("runProgress.chart.curveWait"), wait, "#f59e0b", "y", "solid"),
+        mk(
+          t("runProgress.chart.curveDownload"),
+          download,
+          "#16a34a",
+          "y",
+          "solid",
+        ),
+        mk(t("runProgress.chart.curveSpeed"), speed, "#9333ea", "y2", "dot"),
+      ],
+    };
+  }, [done, t]);
+
+  const layout = useMemo(
+    () => ({
+      autosize: true,
+      uirevision: "keep",
+      margin: { l: 56, r: 60, t: 16, b: 64 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      font: { family: "ui-sans-serif, system-ui", size: 12, color: "#334155" },
+      xaxis: {
+        title: { text: t("runProgress.chart.xChunk"), font: { size: 11 } },
+        tickformat: "d",
+        dtick: 1,
+        gridcolor: "#e8edf3",
+        linecolor: "#cbd5e1",
+        zeroline: false,
+      },
+      yaxis: {
+        title: { text: t("runProgress.chart.yTime"), font: { size: 11 } },
+        rangemode: "tozero",
+        gridcolor: "#e8edf3",
+        linecolor: "#cbd5e1",
+        zeroline: false,
+      },
+      yaxis2: {
+        title: { text: t("runProgress.chart.y2Speed"), font: { size: 11 } },
+        overlaying: "y",
+        side: "right",
+        rangemode: "tozero",
+        showgrid: false,
+        zeroline: false,
+      },
+      showlegend: true,
+      legend: { orientation: "h", y: -0.28 },
+    }),
+    [t],
+  );
+
+  return (
+    <section className="rounded-2xl border border-ink-100 bg-white shadow-sm">
+      <div className="border-b border-ink-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-ink-500">
+        {t("runProgress.chart.title")}
       </div>
-      {showTime && (
-        <span
-          className="flex items-center gap-1 text-[11px] tabular-nums text-ink-500"
-          title={t("runProgress.chunkTime")}
+      {hasPoints ? (
+        <Suspense
+          fallback={
+            <div className="flex h-[380px] items-center justify-center text-sm text-ink-400">
+              {t("runProgress.chart.loading")}
+            </div>
+          }
         >
-          <Clock className="h-3 w-3 text-ink-400" />
-          {formatDurationCompact(chunk.elapsed_ms as number)}
-        </span>
+          <div className="px-3 py-3">
+            <Plot
+              data={data as never}
+              layout={layout as never}
+              config={
+                {
+                  displaylogo: false,
+                  responsive: true,
+                  modeBarButtonsToRemove: ["lasso2d", "select2d"],
+                } as never
+              }
+              useResizeHandler
+              style={{ width: "100%", height: "380px" }}
+            />
+          </div>
+        </Suspense>
+      ) : (
+        <div className="flex h-[180px] items-center justify-center px-5 text-center text-sm text-ink-400">
+          {t("runProgress.chart.empty")}
+        </div>
       )}
-      <PhaseBadge phase={chunk.phase} />
-      {chunk.phase === "downloading" && chunk.bytes_total != null && (
-        <span className="text-[11px] text-ink-500">
-          {(chunk.bytes_total / 1024 / 1024).toFixed(1)} MB
-        </span>
-      )}
-    </li>
+    </section>
   );
 }
 
