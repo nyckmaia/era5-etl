@@ -55,7 +55,6 @@ export function SettingsPage() {
       <DataDirectorySection />
       <QueryTimeoutSection />
       <CredentialsSection />
-      <DisplayDecimalsSection />
       <PrecisionSection />
       <NotebookCacheSection />
       <DangerZoneSection />
@@ -760,92 +759,6 @@ function QueryTimeoutSection() {
       {invalid ? (
         <p className="text-[11px] text-rose-500">
           {t("pageSettings.queryTimeout.invalid")}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function DisplayDecimalsSection() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
-    queryKey: ["settings"],
-    queryFn: api.settings,
-  });
-  const [value, setValue] = useState<number>(4);
-  const [dirty, setDirty] = useState(false);
-
-  useEffect(() => {
-    if (settings && !dirty) setValue(settings.display_decimal_places ?? 4);
-  }, [settings, dirty]);
-
-  const save = useMutation({
-    mutationFn: () => api.saveSettings({ display_decimal_places: value }),
-    onSuccess: () => {
-      setDirty(false);
-      qc.invalidateQueries({ queryKey: ["settings"] });
-      // The /query results table reads ["precision", dataset]; the global
-      // value is folded into its default_decimals, so refresh it too.
-      qc.invalidateQueries({ queryKey: ["precision"] });
-      toast.success(t("pageSettings.displayDecimals.saved"));
-    },
-    onError: (e) => toast.error((e as Error).message),
-  });
-
-  if (isLoading) return <div className="card h-32 animate-pulse bg-ink-100" />;
-
-  const invalid = !Number.isFinite(value) || value < 0 || value > 12;
-
-  return (
-    <section className="card space-y-4 p-6">
-      <div>
-        <h2 className="text-lg font-medium text-ink-900">
-          {t("pageSettings.displayDecimals.title")}
-        </h2>
-        <p className="mt-1 text-sm text-ink-500">
-          {t("pageSettings.displayDecimals.body")}
-        </p>
-      </div>
-
-      <div className="flex items-end gap-3">
-        <label className="flex-1 max-w-xs">
-          <span className="text-xs uppercase tracking-wide text-ink-500">
-            {t("pageSettings.displayDecimals.decimals")}
-          </span>
-          <input
-            type="number"
-            min={0}
-            max={12}
-            step={1}
-            className={cn(
-              "input mt-1 font-mono",
-              invalid && "border-rose-400 focus:ring-rose-300",
-            )}
-            value={Number.isFinite(value) ? value : ""}
-            onChange={(e) => {
-              setDirty(true);
-              const n = Number(e.target.value);
-              setValue(Number.isFinite(n) ? Math.floor(n) : 0);
-            }}
-          />
-        </label>
-        <button
-          className="btn-primary"
-          onClick={() => save.mutate()}
-          disabled={save.isPending || invalid || !dirty}
-        >
-          {save.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-          {t("pageSettings.displayDecimals.saveButton")}
-        </button>
-      </div>
-      {invalid ? (
-        <p className="text-[11px] text-rose-500">
-          {t("pageSettings.displayDecimals.invalid")}
         </p>
       ) : null}
     </section>

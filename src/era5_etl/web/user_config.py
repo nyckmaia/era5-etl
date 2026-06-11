@@ -8,6 +8,7 @@ those still live in ``~/.cdsapirc`` or environment variables.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import sys
@@ -18,6 +19,35 @@ from pathlib import Path
 import tomli_w
 
 logger = logging.getLogger(__name__)
+
+# Built-in per-dataset display-precision defaults (Melhoria 02). Applied
+# render-only when the user hasn't saved their own config for the dataset;
+# a saved config (set_dataset_precision) wins entirely, and any dataset not
+# listed here falls back to the global ``display_decimal_places``. Coordinate
+# columns get a tighter rounding than the variable default.
+_DATASET_PRECISION_DEFAULTS: dict[str, dict] = {
+    "era5": {
+        "default_decimals": 3,
+        "default_method": "round",
+        "columns": {
+            "latitude": {"decimals": 2, "method": "round"},
+            "longitude": {"decimals": 2, "method": "round"},
+        },
+    },
+    "era5-land": {
+        "default_decimals": 3,
+        "default_method": "round",
+        "columns": {
+            "latitude": {"decimals": 1, "method": "round"},
+            "longitude": {"decimals": 1, "method": "round"},
+        },
+    },
+    "inmet": {
+        "default_decimals": 2,
+        "default_method": "round",
+        "columns": {},
+    },
+}
 
 
 @dataclass
@@ -119,15 +149,26 @@ def get_dataset_precision(dataset: str) -> dict:
     """Return the display-precision config for ``dataset``.
 
     Always returns a well-formed dict with sane defaults so callers never
-    need to handle missing keys. ``default_decimals`` cai para o global
-    ``display_decimal_places`` quando o dataset não tem configuração própria.
+    need to handle missing keys. Precedence: a user-saved config for the
+    dataset wins; otherwise the built-in per-dataset defaults
+    (``_DATASET_PRECISION_DEFAULTS``) apply; finally, datasets without a
+    built-in entry fall back to the global ``display_decimal_places``.
     """
     full = load_user_config()
+    builtin = _DATASET_PRECISION_DEFAULTS.get(dataset, {})
     cfg = full.display_precision.get(dataset, {})
     return {
-        "default_decimals": int(cfg.get("default_decimals", full.display_decimal_places)),
-        "default_method": cfg.get("default_method", "round"),
-        "columns": cfg.get("columns", {}),
+        "default_decimals": int(
+            cfg.get(
+                "default_decimals",
+                builtin.get("default_decimals", full.display_decimal_places),
+            )
+        ),
+        "default_method": cfg.get(
+            "default_method", builtin.get("default_method", "round")
+        ),
+        # deepcopy so callers can't mutate the module-level defaults.
+        "columns": copy.deepcopy(cfg.get("columns", builtin.get("columns", {}))),
     }
 
 

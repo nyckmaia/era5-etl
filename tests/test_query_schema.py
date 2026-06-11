@@ -108,13 +108,16 @@ def test_query_schema_unknown_view_empty(client: TestClient) -> None:
 
 
 def test_precision_defaults(client: TestClient) -> None:
+    # Built-in per-dataset defaults (Melhoria 02): era5-land rounds to 3
+    # decimals, with tighter coordinate columns.
     r = client.get("/api/settings/precision", params={"dataset": "era5-land"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["dataset"] == "era5-land"
-    assert body["default_decimals"] == 4
+    assert body["default_decimals"] == 3
     assert body["default_method"] == "round"
-    assert body["columns"] == {}
+    assert body["columns"]["latitude"] == {"decimals": 1, "method": "round"}
+    assert body["columns"]["longitude"] == {"decimals": 1, "method": "round"}
 
 
 def test_precision_roundtrip(client: TestClient) -> None:
@@ -134,9 +137,10 @@ def test_precision_roundtrip(client: TestClient) -> None:
     assert body["columns"]["t2m"]["decimals"] == 2
     assert body["columns"]["t2m"]["method"] == "round"
 
-    # Other dataset stays default (per-dataset isolation).
+    # Other dataset stays on its own built-in default (per-dataset
+    # isolation): era5 is unaffected by the era5-land save above.
     r3 = client.get("/api/settings/precision", params={"dataset": "era5"})
-    assert r3.json()["default_decimals"] == 4
+    assert r3.json()["default_decimals"] == 3
 
 
 def test_precision_rejects_bad_method(client: TestClient) -> None:

@@ -9,18 +9,20 @@ import {
   WandSparkles,
   XCircle,
 } from "lucide-react";
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { QueryBuilderPanel } from "@/components/query/QueryBuilderPanel";
+import { ResultsTable } from "@/components/query/ResultsTable";
 import { QueryTabsBar, type PersistedTab } from "@/components/query/QueryTabsBar";
 import { RightSidebar } from "@/components/query/RightSidebar";
 import { SchemaSidebar } from "@/components/query/SchemaSidebar";
 import { ViewBuilderModal } from "@/components/query/ViewBuilderModal";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { api, type ColumnPrecision, type UserObject } from "@/lib/api";
+import { api, type UserObject } from "@/lib/api";
 import { cn } from "@/lib/format";
 import { formatSql } from "@/lib/sql";
+import { buildColumnUnitMap } from "@/lib/units";
 
 const SqlEditor = lazy(() => import("@/components/SqlEditor"));
 
@@ -40,20 +42,6 @@ function formatExecTime(ms: number): string {
   if (ms < 1) return "<1 ms";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
-}
-
-function formatCell(
-  raw: string | number | null,
-  precision: ColumnPrecision,
-): string {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return String(raw);
-  const { decimals, method } = precision;
-  if (method === "truncate") {
-    const f = 10 ** decimals;
-    return (Math.trunc(n * f) / f).toFixed(decimals);
-  }
-  return n.toFixed(decimals);
 }
 
 export function QueryPage() {
@@ -135,6 +123,9 @@ export function QueryPage() {
     queryKey: ["precision", focusedDataset],
     queryFn: () => api.precision.get(focusedDataset),
   });
+  // {column → raw unit} lookup spanning every dataset, so result columns
+  // get their unit annotation regardless of which view they came from.
+  const unitMap = useMemo(() => buildColumnUnitMap(datasets), [datasets]);
 
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
@@ -546,61 +537,13 @@ export function QueryPage() {
                     </span>
                   </div>
                 )}
-                <div className="max-h-[40vh] overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-ink-50">
-                      <tr>
-                        {runQuery.data.columns.map((c) => (
-                          <th
-                            key={c}
-                            className="px-3 py-2 text-left font-medium"
-                          >
-                            {c}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {runQuery.data.rows.map((row, i) => (
-                        <tr key={i} className="border-t border-ink-100">
-                          {row.map((cell, j) => {
-                            if (cell === null) {
-                              return (
-                                <td key={j} className="px-3 py-1.5 font-mono">
-                                  <span className="text-ink-300">∅</span>
-                                </td>
-                              );
-                            }
-                            const colName = runQuery.data.columns[j];
-                            const colType = runQuery.data.column_types[j];
-                            let display = String(cell);
-                            if (
-                              colType === "float" &&
-                              Number.isFinite(Number(cell))
-                            ) {
-                              const cfg = precisionQuery.data;
-                              if (cfg) {
-                                const override = cfg.columns[colName];
-                                display = formatCell(
-                                  cell,
-                                  override ?? {
-                                    decimals: cfg.default_decimals,
-                                    method: cfg.default_method,
-                                  },
-                                );
-                              }
-                            }
-                            return (
-                              <td key={j} className="px-3 py-1.5 font-mono">
-                                {display}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <ResultsTable
+                  columns={runQuery.data.columns}
+                  columnTypes={runQuery.data.column_types}
+                  rows={runQuery.data.rows}
+                  precision={precisionQuery.data}
+                  unitMap={unitMap}
+                />
               </div>
             ) : null}
           </div>
