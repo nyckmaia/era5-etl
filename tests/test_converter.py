@@ -106,6 +106,30 @@ def test_converter_calculate_wind_speed(converter: NetCDFToParquetConverter):
     assert abs(calculated - expected_speed) < 0.01
 
 
+def test_wind_speed_not_calculated_without_both_components(
+    converter: NetCDFToParquetConverter,
+):
+    """Só u (sem v) -> nenhuma coluna wind_speed_* é criada."""
+    ds = xr.Dataset(
+        {
+            "wind_u_10m": (
+                ["time", "latitude", "longitude"],
+                np.full((10, 5, 5), 3.0),
+            ),
+        },
+        coords={
+            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
+            "latitude": np.linspace(-10, 0, 5),
+            "longitude": np.linspace(-50, -40, 5),
+        },
+    )
+    ds["wind_u_10m"].attrs = {"units": "m/s"}
+
+    result = converter._calculate_wind_speed(ds)
+
+    assert not any("wind_speed" in str(v) for v in result.data_vars)
+
+
 def test_converter_dataset_to_dataframe(converter: NetCDFToParquetConverter):
     """Test xarray Dataset to Polars DataFrame conversion."""
     ds = xr.Dataset(
