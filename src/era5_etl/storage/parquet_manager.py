@@ -393,19 +393,22 @@ class ParquetManager:
         return sorted(self.parquet_dir.rglob("*.parquet"))
 
     def _default_union_by_name(self) -> bool:
-        """Non-grid sources (INMET) default to ``union_by_name=true``.
+        """All datasets default to ``union_by_name=true``.
 
-        Each ``station=<id>/<id>_<year>.parquet`` is written independently
-        from a CSV format that drifts across years, so combining by column
-        name (not position) is the safe default. Unknown/unregistered
-        dataset names fall back to ``False`` (grid behaviour).
+        Per-file schemas drift for *every* source, not just INMET:
+
+        * INMET ``station=<id>/<id>_<year>.parquet`` come from a CSV format
+          that changes across years.
+        * Gridded ERA5/ERA5-LAND ``date=YYYY-MM-DD/`` partitions are written
+          incrementally — a later download can add (or omit) variables, so a
+          January partition may have fewer columns than a March one.
+
+        Combining by **column name** (missing columns -> NULL) is therefore
+        the safe default everywhere; position-based union would error or
+        misalign as soon as two partitions disagree on columns. The bind cost
+        is paid once per process-cached connection.
         """
-        try:
-            from era5_etl.datasets import DatasetRegistry
-
-            return not DatasetRegistry.get(self.dataset).is_gridded
-        except Exception:
-            return False
+        return True
 
     def create_duckdb_view(
         self,

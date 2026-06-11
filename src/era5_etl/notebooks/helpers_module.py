@@ -116,6 +116,9 @@ def install_helpers(
             x = pd.to_datetime(df_test["date"])
         else:
             x = list(range(len(df_test)))
+        # Pass a list of datetime objects so Plotly's date axis picks the tick
+        # detail by zoom (dates when zoomed out, time when zoomed in).
+        x = list(x)
 
         residuals = [a - b for a, b in zip(y_true, y_pred)]
         fig = make_subplots(
@@ -141,6 +144,9 @@ def install_helpers(
             row=2,
             col=1,
         )
+        # Date axis with no fixed tickformat: Plotly chooses the tick detail
+        # by zoom level. hoverformat keeps the full timestamp in tooltips.
+        fig.update_xaxes(type="date", hoverformat="%Y-%m-%d %H:%M")
         fig.update_layout(
             template="plotly_white",
             height=520,

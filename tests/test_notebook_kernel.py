@@ -99,6 +99,99 @@ def test_kernel_plotly_datetime_x_serializes_as_iso_list(kernel):
     assert xs[0].startswith("2025-06-13T22:00"), xs[0]
 
 
+def test_kernel_dataframe_truncates_head_tail_with_index(kernel):
+    """A long DataFrame renders Jupyter-style: head + tail with an ellipsis,
+    the row index as a dedicated column, and the float precision forwarded."""
+    pytest.importorskip("pandas")
+    code = (
+        "import pandas as pd\n"
+        "pd.set_option('display.precision', 2)\n"
+        "pd.set_option('display.max_rows', 60)\n"
+        "pd.set_option('display.min_rows', 10)\n"
+        "pd.DataFrame({'x': [i + 0.123456 for i in range(100)]}, index=range(100))\n"
+    )
+    events = _events(kernel.run_cell("df", code, "python"))
+    dfs = [
+        e
+        for e in events
+        if e["type"] == "display"
+        and e.get("mime") == "application/vnd.dataframe+json"
+    ]
+    assert dfs, "expected a dataframe display event"
+    data = dfs[0]["data"]
+    assert data["total_rows"] == 100
+    assert data["truncated"] is True
+    assert data["ellipsis_after"] == 5
+    assert len(data["rows"]) == 10  # head 5 + tail 5
+    assert len(data["index"]) == 10
+    assert data["index"][0] == 0 and data["index"][-1] == 99
+    assert data["float_precision"] == 2
+    # The kernel forwards raw float values; rounding is a front-end concern.
+    assert abs(data["rows"][0][0] - 0.123456) < 1e-9
+
+
+def test_kernel_small_dataframe_keeps_all_rows_and_index(kernel):
+    """A short DataFrame is shown whole, no ellipsis, but still index-first."""
+    pytest.importorskip("pandas")
+    code = (
+        "import pandas as pd\n"
+        "pd.DataFrame({'a': [1, 2, 3]}, index=['r0', 'r1', 'r2'])\n"
+    )
+    events = _events(kernel.run_cell("df2", code, "python"))
+    data = next(
+        e["data"]
+        for e in events
+        if e["type"] == "display"
+        and e.get("mime") == "application/vnd.dataframe+json"
+    )
+    assert data["truncated"] is False
+    assert data["ellipsis_after"] is None
+    assert len(data["rows"]) == 3
+    assert data["index"] == ["r0", "r1", "r2"]
+
+
+def test_kernel_display_renders_before_raise(kernel):
+    """`display()` emits a DataFrame output even when the cell later raises,
+    so a validation cell can show the offending rows alongside the error."""
+    pytest.importorskip("pandas")
+    code = (
+        "import pandas as pd\n"
+        "display(pd.DataFrame({'a': [1, 2]}))\n"
+        "raise ValueError('boom')\n"
+    )
+    events = _events(kernel.run_cell("disp", code, "python"))
+    dfs = [
+        e
+        for e in events
+        if e["type"] == "display"
+        and e.get("mime") == "application/vnd.dataframe+json"
+    ]
+    errs = [e for e in events if e["type"] == "error"]
+    assert dfs, "display() should emit a dataframe output before the raise"
+    assert dfs[0]["data"]["total_rows"] == 2
+    assert errs and errs[0]["ename"] == "ValueError"
+
+
+def test_kernel_warn_emits_warning_stream(kernel):
+    """`warn()` emits a `stream` event named 'warning' (rendered amber) and
+    does not stop the cell."""
+    code = "warn('heads up:', 3, 'rows interpolated')\nprint('after')\n"
+    events = _events(kernel.run_cell("w", code, "python"))
+    warns = [
+        e
+        for e in events
+        if e["type"] == "stream" and e.get("name") == "warning"
+    ]
+    assert warns, "warn() should emit a 'warning' stream"
+    assert "interpolated" in warns[0]["text"]
+    # Execution continues after the warning.
+    stdout = "".join(
+        e["text"] for e in events if e["type"] == "stream" and e.get("name") == "stdout"
+    )
+    assert "after" in stdout
+    assert not [e for e in events if e["type"] == "error"]
+
+
 def test_kernel_busy_raises_for_concurrent_calls(kernel):
     # Start a cell but don't drain it — the lock is held inside run_cell.
     gen = kernel.run_cell("slow", "import time; time.sleep(0.3); 1", "python")

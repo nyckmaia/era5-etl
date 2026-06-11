@@ -63,18 +63,70 @@ def _stream(name: str, text: str) -> None:
 
 
 def _serialize_dataframe(df: Any) -> dict[str, Any]:
-    """Serialize a pandas DataFrame into a compact JSON shape."""
+    """Serialize a pandas DataFrame into a compact JSON shape.
+
+    Mirrors how Jupyter renders a frame:
+
+    * When the frame is longer than ``display.max_rows`` (default 60), show
+      only ``display.min_rows`` (default 10) split between the head and tail,
+      and tell the front-end where to draw the ``...`` ellipsis row.
+    * The row index is sent as a dedicated column so it can be rendered as the
+      visual first column (like Jupyter / pandas).
+    * ``display.precision`` (default 6) is forwarded so the front-end formats
+      float columns to that many decimals. A notebook can override it once via
+      ``pd.set_option("display.precision", N)`` and every frame follows.
+    """
+    import pandas as pd  # type: ignore  # helpers already require pandas
+
     total = len(df)
-    truncated = total > MAX_DATAFRAME_ROWS
-    head = df.head(MAX_DATAFRAME_ROWS) if truncated else df
-    schema = [{"name": str(c), "dtype": str(head[c].dtype)} for c in head.columns]
+
+    def _opt(name: str, default: Any) -> Any:
+        try:
+            val = pd.get_option(name)
+        except Exception:
+            return default
+        return default if val is None else val
+
+    # ``max_rows`` keeps its None (= unlimited) meaning; the others fall back.
+    try:
+        max_rows = pd.get_option("display.max_rows")
+    except Exception:
+        max_rows = 60
+    min_rows = int(_opt("display.min_rows", 10))
+    precision = int(_opt("display.precision", 6))
+
+    # Decide whether to truncate to a head+tail window. A hard transport cap
+    # applies even when display options would show more. ``min_rows < total``
+    # guards the degenerate case where head+tail would overlap (duplicate rows).
+    if max_rows is not None and total > max_rows and min_rows < total:
+        head_n = (min_rows + 1) // 2
+        tail_n = max(0, min_rows - head_n)
+    elif total > MAX_DATAFRAME_ROWS:
+        head_n = MAX_DATAFRAME_ROWS // 2
+        tail_n = MAX_DATAFRAME_ROWS - head_n
+    else:
+        head_n = tail_n = None
+
+    if head_n is None:
+        shown = df
+        ellipsis_after = None
+    else:
+        shown = pd.concat([df.head(head_n), df.tail(tail_n)])
+        ellipsis_after = head_n
+
+    schema = [{"name": str(c), "dtype": str(shown[c].dtype)} for c in shown.columns]
     rows: list[list[Any]] = []
-    for _, row in head.iterrows():
+    for _, row in shown.iterrows():
         rows.append([_jsonify(v) for v in row.tolist()])
+    index = [_jsonify(v) for v in shown.index.tolist()]
     return {
         "schema": schema,
         "rows": rows,
-        "truncated": truncated,
+        "index": index,
+        "index_name": "" if shown.index.name is None else str(shown.index.name),
+        "ellipsis_after": ellipsis_after,
+        "float_precision": precision,
+        "truncated": ellipsis_after is not None,
         "total_rows": total,
     }
 
@@ -168,6 +220,28 @@ def _display(value: Any) -> None:
     _send({"type": "display", "mime": "text/plain", "data": {"text": text}})
 
 
+def _user_display(*objects: Any) -> None:
+    """Jupyter-compatible ``display()`` exposed to user cells.
+
+    Renders each object immediately — not only the cell's last expression —
+    so a cell can show a DataFrame/figure *before* it raises or runs more
+    code. Matches IPython's ``display`` so cells stay portable to Jupyter.
+    """
+    for obj in objects:
+        _display(obj)
+
+
+def _user_warn(*messages: Any) -> None:
+    """Emit an amber WARNING output to the cell (rendered yellow in the UI).
+
+    Exposed to user cells as ``warn(...)``. Unlike ``raise`` it does not stop
+    the cell — used to flag non-fatal issues (e.g. interpolated values) while
+    letting execution continue.
+    """
+    text = " ".join(str(m) for m in messages)
+    _send({"type": "stream", "name": "warning", "text": text})
+
+
 def _split_last_expression(code: str) -> tuple[str, str | None]:
     """If the cell's last statement is an expression, return ``(body, expr)``.
 
@@ -225,6 +299,8 @@ def _boot(data_dir: str, notebook_id: str, runs_url: str, runs_token: str) -> No
     _USER_NS["__data_dir__"] = data_dir
     _USER_NS["__notebook_id__"] = notebook_id
     _USER_NS["con"] = connect(Path(data_dir))
+    _USER_NS["display"] = _user_display
+    _USER_NS["warn"] = _user_warn
     install_helpers(
         _USER_NS,
         data_dir=Path(data_dir),

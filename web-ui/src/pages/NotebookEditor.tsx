@@ -227,6 +227,9 @@ export function NotebookEditorPage() {
   const runAll = useCallback(async () => {
     if (runningAll) return;
     runAllCancelRef.current = false;
+    // Clear every "executed" (green) indicator before the first cell runs;
+    // each reappears as its cell executes again (Jupyter-style "Run all").
+    setRunStatus({});
     setRunningAll(true);
     try {
       for (const cell of cellsRef.current) {

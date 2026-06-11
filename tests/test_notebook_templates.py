@@ -134,7 +134,8 @@ def test_optuna_template_builds_cyclical_features():
 def test_optuna_template_builds_cutoff_offset_lags():
     """Lags keep short names but are offset by the D-6 cutoff (no leakage)."""
     src = _code_sources("xgboost_optuna_forecast")
-    assert "FORECAST_CUTOFF_HOURS" in src
+    # The cutoff variable is named to make clear it applies to ERA5-LAND data.
+    assert "ERA5_LAND_CUTOFF_HOURS" in src
     # The familiar lag naming the user asked for.
     assert "_lag_" in src
     # The shift is cutoff + lag, not just the raw lag.

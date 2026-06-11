@@ -803,7 +803,7 @@ export const api = {
 export type KernelStatus = "idle" | "busy" | "dead";
 
 export type CellOutput =
-  | { type: "stream"; name: "stdout" | "stderr"; text: string }
+  | { type: "stream"; name: "stdout" | "stderr" | "warning"; text: string }
   | {
       type: "display";
       mime:
