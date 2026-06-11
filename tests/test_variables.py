@@ -2,7 +2,6 @@
 
 from era5_etl.utils.variables import (
     get_default_variables,
-    get_float_precision_config,
     get_var_name_map,
     list_variables,
 )
@@ -97,17 +96,3 @@ class TestGetDefaultVariables:
         # mean_sea_level_pressure is single-level-only; available in era5 only.
         api_names = list_variables("era5")["api_name"].to_list()
         assert "mean_sea_level_pressure" in api_names
-
-
-class TestGetFloatPrecisionConfig:
-    """Tests for get_float_precision_config()."""
-
-    def test_returns_expected_keys(self):
-        config = get_float_precision_config()
-        assert "enabled" in config
-        assert "decimal_places" in config
-
-    def test_default_values(self):
-        config = get_float_precision_config()
-        assert config["enabled"] is True
-        assert config["decimal_places"] == 4

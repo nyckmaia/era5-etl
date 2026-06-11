@@ -114,7 +114,7 @@ class NetCDFToParquetConverter:
             df = self._drop_unused_columns(df)
             df = self._round_latlon(df)
             df = self._clip_to_regions(df)
-            df = self._apply_float_precision(df)
+            df = self._downcast_floats(df)
 
             self._write_partitioned_parquet(df)
 
@@ -338,9 +338,8 @@ class NetCDFToParquetConverter:
         ERA5 (0.25 deg) -> 2 dp, ERA5-LAND (0.1 deg) -> 1 dp. No-op when the
         converter was built without a ``dataset`` (legacy dataset-agnostic
         path used by synthetic-frame unit tests). Runs before
-        ``_apply_float_precision``; since lat/lon are then already Float32,
-        that method (which only touches Float64) leaves them untouched --
-        no double rounding.
+        ``_downcast_floats``; since lat/lon are then already Float32,
+        that method (which only touches Float64) leaves them untouched.
         """
         if self.dataset is None:
             return df
@@ -382,38 +381,25 @@ class NetCDFToParquetConverter:
         )
         return out
 
-    def _apply_float_precision(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Cast Float64 columns to Float32 and round to configured decimal places.
+    def _downcast_floats(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Cast Float64 (DOUBLE) columns to Float32 — no decimal rounding.
 
-        Reads precision configuration from the YAML config file:
-        - enabled: Whether to apply precision reduction (default True)
-        - decimal_places: Number of decimal places to keep (default 4)
-
-        All Float64 (DOUBLE) columns are rounded and then cast to Float32.
+        Apenas reduz o tipo de armazenamento (Float64 -> Float32), mantendo
+        toda a precisão representável do Float32 nos dados brutos. O
+        arredondamento de casas decimais é responsabilidade da camada de
+        visualização (/settings -> render da tabela em /query), nunca dos
+        dados gravados. lat/lon já chegam Float32 de :meth:`_round_latlon`,
+        então não são afetados aqui.
         """
-        from era5_etl.utils.variables import get_float_precision_config
-
-        precision_config = get_float_precision_config()
-        if not precision_config.get("enabled", True):
-            return df
-
-        decimal_places = precision_config.get("decimal_places", 4)
-
-        float64_cols = [
-            col for col in df.columns
-            if df[col].dtype == pl.Float64
-        ]
-
+        float64_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
         if float64_cols:
             df = df.with_columns([
-                pl.col(col).round(decimal_places).cast(pl.Float32).alias(col)
-                for col in float64_cols
+                pl.col(col).cast(pl.Float32).alias(col) for col in float64_cols
             ])
             self.logger.debug(
-                f"Applied float precision: {len(float64_cols)} columns "
-                f"rounded to {decimal_places} decimal places and cast to Float32"
+                "Downcast %d Float64 column(s) to Float32 (no rounding)",
+                len(float64_cols),
             )
-
         return df
 
     def _dataset_to_dataframe(self, ds: xr.Dataset) -> pl.DataFrame:

@@ -160,24 +160,26 @@ def test_converter_convert_directory_empty(converter: NetCDFToParquetConverter, 
     assert stats["converted"] == 0
 
 
-def test_apply_float_precision(converter: NetCDFToParquetConverter):
-    """Test that Float64 columns are cast to Float32 with rounding."""
+def test_downcast_floats_keeps_full_float32_precision(converter: NetCDFToParquetConverter):
+    """Float64 -> Float32 sem arredondamento de casas decimais."""
+    raw = [20.123456789, -5.987654321, 30.111222333]
     df = pl.DataFrame({
-        "temperature_2m": [20.123456789, -5.987654321, 30.111222333],
+        "temperature_2m": raw,
         "surface_pressure": [101325.12345, 99800.54321, 102000.98765],
         "latitude": [1.0, 2.0, 3.0],
     }).cast({"temperature_2m": pl.Float64, "surface_pressure": pl.Float64, "latitude": pl.Float64})
 
-    result = converter._apply_float_precision(df)
+    result = converter._downcast_floats(df)
 
-    # All Float64 columns should become Float32
+    # Todas as colunas Float64 viram Float32
     for col in result.columns:
-        assert result[col].dtype == pl.Float32, f"{col} should be Float32, got {result[col].dtype}"
+        assert result[col].dtype == pl.Float32, f"{col} deveria ser Float32"
 
-    # Check rounding to 4 decimal places
-    temp_vals = result["temperature_2m"].to_list()
-    assert abs(temp_vals[0] - 20.1235) < 0.001
-    assert abs(temp_vals[1] - (-5.9877)) < 0.001
+    # Valor preservado na precisão do Float32 (NÃO arredondado a 4 casas)
+    expected = pl.Series(raw, dtype=pl.Float64).cast(pl.Float32).to_list()
+    assert result["temperature_2m"].to_list() == expected
+    # Sanidade: difere do antigo round(.,4)=20.1235 em mais que a tolerância de exibição
+    assert abs(result["temperature_2m"].to_list()[0] - 20.1235) > 1e-5
 
 
 def test_converter_convert_directory_with_files(

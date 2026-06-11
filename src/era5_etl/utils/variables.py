@@ -3,70 +3,15 @@
 This module delegates to :class:`era5_etl.datasets.DatasetRegistry` for the
 authoritative variable metadata. Each dataset (``era5``, ``era5-land``) keeps
 its own ``variables.yaml`` next to its ``DatasetConfig`` subclass.
-
-The float-precision setting still lives in the legacy
-``_data/era5_variables.yaml`` (when present) so users who pinned a custom
-precision setting don't lose it; otherwise sensible defaults are returned.
 """
 
 from __future__ import annotations
 
-import logging
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import polars as pl
-import yaml
 
 from era5_etl.datasets import DatasetRegistry
-
-logger = logging.getLogger(__name__)
-
-DEFAULT_FLOAT_PRECISION = {"enabled": True, "decimal_places": 4}
-
-
-def _legacy_yaml_path() -> Path | None:
-    try:
-        from importlib.resources import files
-
-        data_path = files("era5_etl._data").joinpath("era5_variables.yaml")
-        path = Path(str(data_path))
-        if path.exists():
-            return path
-    except (ImportError, TypeError, AttributeError):
-        pass
-
-    package_dir = Path(__file__).parent.parent
-    fallback = package_dir / "_data" / "era5_variables.yaml"
-    return fallback if fallback.exists() else None
-
-
-@lru_cache(maxsize=1)
-def _legacy_yaml_data() -> dict[str, Any]:
-    """Read the legacy YAML for float-precision config only."""
-    path = _legacy_yaml_path()
-    if path is None:
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data: dict[str, Any] = yaml.safe_load(f) or {}
-        return data
-    except OSError as exc:
-        logger.warning("Failed to read legacy variables YAML %s: %s", path, exc)
-        return {}
-
-
-def get_float_precision_config() -> dict[str, Any]:
-    """Return the float-precision configuration.
-
-    Reads ``float_precision`` from the legacy YAML if present; otherwise
-    returns the documented defaults (enabled, 4 decimal places).
-    """
-    cfg = _legacy_yaml_data().get("float_precision")
-    if isinstance(cfg, dict):
-        return cfg
-    return dict(DEFAULT_FLOAT_PRECISION)
 
 
 def list_variables(dataset: str | None = None) -> pl.DataFrame:
