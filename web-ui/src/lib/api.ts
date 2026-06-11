@@ -50,6 +50,8 @@ export interface UserSettings {
   default_dataset: string;
   /** Server-side timeout (seconds) for /api/query. 0 disables. */
   query_timeout_s: number;
+  /** Global decimal places for rendering numbers in the /query results table. */
+  display_decimal_places: number;
 }
 
 export interface EstimateChunk {

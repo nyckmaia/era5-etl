@@ -639,6 +639,14 @@ export const pt = {
       saved: "Tempo limite salvo",
       invalid: "Use um inteiro entre 0 e 3600 (0 = sem limite).",
     },
+    displayDecimals: {
+      title: "Casas decimais (exibição)",
+      body: "Quantas casas decimais usar ao exibir números na tabela de resultados do /query. Apenas visual — não altera os dados gravados. Datasets com precisão própria (abaixo) têm prioridade sobre este valor global.",
+      decimals: "Casas decimais",
+      saveButton: "Salvar",
+      saved: "Casas decimais salvas",
+      invalid: "Use um inteiro entre 0 e 12.",
+    },
     credentials: {
       title: "Credenciais CDS",
       body: "Os dados ERA5 são servidos pelo Copernicus Climate Data Store. Seu Personal Access Token é salvo em {{path}} nesta máquina — não é enviado para outro lugar.",

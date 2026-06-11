@@ -636,6 +636,14 @@ export const en: Dictionary = {
       saved: "Timeout saved",
       invalid: "Use an integer between 0 and 3600 (0 = no limit).",
     },
+    displayDecimals: {
+      title: "Display decimals",
+      body: "How many decimal places to use when showing numbers in the /query results table. Display-only — it does not change the stored data. Datasets with their own precision (below) take priority over this global value.",
+      decimals: "Decimals",
+      saveButton: "Save",
+      saved: "Decimals saved",
+      invalid: "Use an integer between 0 and 12.",
+    },
     credentials: {
       title: "CDS credentials",
       body: "ERA5 data is served by the Copernicus Climate Data Store. Your Personal Access Token is saved to {{path}} on this machine — not sent anywhere else.",
