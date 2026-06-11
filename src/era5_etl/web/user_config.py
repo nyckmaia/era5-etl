@@ -30,6 +30,9 @@ class UserConfig:
     #: Seconds after which a Run query is interrupted server-side. The
     #: ``/query`` page exposes this in Settings; ``0`` disables the timer.
     query_timeout_s: int = 120
+    #: Casas decimais padrão (global) na visualização da tabela do /query.
+    #: Fallback usado quando o dataset não tem precisão própria. Render-only.
+    display_decimal_places: int = 4
     # Per-dataset display precision (Melhoria 02b). Render-only -- never
     # mutates stored data. Shape:
     #   {<dataset>: {"default_decimals": int, "default_method": "round"|"truncate",
@@ -71,11 +74,16 @@ def load_user_config() -> UserConfig:
         timeout = int(data.get("query_timeout_s", 120))
     except (TypeError, ValueError):
         timeout = 120
+    try:
+        decimals = int(data.get("display_decimal_places", 4))
+    except (TypeError, ValueError):
+        decimals = 4
     return UserConfig(
         data_dir=str(data.get("data_dir", "")),
         default_dataset=str(data.get("default_dataset", "era5-land")),
         last_pick_dir=str(data.get("last_pick_dir", "")),
         query_timeout_s=max(0, timeout),
+        display_decimal_places=max(0, min(12, decimals)),
         display_precision=dp if isinstance(dp, dict) else {},
     )
 
@@ -111,11 +119,13 @@ def get_dataset_precision(dataset: str) -> dict:
     """Return the display-precision config for ``dataset``.
 
     Always returns a well-formed dict with sane defaults so callers never
-    need to handle missing keys.
+    need to handle missing keys. ``default_decimals`` cai para o global
+    ``display_decimal_places`` quando o dataset não tem configuração própria.
     """
-    cfg = load_user_config().display_precision.get(dataset, {})
+    full = load_user_config()
+    cfg = full.display_precision.get(dataset, {})
     return {
-        "default_decimals": int(cfg.get("default_decimals", 4)),
+        "default_decimals": int(cfg.get("default_decimals", full.display_decimal_places)),
         "default_method": cfg.get("default_method", "round"),
         "columns": cfg.get("columns", {}),
     }

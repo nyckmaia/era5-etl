@@ -220,12 +220,14 @@ class UserConfigOut(BaseModel):
     data_dir: str
     default_dataset: str
     query_timeout_s: int = 10
+    display_decimal_places: int = 4
 
 
 class UserConfigIn(BaseModel):
     data_dir: str | None = None
     default_dataset: str | None = None
     query_timeout_s: int | None = None
+    display_decimal_places: int | None = None
 
 
 class ColumnPrecision(BaseModel):

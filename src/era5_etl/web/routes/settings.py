@@ -36,6 +36,7 @@ def get_settings() -> UserConfigOut:
         data_dir=cfg.data_dir,
         default_dataset=cfg.default_dataset,
         query_timeout_s=cfg.query_timeout_s,
+        display_decimal_places=cfg.display_decimal_places,
     )
 
 
@@ -67,12 +68,20 @@ def save_settings(body: UserConfigIn, request: Request) -> UserConfigOut:
                 detail="query_timeout_s must be between 0 and 3600 (seconds).",
             )
         changes["query_timeout_s"] = int(body.query_timeout_s)
+    if body.display_decimal_places is not None:
+        if body.display_decimal_places < 0 or body.display_decimal_places > 12:
+            raise HTTPException(
+                status_code=400,
+                detail="display_decimal_places must be between 0 and 12.",
+            )
+        changes["display_decimal_places"] = int(body.display_decimal_places)
 
     cfg = update_user_config(**changes)
     return UserConfigOut(
         data_dir=cfg.data_dir,
         default_dataset=cfg.default_dataset,
         query_timeout_s=cfg.query_timeout_s,
+        display_decimal_places=cfg.display_decimal_places,
     )
 
 
