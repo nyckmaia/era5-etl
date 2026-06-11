@@ -62,7 +62,6 @@ def test_transform_config_defaults():
     """Test TransformConfig with default values."""
     config = TransformConfig()
 
-    assert config.convert_kelvin_to_celsius is True
     assert config.calculate_wind_speed is True
     assert config.override is False
 
@@ -70,12 +69,10 @@ def test_transform_config_defaults():
 def test_transform_config_custom():
     """Test TransformConfig with custom values."""
     config = TransformConfig(
-        convert_kelvin_to_celsius=False,
         calculate_wind_speed=False,
         override=True,
     )
 
-    assert config.convert_kelvin_to_celsius is False
     assert config.calculate_wind_speed is False
     assert config.override is True
 

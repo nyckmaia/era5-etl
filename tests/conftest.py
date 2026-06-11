@@ -47,7 +47,6 @@ def download_config(temp_data_dir: Path) -> DownloadConfig:
 def transform_config() -> TransformConfig:
     """Create transform configuration for testing."""
     return TransformConfig(
-        convert_kelvin_to_celsius=True,
         calculate_wind_speed=True,
     )
 

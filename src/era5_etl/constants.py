@@ -93,9 +93,6 @@ VAR_NAME_MAP = {
     "tcc": "cloud_cover",
 }
 
-# Unit conversions
-KELVIN_TO_CELSIUS = -273.15
-
 # File formats
 NETCDF_EXTENSION = ".nc"
 PARQUET_EXTENSION = ".parquet"

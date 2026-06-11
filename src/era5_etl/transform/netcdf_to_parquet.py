@@ -13,7 +13,6 @@ import polars as pl
 import xarray as xr
 
 from era5_etl.config import StorageConfig, TransformConfig
-from era5_etl.constants import KELVIN_TO_CELSIUS
 from era5_etl.datasets import DatasetRegistry
 from era5_etl.exceptions import ProcessingError
 from era5_etl.utils.variables import get_var_name_map
@@ -61,7 +60,6 @@ class NetCDFToParquetConverter:
 
     Handles:
     - NetCDF file reading with xarray
-    - Unit conversions (Kelvin to Celsius)
     - Wind speed calculation from U/V components
     - Direct conversion to Parquet (no intermediate CSV)
     - Hive-style partitioning by date (date=YYYY-MM-DD)
@@ -290,10 +288,8 @@ class NetCDFToParquetConverter:
                 pass  # another dataset's temp dir still present
 
     def _process_dataset(self, ds: xr.Dataset) -> xr.Dataset:
-        """Apply transforms: rename variables, convert units, calc wind speed."""
+        """Apply transforms: rename variables, calc wind speed."""
         ds = self._rename_variables(ds)
-        if self.transform_config.convert_kelvin_to_celsius:
-            ds = self._convert_temperature(ds)
         if self.transform_config.calculate_wind_speed:
             ds = self._calculate_wind_speed(ds)
         return ds
@@ -308,22 +304,6 @@ class NetCDFToParquetConverter:
         if rename_map:
             ds = ds.rename(rename_map)
             self.logger.debug(f"Renamed variables: {rename_map}")
-        return ds
-
-    def _convert_temperature(self, ds: xr.Dataset) -> xr.Dataset:
-        """Convert temperature variables from Kelvin to Celsius."""
-        temp_vars = [
-            var
-            for var in ds.data_vars
-            if "temperature" in str(var).lower() or "temp" in str(var).lower()
-        ]
-        for var in temp_vars:
-            attrs = ds[var].attrs
-            if attrs.get("units") in ["K", "Kelvin"]:
-                ds[var] = ds[var] + KELVIN_TO_CELSIUS
-                ds[var].attrs = attrs
-                ds[var].attrs["units"] = "°C"
-                self.logger.debug(f"Converted {var} from Kelvin to Celsius")
         return ds
 
     def _calculate_wind_speed(self, ds: xr.Dataset) -> xr.Dataset:

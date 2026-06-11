@@ -132,9 +132,7 @@ def test_multifile_chunk_merges_to_full_schema(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "climate_data_store_db" / "era5-land"
     converter = NetCDFToParquetConverter(
-        transform_config=TransformConfig(
-            convert_kelvin_to_celsius=False, calculate_wind_speed=False
-        ),
+        transform_config=TransformConfig(calculate_wind_speed=False),
         storage_config=StorageConfig(
             database_dir=tmp_path,
             parquet_compression="zstd",

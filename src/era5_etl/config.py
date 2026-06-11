@@ -162,10 +162,6 @@ class DownloadConfig(BaseModel):
 class TransformConfig(BaseModel):
     """Configuration for NetCDF-to-Parquet transformation."""
 
-    convert_kelvin_to_celsius: bool = Field(
-        default=True,
-        description="Convert temperature from Kelvin to Celsius",
-    )
     calculate_wind_speed: bool = Field(
         default=True,
         description="Calculate wind speed from U/V components",

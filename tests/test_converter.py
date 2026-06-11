@@ -49,8 +49,8 @@ def test_converter_rename_variables(converter: NetCDFToParquetConverter):
     assert "d2m" not in renamed.data_vars
 
 
-def test_converter_convert_temperature(converter: NetCDFToParquetConverter):
-    """Test temperature conversion from Kelvin to Celsius."""
+def test_temperature_is_not_converted(converter: NetCDFToParquetConverter):
+    """Kelvin deve permanecer Kelvin: nenhuma conversão de unidade."""
     ds = xr.Dataset(
         {
             "temperature_2m": (
@@ -66,35 +66,11 @@ def test_converter_convert_temperature(converter: NetCDFToParquetConverter):
     )
     ds["temperature_2m"].attrs = {"units": "K"}
 
-    converted = converter._convert_temperature(ds)
+    out = converter._process_dataset(ds)
 
-    # 300K -> ~26.85°C
-    val = float(converted["temperature_2m"].values[0, 0, 0])
-    assert 26 < val < 27
-    assert converted["temperature_2m"].attrs["units"] == "°C"
-
-
-def test_converter_no_conversion_without_kelvin_units(converter: NetCDFToParquetConverter):
-    """Test that temperatures without Kelvin units are not converted."""
-    ds = xr.Dataset(
-        {
-            "temperature_2m": (
-                ["time", "latitude", "longitude"],
-                np.full((10, 5, 5), 25.0),
-            ),
-        },
-        coords={
-            "time": np.arange("2020-01-01", "2020-01-11", dtype="datetime64[D]").astype("datetime64[ns]"),
-            "latitude": np.linspace(-10, 0, 5),
-            "longitude": np.linspace(-50, -40, 5),
-        },
-    )
-    ds["temperature_2m"].attrs = {"units": "°C"}
-
-    converted = converter._convert_temperature(ds)
-
-    val = float(converted["temperature_2m"].values[0, 0, 0])
-    assert abs(val - 25.0) < 0.01
+    val = float(out["temperature_2m"].values[0, 0, 0])
+    assert val == pytest.approx(300.0)  # inalterado (continua em Kelvin)
+    assert not hasattr(converter, "_convert_temperature")
 
 
 def test_converter_calculate_wind_speed(converter: NetCDFToParquetConverter):
