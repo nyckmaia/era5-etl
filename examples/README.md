@@ -148,7 +148,6 @@ from era5_etl.config import TransformConfig
 config = TransformConfig(
     input_dir=Path("./data/netcdf"),
     output_dir=Path("./data/processed"),
-    convert_kelvin_to_celsius=True,
     calculate_wind_speed=True,
 )
 

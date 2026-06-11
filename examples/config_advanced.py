@@ -54,7 +54,6 @@ config = PipelineConfig(
     transform=TransformConfig(
         input_dir=Path("./data/brazil/netcdf"),
         output_dir=Path("./data/brazil/processed"),
-        convert_kelvin_to_celsius=True,
         calculate_wind_speed=True,
         resample_frequency="1D",  # Média diária
         override=False,

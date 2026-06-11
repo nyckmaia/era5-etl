@@ -611,8 +611,8 @@ ERA5/ERA5-LAND and need to be harmonized before any numerical comparison:
 
 | Quantity | ERA5 / ERA5-LAND (native CDS) | INMET | Conversion / note |
 |---|---|---|---|
-| Air temperature (2 m) | **K** — `temperature_2m` | **°C** — `temp_ar` | `°C = K − 273.15`. The transform converts by default (`convert_kelvin_to_celsius=True`) → ERA5 Parquet is already written in °C |
-| Dew point (2 m) | **K** — `dewpoint_2m` | **°C** — `temp_orvalho` | same (K → °C) |
+| Air temperature (2 m) | **K** — `temperature_2m` | **°C** — `temp_ar` | `°C = K − 273.15`. ERA5 Parquet is written in **raw K** (no conversion at write time); convert at query/visualization time |
+| Dew point (2 m) | **K** — `dewpoint_2m` | **°C** — `temp_orvalho` | same (`°C = K − 273.15`), applied at query/visualization time |
 | Atmospheric pressure | **Pa** — `surface_pressure` (and `msl_pressure`, ERA5 SL only) | **hPa = mB** — `pressao_estacao`/`pressao_max`/`pressao_min` | `1 hPa = 1 mB = 100 Pa` → `Pa = mB × 100` |
 | Precipitation | **m**, accumulated — `total_precipitation` | **mm**, hourly total — `precipitacao_total` | `1 m = 1000 mm`; semantics differ: ERA5 is accumulated since the previous step |
 | Wind | **U/V components in m/s** — `wind_u_10m`/`wind_v_10m` | **speed m/s** + gust + direction (°) — `vento_velocidade`/`vento_rajada_max`/`vento_direcao` | ERA5 speed `= √(u²+v²)`; the transform derives `wind_speed` by default (`calculate_wind_speed=True`) |
@@ -625,10 +625,14 @@ ERA5/ERA5-LAND and need to be harmonized before any numerical comparison:
 | Soil moisture | **m³/m³** — `volumetric_soil_water_layer_1..4` | — | ERA5-LAND only |
 | Time | **UTC hour** — `hour_utc` | **UTC hour** — `hour_utc` | both UTC — **no timezone adjustment** |
 
-> The "native units" are what the CDS delivers. The flags in
-> `TransformConfig` (`convert_kelvin_to_celsius`, `calculate_wind_speed`)
-> change what actually ends up in the ERA5 Parquet (defaults: °C and
-> derived `wind_speed`). INMET is written in the portal's original units.
+> The "native units" are what the CDS delivers — and **what is stored in
+> the Parquet**: ERA5/ERA5-LAND are written in **raw units** (e.g.
+> temperature in K), no unit conversion at write time. The only value the
+> transform adds is the derived `wind_speed` (`calculate_wind_speed=True`,
+> and only when both `wind_u_*`/`wind_v_*` were downloaded). Unit
+> conversion and decimal rounding happen **only at visualization time**
+> (the `/timeseries` chart presets and the `/settings` display-decimals
+> control). INMET is written in the portal's original units.
 
 ### Grid neighbours per station (no snap to a single point)
 
@@ -683,13 +687,12 @@ not change) + optional **mean line**. Each series shows statistics
 (min, max, mean, std, variance, IQR). Add/duplicate/remove/reorder
 cells; state persists in `localStorage`.
 
-> **Watch the units:** ERA5/ERA5-LAND are already written in **°C** by
-> the pipeline (`convert_kelvin_to_celsius=True` by default —
-> conversion done at Parquet write time, not on the screen). So, to
-> compare temperature with INMET (also °C), **do not** apply the K→°C
-> preset. Visual conversion is for units that actually differ
-> (pressure Pa↔mB, precipitation m↔mm, radiation J/m²↔kJ/m²) or if
-> Kelvin was kept (the `--no` flag in programmatic use).
+> **Watch the units:** ERA5/ERA5-LAND are stored in **raw units** —
+> temperature in **Kelvin** (no conversion at write time). So, to compare
+> temperature with INMET (in **°C**), **apply** the K→°C preset (or
+> `temperature_2m − 273.15` in SQL). Visual conversion also handles units
+> that differ in scale (pressure Pa↔mB, precipitation m↔mm, radiation
+> J/m²↔kJ/m²). Nothing is converted at Parquet write time.
 
 ## Troubleshooting
 
