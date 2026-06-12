@@ -66,11 +66,16 @@ dependencies = [
     # Core, not optional: the /notebooks feature ships examples that use
     # these out of the box, so a plain ``pip install -e .`` must run them.
     # ``optuna`` powers the "XGBoost with Optuna" template's search.
+    # ``mlflow`` is the experiment tracker used by the "XGBoost With Optuna
+    # and Windows" template (file store under <config_dir>/mlruns).
+    # ``nbformat`` backs the notebook -> .ipynb exporter.
     "pandas>=2.0",
     "plotly>=5.0",
     "scikit-learn>=1.3",
     "xgboost>=2.0",
     "optuna>=3.0",
+    "mlflow>=2.10",
+    "nbformat>=5.9",
 ]
 
 [project.optional-dependencies]
