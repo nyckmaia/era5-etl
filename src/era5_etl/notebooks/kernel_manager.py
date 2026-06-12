@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import subprocess
 import sys
@@ -67,8 +68,6 @@ class _Kernel:
     # --- lifecycle ---------------------------------------------------
 
     def _build_env(self) -> dict[str, str]:
-        import os
-
         env = {
             "ERA5_NB_DATA_DIR": str(self.data_dir),
             "ERA5_NB_ID": self.notebook_id,

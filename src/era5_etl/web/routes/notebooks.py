@@ -161,14 +161,14 @@ def _runs_url(request: Request, notebook_id: str) -> str:
     return f"{scheme}://{host}/api/notebooks/{notebook_id}/runs"
 
 
-def _kernel_extra_env(notebook_id: str) -> dict[str, str]:
+def _kernel_extra_env(nb: dict | None) -> dict[str, str]:
     """Extra env for the kernel: MLflow store + human-readable name tag.
 
     ``MLFLOW_ALLOW_FILE_STORE`` opts in to MLflow's file-store backend for
     the kernel's run WRITES (MLflow >= 3.x gates it); reads in the web
-    layer don't need it.
+    layer don't need it. ``nb`` is the already-fetched notebook dict so the
+    hot path doesn't read the store twice.
     """
-    nb = notebook_store.get_notebook(notebook_id)
     return {
         "MLFLOW_TRACKING_URI": mlflow_tracking_uri(),
         "MLFLOW_ALLOW_FILE_STORE": "true",
@@ -198,10 +198,16 @@ def kernel_info(notebook_id: str) -> dict[str, str]:
 
 @router.post("/{notebook_id}/kernel/restart", response_model=NotebookKernelStatusOut)
 def kernel_restart(notebook_id: str, request: Request) -> NotebookKernelStatusOut:
-    if notebook_store.get_notebook(notebook_id) is None:
+    nb = notebook_store.get_notebook(notebook_id)
+    if nb is None:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
     data_dir: Path = request.app.state.data_dir
-    MANAGER.restart(notebook_id, data_dir, _runs_url(request, notebook_id), extra_env=_kernel_extra_env(notebook_id))
+    MANAGER.restart(
+        notebook_id,
+        data_dir,
+        _runs_url(request, notebook_id),
+        extra_env=_kernel_extra_env(nb),
+    )
     return NotebookKernelStatusOut(
         notebook_id=notebook_id, status=MANAGER.status(notebook_id)
     )
@@ -220,12 +226,15 @@ def kernel_stop(notebook_id: str) -> NotebookKernelStatusOut:
 
 @router.post("/{notebook_id}/run-cell")
 def run_cell(notebook_id: str, body: NotebookRunCellIn, request: Request):
-    if notebook_store.get_notebook(notebook_id) is None:
+    nb = notebook_store.get_notebook(notebook_id)
+    if nb is None:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
     data_dir: Path = request.app.state.data_dir
     runs_url = _runs_url(request, notebook_id)
     try:
-        kernel = MANAGER.get_or_start(notebook_id, data_dir, runs_url, extra_env=_kernel_extra_env(notebook_id))
+        kernel = MANAGER.get_or_start(
+            notebook_id, data_dir, runs_url, extra_env=_kernel_extra_env(nb)
+        )
     except KernelDeadError as exc:
         raise HTTPException(status_code=500, detail=f"Kernel boot failed: {exc}") from exc
 
