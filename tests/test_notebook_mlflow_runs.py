@@ -84,6 +84,24 @@ def test_legacy_json_runs_still_listed_without_mlflow_store(client):
     assert r.json()["runs"] == []
 
 
+def test_panel_reads_work_without_preexisting_file_store_optin(tmp_path, monkeypatch):
+    """create_app must opt in to the MLflow file store on its own.
+
+    MLflow >= 3.x refuses to even OPEN ``mlruns/`` without
+    ``MLFLOW_ALLOW_FILE_STORE`` — the server can't rely on the user's shell
+    exporting it.
+    """
+    monkeypatch.delenv("MLFLOW_ALLOW_FILE_STORE", raising=False)
+    app = create_app(tmp_path / "data-optin")
+    (tmp_path / "data-optin").mkdir(exist_ok=True)
+    client = TestClient(app)
+
+    nb_id = client.post("/api/notebooks", json={"name": "optin"}).json()["id"]
+    _seed_mlflow_run(nb_id)  # works because create_app set the opt-in env var
+    runs = client.get(f"/api/notebooks/{nb_id}").json()["runs"]
+    assert len(runs) == 1
+
+
 def test_duration_falls_back_to_run_wall_time(client):
     nb_id = client.post("/api/notebooks", json={"name": "walltime"}).json()["id"]
     from era5_etl.web.mlflow_runs import mlflow_tracking_uri

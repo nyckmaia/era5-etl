@@ -73,9 +73,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 def create_app(data_dir: str | Path) -> FastAPI:
     """Build a FastAPI app rooted at ``data_dir``."""
+    import os
+
     from era5_etl.cli import install_cdsapi_log_filter
 
     install_cdsapi_log_filter()
+
+    # MLflow >= 3.x refuses to even OPEN a local file store (mlruns/) unless
+    # this opt-in is set. The Model-runs panel reads it in-process, and the
+    # notebook kernels / `mlflow ui` subprocess write to it (their env also
+    # sets the flag explicitly, but the read path lives here).
+    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):  # noqa: ARG001
