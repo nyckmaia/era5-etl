@@ -107,6 +107,17 @@ a Typer CLI, and a FastAPI + React/Vite web UI.
   `001` because `merge_into_partitioned_parquet` collapses each partition
   to one file. Built by `_compute_part_name` from `parquet_dir.name`
   (which equals the dataset name by `resolve_dataset_dir` convention).
+- **Notebook experiment tracking is MLflow-backed for the "Windows" template.**
+  MLflow uses a local file store at `<config_dir>/mlruns` (one experiment per
+  notebook, `nb_<id>`); MLflow >= 3.x requires `MLFLOW_ALLOW_FILE_STORE=true`
+  even to *read* it — `create_app` setdefaults it, and the kernel env +
+  `mlflow ui` subprocess set it explicitly. `web/mlflow_runs.py` maps parent
+  runs into the Model runs panel (merged with legacy JSON runs — the other
+  templates still POST `/runs` via `log_model_run`). `web/routes/mlflow_ui.py`
+  runs `mlflow ui` on demand (singleton subprocess, lifespan shutdown).
+  Backtest window maths lives in `notebooks/backtest.py` (tested, half-open
+  bounds, hourly grid) — never inline it in template JSON. `.ipynb` export
+  goes through `notebooks/ipynb_export.py` + `GET /api/notebooks/{id}/export/ipynb`.
 - **`build_request_cells` is public planner contract.** Both
   `plan_with_diff` and `POST /api/pipeline/diff-preview` call it.
   Output schema must stay stable: `latitude (Float32), longitude (Float32),
