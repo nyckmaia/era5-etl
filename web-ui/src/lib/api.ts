@@ -773,6 +773,31 @@ export const api = {
       request<Array<{ id: string; name: string; description: string }>>(
         "/api/notebooks/templates",
       ),
+    exportIpynb: async (id: string, name: string) => {
+      const r = await fetch(`/api/notebooks/${id}/export/ipynb`);
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          if (j.detail) detail = String(j.detail);
+        } catch {
+          // ignore
+        }
+        throw new Error(detail);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const slug =
+        name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "notebook";
+      a.href = url;
+      a.download = `${slug}.ipynb`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
     kernel: {
       status: (id: string) =>
         request<{ notebook_id: string; status: KernelStatus }>(
@@ -793,6 +818,13 @@ export const api = {
           `/api/notebooks/${id}/kernel/info`,
         ),
     },
+  },
+
+  mlflow: {
+    start: () =>
+      request<{ url: string }>("/api/mlflow/ui/start", { method: "POST" }),
+    status: () =>
+      request<{ running: boolean; url: string | null }>("/api/mlflow/ui/status"),
   },
 };
 
@@ -819,6 +851,7 @@ export type NotebookCell = {
   type: "code" | "sql" | "markdown";
   source: string;
   outputs?: CellOutput[];
+  collapsed?: boolean;
 };
 
 export type NotebookRun = {
