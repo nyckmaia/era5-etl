@@ -174,3 +174,26 @@ def test_templates_join_date_is_pure_date():
         assert 'pd.to_datetime(out["date"]).dt.date' in src, (
             f"{tid}: joined 'date' must be converted to a pure date"
         )
+
+
+def test_xgboost_optuna_windows_template():
+    from era5_etl.notebooks.templates import list_templates, load_template
+
+    ids = {t["id"]: t for t in list_templates()}
+    assert "xgboost_optuna_windows" in ids
+    assert ids["xgboost_optuna_windows"]["name"] == "XGBoost With Optuna and Windows"
+
+    tpl = load_template("xgboost_optuna_windows")
+    sources = [c["source"] for c in tpl["cells"]]
+    assert len(tpl["cells"]) == 20
+    joined = "\n".join(sources)
+    # MLflow replaces the manual panel logger.
+    assert "log_model_run" not in joined
+    assert "mlflow.set_experiment" in joined
+    assert "REPEAT_RUN_ID" in joined
+    # Backtesting managed by Optuna over the tested window generators.
+    assert "from era5_etl.notebooks.backtest import" in joined
+    assert "EXPANDING_INITIAL_TRAIN_DAYS" in joined
+    assert "SLIDING_TRAIN_DAYS" in joined
+    # The removed search dimension must not resurface.
+    assert "train_window_days" not in joined
