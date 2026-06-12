@@ -11,6 +11,9 @@ train slice when ``train_start <= t < train_end`` (same for test). By
 construction ``train_end == test_start``, so train and test never overlap.
 Only windows whose test block fits entirely inside the index span are
 produced (no truncated last window — keeps per-window stats comparable).
+The index is assumed to be an hourly grid (the template feeds
+``pd.date_range(..., freq="h")``); the fit check tolerates exactly one
+missing trailing hour, so coarser resolutions are not supported.
 """
 
 from __future__ import annotations
