@@ -40,6 +40,7 @@ def _seed_mlflow_run(notebook_id: str) -> str:
                 "model_name": "xgboost_optuna_windows",
                 "notes": "minha nota",
                 "load_source": "db query",
+                "device": "cuda",
             }
         )
         mlflow.log_params({"station_id": "A726"})
@@ -72,8 +73,9 @@ def test_get_notebook_merges_mlflow_parent_runs(client):
     # duration_s metric is promoted to the panel field, not left in metrics
     assert run["duration_s"] == 12.0
     assert "duration_s" not in run["metrics"]
-    # string tag folded back where the panel reads it
+    # string tags folded back where the panel reads them
     assert run["metrics"]["load_source"] == "db query"
+    assert run["params"]["device"] == "cuda"  # run-inputs dialog field
 
 
 def test_legacy_json_runs_still_listed_without_mlflow_store(client):

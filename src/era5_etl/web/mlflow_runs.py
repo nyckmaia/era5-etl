@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # String tags folded back into ``metrics`` (the panel reads them there).
 _TAG_METRIC_KEYS = ("load_source",)
+# String tags folded back into ``params`` (shown in the run-inputs dialog,
+# mirroring the legacy log_model_run shape).
+_TAG_PARAM_KEYS = ("device",)
 _MAX_RUNS = 500
 
 
@@ -60,12 +63,16 @@ def list_runs_for_notebook(notebook_id: str) -> list[dict[str, Any]]:
         for key in _TAG_METRIC_KEYS:
             if key in tags:
                 metrics[key] = tags[key]
+        params: dict[str, Any] = dict(run.data.params)
+        for key in _TAG_PARAM_KEYS:
+            if key in tags:
+                params.setdefault(key, tags[key])
         out.append(
             {
                 "id": run.info.run_id,
                 "ts": int(run.info.start_time),
                 "model_name": tags.get("model_name", "mlflow"),
-                "params": dict(run.data.params),
+                "params": params,
                 "metrics": metrics,
                 "duration_s": float(duration_s),
                 "notes": tags.get("notes", ""),
