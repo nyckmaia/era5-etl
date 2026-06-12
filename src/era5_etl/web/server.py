@@ -7,6 +7,7 @@ with a catch-all fallback to ``index.html`` so client-side routes work.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -29,6 +30,9 @@ from era5_etl.web.routes import (
 )
 from era5_etl.web.routes import (
     inventory as inventory_routes,
+)
+from era5_etl.web.routes import (
+    mlflow_ui as mlflow_ui_routes,
 )
 from era5_etl.web.routes import (
     notebooks as notebooks_routes,
@@ -73,10 +77,16 @@ def create_app(data_dir: str | Path) -> FastAPI:
 
     install_cdsapi_log_filter()
 
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):  # noqa: ARG001
+        yield
+        mlflow_ui_routes.shutdown()
+
     app = FastAPI(
         title="ERA5-ETL",
         version=__version__,
         description="Local control panel for ERA5/ERA5-Land downloads.",
+        lifespan=_lifespan,
     )
     app.state.data_dir = Path(data_dir).expanduser().resolve()
 
@@ -103,6 +113,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
     app.include_router(export_routes.router)
     app.include_router(inventory_routes.router)
     app.include_router(inmet_routes.router)
+    app.include_router(mlflow_ui_routes.router)
     app.include_router(notebooks_routes.router)
     app.include_router(timeseries_routes.router)
 
