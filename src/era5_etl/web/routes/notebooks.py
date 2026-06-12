@@ -78,6 +78,7 @@ def create(body: NotebookCreateIn) -> NotebookOut:
                 cell_type=c.get("type", "code"),
                 source=c.get("source", ""),
                 outputs=c.get("outputs"),
+                collapsed=bool(c.get("collapsed", False)),
             )
             for c in tpl.get("cells", [])
         ]

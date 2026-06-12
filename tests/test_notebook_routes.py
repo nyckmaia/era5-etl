@@ -144,3 +144,16 @@ def test_export_ipynb_corrupted_notebook_clean_500(client, tmp_path):
     r = client.get(f"/api/notebooks/{nb_id}/export/ipynb")
     assert r.status_code == 500
     assert r.json()["detail"] == "Failed to export notebook"
+
+
+def test_collapsed_roundtrips_through_api(client):
+    nb_id = client.post("/api/notebooks", json={"name": "c"}).json()["id"]
+    cells = [
+        {"id": "c1", "type": "code", "source": "x=1", "outputs": [], "collapsed": True},
+        {"id": "c2", "type": "code", "source": "y=2", "outputs": []},
+    ]
+    r = client.put(f"/api/notebooks/{nb_id}", json={"cells": cells})
+    assert r.status_code == 200
+    got = client.get(f"/api/notebooks/{nb_id}").json()["cells"]
+    assert got[0]["collapsed"] is True
+    assert got[1]["collapsed"] is False  # default when omitted

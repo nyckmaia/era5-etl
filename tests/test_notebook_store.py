@@ -87,3 +87,15 @@ def test_tmp_file_does_not_appear_in_list(tmp_path):
     (nb_dir / "stray.json.tmp").write_text("{}", encoding="utf-8")
     items = notebook_store.list_notebooks()
     assert all(not i["id"].endswith(".tmp") for i in items)
+
+
+def test_make_cell_collapsed_default_and_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("ERA5_ETL_CONFIG_DIR", str(tmp_path))
+    from era5_etl.web import notebook_store
+
+    plain = notebook_store.make_cell("code", source="x=1")
+    assert plain["collapsed"] is False
+    folded = notebook_store.make_cell("code", source="x=1", collapsed=True)
+    nb = notebook_store.create_notebook("t", cells=[folded])
+    again = notebook_store.get_notebook(nb["id"])
+    assert again["cells"][0]["collapsed"] is True

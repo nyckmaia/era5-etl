@@ -86,6 +86,7 @@ class NotebookCellOut(BaseModel):
     type: Literal["code", "sql", "markdown"]
     source: str
     outputs: list[dict] = Field(default_factory=list)
+    collapsed: bool = False
 
 
 class NotebookRunOut(BaseModel):

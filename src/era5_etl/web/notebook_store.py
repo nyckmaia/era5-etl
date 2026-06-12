@@ -184,12 +184,14 @@ def make_cell(
     cell_type: CellType,
     source: str = "",
     outputs: list[dict[str, Any]] | None = None,
+    collapsed: bool = False,
 ) -> dict[str, Any]:
     return {
         "id": _new_id(),
         "type": cell_type,
         "source": source,
         "outputs": list(outputs or []),
+        "collapsed": bool(collapsed),
     }
 
 
