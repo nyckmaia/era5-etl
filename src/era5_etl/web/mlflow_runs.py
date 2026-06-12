@@ -13,7 +13,6 @@ Any failure (mlflow missing, store unreadable, no experiment) yields ``[]``
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from era5_etl.web.user_config import _config_dir
@@ -31,10 +30,11 @@ def mlflow_tracking_uri() -> str:
 
 
 def list_runs_for_notebook(notebook_id: str) -> list[dict[str, Any]]:
-    """Panel-shaped dicts for the notebook's top-level MLflow runs."""
+    """Panel-shaped dicts for the notebook's top-level MLflow runs.
+
+    Order is unspecified; the caller merges with legacy runs and sorts.
+    """
     try:
-        # MLflow 3.x requires explicit opt-in to the local file-store backend.
-        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
         # Imported lazily: mlflow is heavy and only needed on this path.
         from mlflow.tracking import MlflowClient
 
@@ -71,7 +71,6 @@ def list_runs_for_notebook(notebook_id: str) -> list[dict[str, Any]]:
                 "notes": tags.get("notes", ""),
             }
         )
-    out.sort(key=lambda r: r["ts"])
     return out
 
 

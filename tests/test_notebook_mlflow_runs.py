@@ -17,6 +17,9 @@ def _isolated_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ERA5_ETL_CONFIG_DIR", str(tmp_path / "cfg"))
     # MLflow 3.x requires explicit opt-in to the local file-store backend.
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    previous = mlflow.get_tracking_uri()
+    yield
+    mlflow.set_tracking_uri(previous)
 
 
 @pytest.fixture
@@ -79,3 +82,18 @@ def test_legacy_json_runs_still_listed_without_mlflow_store(client):
     r = client.get(f"/api/notebooks/{nb_id}")
     assert r.status_code == 200
     assert r.json()["runs"] == []
+
+
+def test_duration_falls_back_to_run_wall_time(client):
+    nb_id = client.post("/api/notebooks", json={"name": "walltime"}).json()["id"]
+    from era5_etl.web.mlflow_runs import mlflow_tracking_uri
+
+    mlflow.set_tracking_uri(mlflow_tracking_uri())
+    mlflow.set_experiment(f"nb_{nb_id}")
+    with mlflow.start_run(run_name="no-duration-metric"):
+        mlflow.log_metric("rmse", 2.0)
+
+    (run,) = client.get(f"/api/notebooks/{nb_id}").json()["runs"]
+    assert isinstance(run["duration_s"], float)
+    assert run["duration_s"] >= 0.0
+    assert "duration_s" not in run["metrics"]
