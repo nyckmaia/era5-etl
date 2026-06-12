@@ -105,7 +105,7 @@ def notebook_to_ipynb(doc: dict[str, Any]) -> nbformat.NotebookNode:
     cells: list[nbformat.NotebookNode] = []
     for cell in doc.get("cells") or []:
         ctype = cell.get("type", "code")
-        source = str(cell.get("source", ""))
+        source = str(cell.get("source") or "")
         metadata = {"collapsed": True} if cell.get("collapsed") else {}
         if ctype == "markdown":
             cells.append(v4.new_markdown_cell(source, metadata=metadata))
