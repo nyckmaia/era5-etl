@@ -12,9 +12,12 @@ import logging
 import platform
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException, Request
+import nbformat
+
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
+from era5_etl.notebooks.ipynb_export import ipynb_filename, notebook_to_ipynb
 from era5_etl.notebooks.kernel_manager import (
     MANAGER,
     KernelBusyError,
@@ -112,6 +115,25 @@ def delete(notebook_id: str) -> dict[str, bool]:
     if not ok:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
     return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{notebook_id}/export/ipynb")
+def export_ipynb(notebook_id: str) -> Response:
+    nb = notebook_store.get_notebook(notebook_id)
+    if nb is None:
+        raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
+    node = notebook_to_ipynb(nb)
+    filename = ipynb_filename(nb.get("name", ""))
+    return Response(
+        content=nbformat.writes(node),
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------

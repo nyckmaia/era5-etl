@@ -104,3 +104,29 @@ def test_append_run_requires_valid_token(client):
         headers={"X-Notebook-Token": "wrong"},
     )
     assert r.status_code == 403
+
+
+def test_export_ipynb(client):
+    nbformat = pytest.importorskip("nbformat")
+    r = client.post("/api/notebooks", json={"name": "Meu Notebook"})
+    nb_id = r.json()["id"]
+    client.put(
+        f"/api/notebooks/{nb_id}",
+        json={
+            "cells": [
+                {"id": "c1", "type": "markdown", "source": "# t", "outputs": []},
+                {"id": "c2", "type": "sql", "source": "SELECT 1", "outputs": []},
+            ]
+        },
+    )
+    r = client.get(f"/api/notebooks/{nb_id}/export/ipynb")
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    assert "attachment" in cd and 'filename="meu-notebook.ipynb"' in cd
+    nb = nbformat.reads(r.text, as_version=4)
+    assert len(nb.cells) == 2
+    assert nb.cells[1].source.startswith("%%sql\n")
+
+
+def test_export_ipynb_unknown_notebook_404(client):
+    assert client.get("/api/notebooks/nope/export/ipynb").status_code == 404
