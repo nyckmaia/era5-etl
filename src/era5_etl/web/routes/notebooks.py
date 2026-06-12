@@ -25,7 +25,7 @@ from era5_etl.notebooks.kernel_manager import (
 )
 from era5_etl.notebooks.templates import list_templates, load_template
 from era5_etl.web import notebook_store
-from era5_etl.web.mlflow_runs import list_runs_for_notebook
+from era5_etl.web.mlflow_runs import list_runs_for_notebook, mlflow_tracking_uri
 from era5_etl.web.models import (
     NotebookCreateIn,
     NotebookKernelStatusOut,
@@ -161,6 +161,21 @@ def _runs_url(request: Request, notebook_id: str) -> str:
     return f"{scheme}://{host}/api/notebooks/{notebook_id}/runs"
 
 
+def _kernel_extra_env(notebook_id: str) -> dict[str, str]:
+    """Extra env for the kernel: MLflow store + human-readable name tag.
+
+    ``MLFLOW_ALLOW_FILE_STORE`` opts in to MLflow's file-store backend for
+    the kernel's run WRITES (MLflow >= 3.x gates it); reads in the web
+    layer don't need it.
+    """
+    nb = notebook_store.get_notebook(notebook_id)
+    return {
+        "MLFLOW_TRACKING_URI": mlflow_tracking_uri(),
+        "MLFLOW_ALLOW_FILE_STORE": "true",
+        "ERA5_NB_NAME": str((nb or {}).get("name", "")),
+    }
+
+
 @router.get("/{notebook_id}/kernel/status", response_model=NotebookKernelStatusOut)
 def kernel_status(notebook_id: str) -> NotebookKernelStatusOut:
     return NotebookKernelStatusOut(
@@ -186,7 +201,7 @@ def kernel_restart(notebook_id: str, request: Request) -> NotebookKernelStatusOu
     if notebook_store.get_notebook(notebook_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
     data_dir: Path = request.app.state.data_dir
-    MANAGER.restart(notebook_id, data_dir, _runs_url(request, notebook_id))
+    MANAGER.restart(notebook_id, data_dir, _runs_url(request, notebook_id), extra_env=_kernel_extra_env(notebook_id))
     return NotebookKernelStatusOut(
         notebook_id=notebook_id, status=MANAGER.status(notebook_id)
     )
@@ -210,7 +225,7 @@ def run_cell(notebook_id: str, body: NotebookRunCellIn, request: Request):
     data_dir: Path = request.app.state.data_dir
     runs_url = _runs_url(request, notebook_id)
     try:
-        kernel = MANAGER.get_or_start(notebook_id, data_dir, runs_url)
+        kernel = MANAGER.get_or_start(notebook_id, data_dir, runs_url, extra_env=_kernel_extra_env(notebook_id))
     except KernelDeadError as exc:
         raise HTTPException(status_code=500, detail=f"Kernel boot failed: {exc}") from exc
 

@@ -214,3 +214,19 @@ def test_kernel_status_transitions(tmp_path):
     assert mgr.status("nb-x") == "idle"
     mgr.stop("nb-x")
     assert mgr.status("nb-x") == "dead"
+
+
+def test_kernel_build_env_includes_extra_env(tmp_path):
+    from era5_etl.notebooks.kernel_manager import _Kernel
+
+    k = _Kernel(
+        "nb1",
+        tmp_path,
+        "http://x/runs",
+        extra_env={"MLFLOW_TRACKING_URI": "file:///tmp/mlruns", "ERA5_NB_NAME": "Meu NB"},
+    )
+    env = k._build_env()
+    assert env["ERA5_NB_ID"] == "nb1"
+    assert env["MLFLOW_TRACKING_URI"] == "file:///tmp/mlruns"
+    assert env["ERA5_NB_NAME"] == "Meu NB"
+    assert "PATH" in env  # parent env inherited

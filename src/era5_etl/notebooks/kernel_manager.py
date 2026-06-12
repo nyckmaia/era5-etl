@@ -51,10 +51,12 @@ class _Kernel:
         notebook_id: str,
         data_dir: Path,
         runs_url: str,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.notebook_id = notebook_id
         self.data_dir = data_dir
         self.runs_url = runs_url
+        self.extra_env = dict(extra_env or {})
         self.token = secrets.token_urlsafe(32)
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()  # serialise cell execution
@@ -64,7 +66,9 @@ class _Kernel:
 
     # --- lifecycle ---------------------------------------------------
 
-    def start(self) -> None:
+    def _build_env(self) -> dict[str, str]:
+        import os
+
         env = {
             "ERA5_NB_DATA_DIR": str(self.data_dir),
             "ERA5_NB_ID": self.notebook_id,
@@ -73,16 +77,17 @@ class _Kernel:
             "PYTHONUNBUFFERED": "1",
             "PYTHONIOENCODING": "utf-8",
         }
+        env.update(self.extra_env)
         # Inherit the parent env (PATH, etc.) but override our keys.
-        import os
+        return {**os.environ, **env}
 
-        full_env = {**os.environ, **env}
+    def start(self) -> None:
         self._proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "era5_etl.notebooks.kernel_runner"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=full_env,
+            env=self._build_env(),
             text=True,
             encoding="utf-8",
             bufsize=1,  # line-buffered
@@ -197,6 +202,7 @@ class KernelManager:
         notebook_id: str,
         data_dir: Path,
         runs_url: str,
+        extra_env: dict[str, str] | None = None,
     ) -> _Kernel:
         with self._lock:
             kernel = self._kernels.get(notebook_id)
@@ -205,7 +211,7 @@ class KernelManager:
             if kernel is not None:
                 # dead — drop the reference so we start fresh
                 self._kernels.pop(notebook_id, None)
-            kernel = _Kernel(notebook_id, data_dir, runs_url)
+            kernel = _Kernel(notebook_id, data_dir, runs_url, extra_env=extra_env)
             kernel.start()
             self._kernels[notebook_id] = kernel
             self._ensure_reaper()
@@ -228,9 +234,10 @@ class KernelManager:
         notebook_id: str,
         data_dir: Path,
         runs_url: str,
+        extra_env: dict[str, str] | None = None,
     ) -> _Kernel:
         self.stop(notebook_id)
-        return self.get_or_start(notebook_id, data_dir, runs_url)
+        return self.get_or_start(notebook_id, data_dir, runs_url, extra_env=extra_env)
 
     def status(self, notebook_id: str) -> str:
         with self._lock:
