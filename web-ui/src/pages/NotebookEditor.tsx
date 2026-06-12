@@ -8,6 +8,8 @@ import {
   CircleCheck,
   CircleX,
   Clock,
+  Download,
+  FlaskConical,
   Loader2,
   Play,
   Plus,
@@ -110,6 +112,11 @@ export function NotebookEditorPage() {
     onSuccess: (data) => {
       queryClient.setQueryData(["notebook", notebookId], data);
     },
+  });
+  const mlflowMut = useMutation({
+    mutationFn: api.mlflow.start,
+    onSuccess: ({ url }) => window.open(url, "_blank", "noopener"),
+    onError: () => alert(t("notebooks.editor.mlflowError")),
   });
   const restartMut = useMutation({
     mutationFn: () => api.notebooks.kernel.restart(notebookId),
@@ -296,6 +303,31 @@ export function NotebookEditorPage() {
           <button
             type="button"
             className="btn-outline inline-flex items-center gap-1.5"
+            onClick={() => void api.notebooks.exportIpynb(notebookId, name)}
+            title={t("notebooks.editor.exportTitle")}
+          >
+            <Download className="h-4 w-4" />
+            {t("notebooks.editor.export")}
+          </button>
+          <button
+            type="button"
+            className="btn-outline inline-flex items-center gap-1.5"
+            onClick={() => mlflowMut.mutate()}
+            disabled={mlflowMut.isPending}
+            title={t("notebooks.editor.mlflowTitle")}
+          >
+            {mlflowMut.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FlaskConical className="h-4 w-4" />
+            )}
+            {mlflowMut.isPending
+              ? t("notebooks.editor.mlflowStarting")
+              : t("notebooks.editor.mlflow")}
+          </button>
+          <button
+            type="button"
+            className="btn-outline inline-flex items-center gap-1.5"
             onClick={() => runAll()}
             disabled={runningAll || runningCell !== null}
             title={t("notebooks.editor.runAllTitle")}
@@ -333,6 +365,24 @@ export function NotebookEditorPage() {
           >
             <div className="flex items-center justify-between gap-2 border-b border-ink-100 bg-ink-50/50 px-2 py-1.5">
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="text-ink-400 hover:text-ink-600"
+                  onClick={() =>
+                    updateCell(cell.id, { collapsed: !cell.collapsed })
+                  }
+                  title={
+                    cell.collapsed
+                      ? t("notebooks.editor.expandCell")
+                      : t("notebooks.editor.collapseCell")
+                  }
+                >
+                  {cell.collapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  )}
+                </button>
                 {cell.type !== "markdown" &&
                   (runningCell === cell.id ? (
                     <Loader2
@@ -420,25 +470,47 @@ export function NotebookEditorPage() {
                 </button>
               </div>
             </div>
-            <CellEditor
-              value={cell.source}
-              onChange={(s) => updateCell(cell.id, { source: s })}
-              language={
-                cell.type === "code"
-                  ? "python"
-                  : cell.type === "sql"
-                    ? "sql"
-                    : "markdown"
-              }
-              path={`${notebookId}/${cell.id}`}
-              onRunRequested={() => onRunCellRef.current(cell)}
-            />
-            {cell.outputs && cell.outputs.length > 0 && (
-              <div className="border-t border-ink-100 p-3 space-y-2">
-                {cell.outputs.map((out, i) => (
-                  <CellOutput key={i} output={out} />
-                ))}
-              </div>
+            {cell.collapsed ? (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left"
+                onClick={() => updateCell(cell.id, { collapsed: false })}
+                title={t("notebooks.editor.expandCell")}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-400">
+                  {cell.source.split("\n").find((l) => l.trim()) ?? "…"}
+                </span>
+                {(cell.outputs?.length ?? 0) > 0 && (
+                  <span className="shrink-0 rounded-full bg-ink-100 px-2 py-0.5 text-[10px] text-ink-500">
+                    {t("notebooks.editor.collapsedOutputs", {
+                      count: cell.outputs?.length ?? 0,
+                    })}
+                  </span>
+                )}
+              </button>
+            ) : (
+              <>
+                <CellEditor
+                  value={cell.source}
+                  onChange={(s) => updateCell(cell.id, { source: s })}
+                  language={
+                    cell.type === "code"
+                      ? "python"
+                      : cell.type === "sql"
+                        ? "sql"
+                        : "markdown"
+                  }
+                  path={`${notebookId}/${cell.id}`}
+                  onRunRequested={() => onRunCellRef.current(cell)}
+                />
+                {cell.outputs && cell.outputs.length > 0 && (
+                  <div className="border-t border-ink-100 p-3 space-y-2">
+                    {cell.outputs.map((out, i) => (
+                      <CellOutput key={i} output={out} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         ))}
