@@ -130,3 +130,17 @@ def test_export_ipynb(client):
 
 def test_export_ipynb_unknown_notebook_404(client):
     assert client.get("/api/notebooks/nope/export/ipynb").status_code == 404
+
+
+def test_export_ipynb_corrupted_notebook_clean_500(client, tmp_path):
+    import json
+
+    nb_id = client.post("/api/notebooks", json={"name": "broken"}).json()["id"]
+    path = tmp_path / "cfg" / "notebooks" / f"{nb_id}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["cells"] = "not-a-list"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    r = client.get(f"/api/notebooks/{nb_id}/export/ipynb")
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Failed to export notebook"

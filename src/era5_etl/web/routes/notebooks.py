@@ -127,7 +127,13 @@ def export_ipynb(notebook_id: str) -> Response:
     nb = notebook_store.get_notebook(notebook_id)
     if nb is None:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
-    node = notebook_to_ipynb(nb)
+    try:
+        node = notebook_to_ipynb(nb)
+    except Exception as exc:  # malformed stored document
+        logger.exception("ipynb export failed for %s", notebook_id)
+        raise HTTPException(
+            status_code=500, detail="Failed to export notebook"
+        ) from exc
     filename = ipynb_filename(nb.get("name", ""))
     return Response(
         content=nbformat.writes(node),
