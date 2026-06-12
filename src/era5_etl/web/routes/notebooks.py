@@ -25,6 +25,7 @@ from era5_etl.notebooks.kernel_manager import (
 )
 from era5_etl.notebooks.templates import list_templates, load_template
 from era5_etl.web import notebook_store
+from era5_etl.web.mlflow_runs import list_runs_for_notebook
 from era5_etl.web.models import (
     NotebookCreateIn,
     NotebookKernelStatusOut,
@@ -93,7 +94,10 @@ def get(notebook_id: str) -> NotebookOut:
     nb = notebook_store.get_notebook(notebook_id)
     if nb is None:
         raise HTTPException(status_code=404, detail=f"Unknown notebook: {notebook_id}")
-    return NotebookOut(**nb)
+    # Legacy JSON runs (other templates' log_model_run) + MLflow parent runs.
+    runs = list(nb.get("runs") or []) + list_runs_for_notebook(notebook_id)
+    runs.sort(key=lambda r: r["ts"])
+    return NotebookOut(**{**nb, "runs": runs})
 
 
 @router.put("/{notebook_id}", response_model=NotebookOut)
