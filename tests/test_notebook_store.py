@@ -27,7 +27,12 @@ def test_create_and_get_notebook():
 
 
 def test_list_orders_by_recent():
+    import time
+
     a = notebook_store.create_notebook(name="A")
+    # updated_ts has millisecond resolution; back-to-back creates can tie,
+    # and the stable sort then falls back to file order. Force distinct ts.
+    time.sleep(0.002)
     b = notebook_store.create_notebook(name="B")
     items = notebook_store.list_notebooks()
     assert [i["id"] for i in items] == [b["id"], a["id"]]
