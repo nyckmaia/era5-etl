@@ -806,6 +806,7 @@ export const en: Dictionary = {
       cells: "{{count}} cell(s)",
       delete: "Delete notebook",
       deleteConfirm: "Delete \"{{name}}\"? This cannot be undone.",
+      export: "Export .ipynb",
     },
     picker: {
       title: "Pick a starting point",

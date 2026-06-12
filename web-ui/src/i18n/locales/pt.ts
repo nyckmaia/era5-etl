@@ -810,6 +810,7 @@ export const pt = {
       cells: "{{count}} célula(s)",
       delete: "Apagar notebook",
       deleteConfirm: "Apagar \"{{name}}\"? Esta ação não pode ser desfeita.",
+      export: "Exportar .ipynb",
     },
     picker: {
       title: "Escolha um ponto de partida",

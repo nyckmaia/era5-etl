@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
+  Download,
   FileText,
   Loader2,
   NotebookPen,
@@ -99,20 +100,34 @@ export function NotebooksPage() {
                     {new Date(nb.updated_ts).toLocaleString()}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="opacity-0 transition group-hover:opacity-100"
-                  title={t("notebooks.card.delete")}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (confirm(t("notebooks.card.deleteConfirm", { name: nb.name }))) {
-                      deleteMut.mutate(nb.id);
-                    }
-                  }}
-                >
-                  <Trash2 className="h-4 w-4 text-ink-400 hover:text-rose-600" />
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    className="opacity-0 transition group-hover:opacity-100"
+                    title={t("notebooks.card.export")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void api.notebooks.exportIpynb(nb.id, nb.name);
+                    }}
+                  >
+                    <Download className="h-4 w-4 text-ink-400 hover:text-ocean-600" />
+                  </button>
+                  <button
+                    type="button"
+                    className="opacity-0 transition group-hover:opacity-100"
+                    title={t("notebooks.card.delete")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (confirm(t("notebooks.card.deleteConfirm", { name: nb.name }))) {
+                        deleteMut.mutate(nb.id);
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 text-ink-400 hover:text-rose-600" />
+                  </button>
+                </div>
               </div>
             </Link>
           ))}
