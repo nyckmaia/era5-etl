@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import optuna
 
 from era5_etl.notebooks import optuna_cache as oc
 
@@ -44,3 +45,41 @@ def test_json_cache_roundtrip_and_missing(tmp_path):
     assert oc.load_json_cache(p) == {"k": [1, 2], "s": "v"}
     p.write_text("{not json", encoding="utf-8")    # corrupt
     assert oc.load_json_cache(p) is None
+
+
+def _sampler():
+    return optuna.samplers.TPESampler(seed=0)
+
+
+def test_remaining_and_completed_trials(tmp_path):
+    study = oc.open_cached_study(
+        method="expanding", fingerprint="abc",
+        db_path=tmp_path / "nb.db", sampler=_sampler(),
+    )
+    assert oc.completed_trials(study) == 0
+    assert oc.remaining_trials(study, 5) == 5
+    study.optimize(lambda t: (t.suggest_float("x", 0, 1) - 0.5) ** 2, n_trials=3)
+    assert oc.completed_trials(study) == 3
+    assert oc.remaining_trials(study, 5) == 2
+    assert oc.remaining_trials(study, 2) == 0   # over budget clamps to 0
+
+
+def test_open_cached_study_resumes_across_opens(tmp_path):
+    db = tmp_path / "nb.db"
+    s1 = oc.open_cached_study(method="m", fingerprint="fp",
+                              db_path=db, sampler=_sampler())
+    s1.optimize(lambda t: t.suggest_float("x", 0, 1), n_trials=4)
+    s2 = oc.open_cached_study(method="m", fingerprint="fp",
+                              db_path=db, sampler=_sampler())
+    assert oc.completed_trials(s2) == 4          # second open sees first's trials
+    s3 = oc.open_cached_study(method="m", fingerprint="fp", db_path=db,
+                              sampler=_sampler(), reset=True)
+    assert oc.completed_trials(s3) == 0          # reset discards them
+
+
+def test_open_cached_study_separates_by_method_and_fingerprint(tmp_path):
+    db = tmp_path / "nb.db"
+    a = oc.open_cached_study(method="m", fingerprint="fp1", db_path=db, sampler=_sampler())
+    a.optimize(lambda t: t.suggest_float("x", 0, 1), n_trials=2)
+    b = oc.open_cached_study(method="m", fingerprint="fp2", db_path=db, sampler=_sampler())
+    assert oc.completed_trials(b) == 0           # different fingerprint = different study

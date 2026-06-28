@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import optuna
 import pandas as pd
 
 
@@ -66,9 +67,61 @@ def save_json_cache(path, obj: dict) -> None:
     tmp.replace(p)
 
 
+def completed_trials(study: optuna.Study) -> int:
+    """Number of COMPLETE trials in the study."""
+    return sum(
+        1 for t in study.get_trials(deepcopy=False)
+        if t.state == optuna.trial.TrialState.COMPLETE
+    )
+
+
+def remaining_trials(study: optuna.Study, budget: int) -> int:
+    """Trials still to run to reach ``budget`` COMPLETE trials (never negative)."""
+    return max(0, budget - completed_trials(study))
+
+
+def _storage_url(db_path) -> str:
+    p = Path(db_path).resolve()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{p.as_posix()}"
+
+
+def open_cached_study(
+    *,
+    method: str,
+    fingerprint: str,
+    db_path,
+    sampler,
+    direction: str = "minimize",
+    reset: bool = False,
+) -> optuna.Study:
+    """Open (or create) a persistent study named ``<method>__<fingerprint>``.
+
+    With ``load_if_exists=True`` an identical re-run resumes the same study.
+    ``reset=True`` deletes any existing study with that name first.
+    """
+    storage = _storage_url(db_path)
+    study_name = f"{method}__{fingerprint}"
+    if reset:
+        try:
+            optuna.delete_study(study_name=study_name, storage=storage)
+        except KeyError:
+            pass
+    return optuna.create_study(
+        study_name=study_name,
+        storage=storage,
+        sampler=sampler,
+        direction=direction,
+        load_if_exists=True,
+    )
+
+
 __all__ = [
     "data_fingerprint",
     "config_fingerprint",
     "load_json_cache",
     "save_json_cache",
+    "completed_trials",
+    "remaining_trials",
+    "open_cached_study",
 ]
