@@ -10,6 +10,7 @@ from era5_etl.notebooks.backtest import (
     sliding_windows,
     SweepConfig,
     build_sweep_grid,
+    summarize_sweep,
 )
 
 
@@ -113,3 +114,30 @@ def test_build_sweep_grid_respects_days_per_month():
         test_days=10, max_windows=3, days_per_month=28,
     )
     assert grid[0].train_days == 84
+
+
+def test_summarize_sweep_aggregates_per_config():
+    records = [
+        {"slide_step_days": 7, "train_months": 1, "rmse": 2.0, "mae": 1.0, "r2": 0.5},
+        {"slide_step_days": 7, "train_months": 1, "rmse": 4.0, "mae": 3.0, "r2": 0.7},
+        {"slide_step_days": 7, "train_months": 2, "rmse": 1.0, "mae": 0.5, "r2": 0.9},
+    ]
+    df = summarize_sweep(records)
+    assert list(df.columns) == [
+        "slide_step_days", "train_months", "n_windows",
+        "rmse_mean", "rmse_std", "mae_mean", "r2_mean",
+    ]
+    row = df[(df.slide_step_days == 7) & (df.train_months == 1)].iloc[0]
+    assert row.n_windows == 2
+    assert row.rmse_mean == 3.0
+    assert abs(row.rmse_std - 1.0) < 1e-9        # population std (ddof=0)
+    assert df[(df.train_months == 2)].iloc[0].n_windows == 1
+
+
+def test_summarize_sweep_empty_returns_typed_columns():
+    df = summarize_sweep([])
+    assert list(df.columns) == [
+        "slide_step_days", "train_months", "n_windows",
+        "rmse_mean", "rmse_std", "mae_mean", "r2_mean",
+    ]
+    assert len(df) == 0

@@ -188,4 +188,34 @@ def sliding_windows(
     return out
 
 
-__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows", "SweepConfig", "build_sweep_grid"]
+_SWEEP_COLUMNS = [
+    "slide_step_days", "train_months", "n_windows",
+    "rmse_mean", "rmse_std", "mae_mean", "r2_mean",
+]
+
+
+def summarize_sweep(records: list[dict]) -> pd.DataFrame:
+    """Aggregate per-window sweep records into one row per config.
+
+    ``rmse_std`` is the population std (ddof=0) across the config's windows.
+    Returns an empty frame with the canonical columns when ``records`` is empty.
+    """
+    if not records:
+        return pd.DataFrame(columns=_SWEEP_COLUMNS)
+    df = pd.DataFrame.from_records(records)
+    grouped = (
+        df.groupby(["slide_step_days", "train_months"], as_index=False)
+        .agg(
+            n_windows=("rmse", "size"),
+            rmse_mean=("rmse", "mean"),
+            rmse_std=("rmse", lambda s: float(s.std(ddof=0))),
+            mae_mean=("mae", "mean"),
+            r2_mean=("r2", "mean"),
+        )
+        .sort_values(["slide_step_days", "train_months"])
+        .reset_index(drop=True)
+    )
+    return grouped[_SWEEP_COLUMNS]
+
+
+__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows", "SweepConfig", "build_sweep_grid", "summarize_sweep"]
