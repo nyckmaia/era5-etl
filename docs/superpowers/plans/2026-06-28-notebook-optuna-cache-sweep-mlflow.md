@@ -999,6 +999,64 @@ git commit -m "feat(notebooks): cache Optuna search + feature selection by finge
 
 Because the injection helper only does same-index edits, inserting **new** cells uses a dedicated one-off below.
 
+- [ ] **Step 0: Refactor `_eval_windows` to take a windows list (reuse, no duplication)**
+
+The sweep must evaluate *arbitrary* sliding windows, but the existing
+`_eval_windows(method, hyper)` is hardcoded to `WINDOWS[method]`. Refactor it
+to accept an explicit windows list so the sweep reuses it instead of
+re-implementing the per-window slice/guard/fit loop. Edit cell idx 13 via
+`patch_cell`:
+
+```bash
+py -3.12 - <<'PY'
+from scripts._inject_cell import patch_cell
+
+# 1) change the signature + iteration
+patch_cell(cell_idx=13,
+    anchor='def _eval_windows(method, hyper):',
+    replacement='def _eval_windows(windows, hyper):')
+patch_cell(cell_idx=13,
+    anchor='    for w in WINDOWS[method]:',
+    replacement='    for w in windows:')
+
+# 2) update the three call sites to pass WINDOWS[...]
+patch_cell(cell_idx=13,
+    anchor='        rows = _eval_windows(method, hyper)',
+    replacement='        rows = _eval_windows(WINDOWS[method], hyper)')
+PY
+```
+
+The two remaining call sites in the main loop both read
+`_rows = _eval_windows(_method, _best_hyper)` (identical text appears twice, so
+`patch_cell`'s uniqueness assert will fail on a plain replace). Replace them
+with a small inline script that asserts a count of 2 and replaces all:
+
+```bash
+py -3.12 - <<'PY'
+import json
+from pathlib import Path
+from era5_etl.web.user_config import _config_dir
+
+old = '        _rows = _eval_windows(_method, _best_hyper)'
+new = '        _rows = _eval_windows(WINDOWS[_method], _best_hyper)'
+for path, trailing_ok in (
+    (Path("src/era5_etl/_data/notebook_templates/xgboost_optuna_windows.json"), True),
+    (_config_dir() / "notebooks" / "6d1169c493984849a5e56e7ec7229128.json", False),
+):
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    src = data["cells"][13]["source"]
+    assert src.count(old) == 2, f"{path.name}: expected 2, got {src.count(old)}"
+    data["cells"][13]["source"] = src.replace(old, new)
+    for i, c in enumerate(data["cells"]):
+        if c.get("type") == "code":
+            compile(c["source"], f"<cell {i}>", "exec")
+    trailing = "\n" if raw.endswith("\n") else ""
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + trailing, encoding="utf-8")
+print("refactored _eval_windows call sites in both files")
+PY
+```
+
 - [ ] **Step 1: Insert the two new cells after idx 15**
 
 ```bash
@@ -1045,21 +1103,16 @@ if RUN_WINDOW_SWEEP:
             except ValueError as _exc:
                 print(f"[sweep] pulando {_cfg.label}: {_exc}")
                 continue
-            # avalia este config reusando o caminho _fit_one (mesmos SELECTED_FEATS)
-            for _w in _wins:
-                _tr = trainval[(trainval.index >= _w.train_start) & (trainval.index < _w.train_end)]
-                _te = trainval[(trainval.index >= _w.test_start) & (trainval.index < _w.test_end)]
-                if len(_tr) < 50 or len(_te) == 0:
-                    continue
-                _seed_metrics = [_fit_one(_tr, _te, _winner_hyper, _s) for _s in _SEEDS]
+            # reusa _eval_windows (mesmos SELECTED_FEATS, early stopping, seeds);
+            # cada row ja traz rmse/mae/r2 como media entre seeds.
+            _cfg_rows = _eval_windows(_wins, _winner_hyper)
+            for _r in _cfg_rows:
                 _records.append({
                     "slide_step_days": _cfg.step_days,
                     "train_months": _cfg.train_months,
-                    "rmse": float(np.mean([x["rmse"] for x in _seed_metrics])),
-                    "mae": float(np.mean([x["mae"] for x in _seed_metrics])),
-                    "r2": float(np.mean([x["r2"] for x in _seed_metrics])),
+                    "rmse": _r["rmse"], "mae": _r["mae"], "r2": _r["r2"],
                 })
-            print(f"[sweep] {_cfg.label}: {len([r for r in _records if r['slide_step_days']==_cfg.step_days and r['train_months']==_cfg.train_months])} janelas")
+            print(f"[sweep] {_cfg.label}: {len(_cfg_rows)} janelas")
         sweep_df = summarize_sweep(_records)
         if USE_OPTUNA_CACHE and len(sweep_df):
             _sweep_csv.parent.mkdir(parents=True, exist_ok=True)
