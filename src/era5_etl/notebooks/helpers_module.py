@@ -23,6 +23,103 @@ from pathlib import Path
 from typing import Any
 
 
+def _require(mod: str) -> Any:
+    """Import *mod* or raise a clear ``ModuleNotFoundError``."""
+    try:
+        return __import__(mod)
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            f"Notebook helpers require '{mod}'. Install with: pip install -e ."
+        ) from exc
+
+
+def plot_learning_curves(
+    sweep_df,
+    expanding_rows,
+    *,
+    metric: str = "rmse",
+    hours_per_month: int = 720,
+):
+    """Faceted learning curves: one panel per slide step + an expanding panel.
+
+    Parameters
+    ----------
+    sweep_df:
+        Output of ``summarize_sweep``. Must contain columns
+        ``slide_step_days``, ``train_months``, ``{metric}_mean``,
+        ``{metric}_std``.
+    expanding_rows:
+        List of dicts with keys ``n_train`` (hours) and ``{metric}``
+        (scalar score for that training window size).
+    metric:
+        Column prefix to plot (default ``"rmse"``).
+    hours_per_month:
+        Divisor to convert ``n_train`` hours → months on the X axis
+        (default 720 = 30 d × 24 h).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        One subplot per unique ``slide_step_days`` value, plus one final
+        ``"expanding (treino cresce)"`` subplot. Subplots share the Y axis.
+    """
+    _require("pandas")
+    go = _require("plotly").graph_objects  # type: ignore
+    from plotly.subplots import make_subplots  # type: ignore
+
+    steps = (
+        sorted(sweep_df["slide_step_days"].unique().tolist())
+        if len(sweep_df)
+        else []
+    )
+    titles = [f"sliding: slide={s}d" for s in steps] + ["expanding (treino cresce)"]
+    n = len(titles)
+    fig = make_subplots(
+        rows=1, cols=n, subplot_titles=titles, shared_yaxes=True
+    )
+    mean_col = f"{metric}_mean"
+    std_col = f"{metric}_std"
+    for col, step in enumerate(steps, start=1):
+        sub = sweep_df[sweep_df["slide_step_days"] == step].sort_values(
+            "train_months"
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=sub["train_months"],
+                y=sub[mean_col],
+                error_y=dict(type="data", array=sub[std_col]),
+                mode="lines+markers",
+                name=f"slide={step}d",
+                showlegend=False,
+            ),
+            row=1,
+            col=col,
+        )
+    # Expanding panel: X axis = months of training (n_train hours → months).
+    exp = sorted(expanding_rows, key=lambda r: r["n_train"])
+    fig.add_trace(
+        go.Scatter(
+            x=[r["n_train"] / hours_per_month for r in exp],
+            y=[r[metric] for r in exp],
+            mode="lines+markers",
+            name="expanding",
+            showlegend=False,
+            line=dict(color="#16a34a"),
+        ),
+        row=1,
+        col=n,
+    )
+    fig.update_xaxes(title_text="meses de treino")
+    fig.update_yaxes(title_text=metric.upper(), row=1, col=1)
+    fig.update_layout(
+        template="plotly_white",
+        height=380,
+        title=f"Curvas de aprendizado: {metric.upper()} x meses de treino",
+        margin=dict(t=90, b=40),
+    )
+    return fig
+
+
 def install_helpers(
     ns: dict[str, Any],
     *,
@@ -201,3 +298,4 @@ def install_helpers(
     ns["inmet_with_era5_land"] = inmet_with_era5_land
     ns["plot_predictions"] = plot_predictions
     ns["log_model_run"] = log_model_run
+    ns["plot_learning_curves"] = plot_learning_curves

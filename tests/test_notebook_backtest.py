@@ -141,3 +141,27 @@ def test_summarize_sweep_empty_returns_typed_columns():
         "rmse_mean", "rmse_std", "mae_mean", "r2_mean",
     ]
     assert len(df) == 0
+
+
+def test_plot_learning_curves_panels():
+    pytest.importorskip("plotly")
+    from era5_etl.notebooks import helpers_module
+
+    sweep_df = pd.DataFrame({
+        "slide_step_days": [7, 7, 30, 30],
+        "train_months": [1, 2, 1, 2],
+        "n_windows": [3, 3, 2, 2],
+        "rmse_mean": [2.0, 1.8, 2.5, 2.1],
+        "rmse_std": [0.2, 0.1, 0.3, 0.2],
+        "mae_mean": [1.0, 0.9, 1.3, 1.1],
+        "r2_mean": [0.8, 0.85, 0.7, 0.75],
+    })
+    expanding_rows = [
+        {"n_train": 720, "rmse": 2.4},
+        {"n_train": 1440, "rmse": 2.0},
+    ]
+    fig = helpers_module.plot_learning_curves(sweep_df, expanding_rows)
+    # 2 unique slide steps (7, 30) + 1 expanding panel = 3 subplot-title annotations
+    assert len(fig.layout.annotations) == 3
+    assert any("expanding" in a.text.lower() for a in fig.layout.annotations)
+    assert len(fig.data) >= 3  # at least one trace per panel
