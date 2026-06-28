@@ -34,6 +34,48 @@ class BacktestWindow:
     test_end: pd.Timestamp
 
 
+@dataclass(frozen=True)
+class SweepConfig:
+    """One sliding-window configuration evaluated in the learning-curve sweep."""
+
+    train_months: int
+    train_days: int
+    step_days: int
+    test_days: int
+    max_windows: int
+    label: str
+
+
+def build_sweep_grid(
+    *,
+    train_months: list[int],
+    slide_steps_days: list[int],
+    test_days: int,
+    max_windows: int,
+    days_per_month: int = 30,
+) -> list[SweepConfig]:
+    """Cartesian product of (train size x slide step) sliding configs.
+
+    Pure enumeration — does not touch any data. ``train_days`` is
+    ``train_months * days_per_month``. The label is stable and used as the
+    panel/run identifier downstream.
+    """
+    grid: list[SweepConfig] = []
+    for step in slide_steps_days:
+        for months in train_months:
+            grid.append(
+                SweepConfig(
+                    train_months=months,
+                    train_days=months * days_per_month,
+                    step_days=step,
+                    test_days=test_days,
+                    max_windows=max_windows,
+                    label=f"slide={step}d, train={months}m",
+                )
+            )
+    return grid
+
+
 def _check_positive(**kwargs: int) -> None:
     for name, value in kwargs.items():
         if value < 1:
@@ -146,4 +188,4 @@ def sliding_windows(
     return out
 
 
-__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows"]
+__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows", "SweepConfig", "build_sweep_grid"]

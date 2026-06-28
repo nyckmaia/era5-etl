@@ -5,7 +5,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from era5_etl.notebooks.backtest import expanding_windows, sliding_windows
+from era5_etl.notebooks.backtest import (
+    expanding_windows,
+    sliding_windows,
+    SweepConfig,
+    build_sweep_grid,
+)
 
 
 def _hourly_index(days: int) -> pd.DatetimeIndex:
@@ -84,3 +89,27 @@ def test_invalid_params_raise():
         sliding_windows(
             pd.DatetimeIndex([]), train_days=30, test_days=15, step_days=15, max_windows=5
         )
+
+
+def test_build_sweep_grid_enumerates_product():
+    grid = build_sweep_grid(
+        train_months=[1, 2], slide_steps_days=[7, 30],
+        test_days=15, max_windows=6,
+    )
+    assert len(grid) == 4
+    assert all(isinstance(c, SweepConfig) for c in grid)
+    # train_days = train_months * days_per_month (default 30)
+    by_label = {c.label: c for c in grid}
+    assert by_label["slide=7d, train=1m"].train_days == 30
+    assert by_label["slide=30d, train=2m"].train_days == 60
+    assert by_label["slide=7d, train=1m"].step_days == 7
+    assert by_label["slide=30d, train=2m"].test_days == 15
+    assert by_label["slide=7d, train=1m"].max_windows == 6
+
+
+def test_build_sweep_grid_respects_days_per_month():
+    grid = build_sweep_grid(
+        train_months=[3], slide_steps_days=[1],
+        test_days=10, max_windows=3, days_per_month=28,
+    )
+    assert grid[0].train_days == 84
