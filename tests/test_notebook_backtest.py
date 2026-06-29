@@ -165,3 +165,17 @@ def test_plot_learning_curves_panels():
     assert len(fig.layout.annotations) == 3
     assert any("expanding" in a.text.lower() for a in fig.layout.annotations)
     assert len(fig.data) >= 3  # at least one trace per panel
+
+
+def test_install_helpers_registers_plot_learning_curves(tmp_path):
+    from era5_etl.notebooks import helpers_module
+
+    ns: dict = {}
+    helpers_module.install_helpers(
+        ns,
+        data_dir=tmp_path,
+        notebook_id="nb",
+        runs_url="http://localhost/runs",
+        runs_token="t",
+    )
+    assert ns["plot_learning_curves"] is helpers_module.plot_learning_curves
