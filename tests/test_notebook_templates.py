@@ -185,7 +185,7 @@ def test_xgboost_optuna_windows_template():
 
     tpl = load_template("xgboost_optuna_windows")
     sources = [c["source"] for c in tpl["cells"]]
-    assert len(tpl["cells"]) == 20
+    assert len(tpl["cells"]) == 22
     joined = "\n".join(sources)
     # MLflow replaces the manual panel logger.
     assert "log_model_run" not in joined
