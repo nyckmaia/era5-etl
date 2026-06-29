@@ -205,5 +205,6 @@ def test_windows_template_has_cache_and_sweep_config():
     src = "\n".join(c["source"] for c in json.loads(p.read_text(encoding="utf-8"))["cells"]
                     if c["type"] == "code")
     for token in ("USE_OPTUNA_CACHE", "OPTUNA_CACHE_RESET", "RUN_WINDOW_SWEEP",
-                  "SWEEP_TRAIN_MONTHS", "SWEEP_SLIDE_STEPS_DAYS"):
+                  "SWEEP_TRAIN_MONTHS", "SWEEP_SLIDE_STEPS_DAYS",
+                  "SWEEP_TEST_DAYS", "SWEEP_MAX_WINDOWS"):
         assert token in src, token

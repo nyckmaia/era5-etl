@@ -22,6 +22,8 @@ def _apply(path: Path, cell_idx, anchor, replacement, full_source, clear_outputs
     if full_source is not None:
         cell["source"] = full_source
     else:
+        if full_source is None and anchor is None:
+            raise ValueError("patch_cell: supply either anchor=... or full_source=...")
         assert cell["source"].count(anchor) == 1, (
             f"anchor not unique in {path.name} cell {cell_idx}")
         cell["source"] = cell["source"].replace(anchor, replacement)
