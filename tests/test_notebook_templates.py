@@ -197,3 +197,13 @@ def test_xgboost_optuna_windows_template():
     assert "SLIDING_TRAIN_DAYS" in joined
     # The removed search dimension must not resurface.
     assert "train_window_days" not in joined
+
+
+def test_windows_template_has_cache_and_sweep_config():
+    import json, pathlib
+    p = pathlib.Path("src/era5_etl/_data/notebook_templates/xgboost_optuna_windows.json")
+    src = "\n".join(c["source"] for c in json.loads(p.read_text(encoding="utf-8"))["cells"]
+                    if c["type"] == "code")
+    for token in ("USE_OPTUNA_CACHE", "OPTUNA_CACHE_RESET", "RUN_WINDOW_SWEEP",
+                  "SWEEP_TRAIN_MONTHS", "SWEEP_SLIDE_STEPS_DAYS"):
+        assert token in src, token
