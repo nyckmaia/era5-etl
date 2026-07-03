@@ -208,3 +208,102 @@ def test_windows_template_has_cache_and_sweep_config():
                   "SWEEP_TRAIN_MONTHS", "SWEEP_SLIDE_STEPS_DAYS",
                   "SWEEP_TEST_DAYS", "SWEEP_MAX_WINDOWS"):
         assert token in src, token
+
+
+# --- "XGBoost - Target IBUTG" template -------------------------------------
+
+
+def test_xgboost_target_ibutg_template():
+    from era5_etl.notebooks.templates import list_templates, load_template
+
+    ids = {t["id"]: t for t in list_templates()}
+    assert "xgboost_target_ibutg" in ids
+    assert ids["xgboost_target_ibutg"]["name"] == "XGBoost - Target IBUTG"
+
+    tpl = load_template("xgboost_target_ibutg")
+    assert len(tpl["cells"]) == 23
+
+    src = _code_sources("xgboost_target_ibutg")
+    for token in (
+        '"inmet_ibutg"',            # alvo derivado
+        "WORKING_HOUR_START",
+        "WORKING_HOUR_STOP",
+        "INMET_CUTOFF_HOURS",
+        "rmse_working_hours",
+        "derived_vars",
+        "FEATURE_GROUPS",
+        "0.57175",                  # coeficiente Tn (pyinmet)
+        "1.374385",                 # coeficiente Tg (pyinmet)
+        "0.7 * tn + 0.2 * tg",      # IBUTG (pyinmet)
+        "273.15",                   # Kelvin -> Celsius
+        "17.625",                   # Magnus (umidade relativa ERA5-LAND)
+        "mlflow.set_experiment",
+        "from era5_etl.notebooks.backtest import",
+        "REPEAT_RUN_ID",
+        "bilinear_weights(",        # macro builtin exigida pelo TODO (Task 0)
+    ):
+        assert token in src, f"template must contain {token!r}"
+    assert "log_model_run" not in src  # MLflow-only, como o template base
+
+
+def test_ibutg_template_derivation_between_load_and_validation():
+    """A celula de derivacao roda DEPOIS do load e ANTES da validacao
+    (a validacao exige o alvo derivado inmet_ibutg nao-nulo)."""
+    from era5_etl.notebooks.templates import load_template
+
+    srcs = [c["source"] for c in load_template("xgboost_target_ibutg")["cells"]
+            if c["type"] == "code"]
+    i_load = next(i for i, s in enumerate(srcs) if "load_inmet_with_cache(" in s)
+    i_der = next(i for i, s in enumerate(srcs) if "def calc_ibutg" in s)
+    i_val = next(i for i, s in enumerate(srcs) if "VALIDACAO DE DADOS FALHOU" in s)
+    assert i_load < i_der < i_val
+
+
+def test_ibutg_derivation_cell_formulas():
+    """Executa a celula de derivacao numa DataFrame sintetica e confere os
+    valores contra a cadeia de formulas do pyinmet (sem arredondamento)."""
+    import pandas as pd
+
+    from era5_etl.notebooks.templates import load_template
+
+    src = next(
+        c["source"] for c in load_template("xgboost_target_ibutg")["cells"]
+        if c["type"] == "code" and "def calc_ibutg" in c["source"]
+    )
+    df = pd.DataFrame({
+        "era5_land_temperature_2m_bilinear": [303.15],  # 30 degC em Kelvin
+        "era5_land_dewpoint_2m_bilinear": [293.15],     # 20 degC em Kelvin
+        "era5_land_wind_u_10m_bilinear": [3.0],
+        "era5_land_wind_v_10m_bilinear": [0.0],
+        "temp_ar": [30.0],
+        "temp_orvalho": [20.0],
+        "umidade_relativa": [55.0],
+        "vento_velocidade": [3.0],
+    })
+    ns = {
+        "df": df,
+        "era5_land_vars": {"temperature_2m": True},
+        "inmet_vars": {"temp_ar": False},
+        "derived_vars": {"era5_land_ibutg": True, "inmet_tn": False},
+        "ERA5_LAND_CUTOFF_HOURS": 168,
+        "INMET_CUTOFF_HOURS": 24,
+    }
+    exec(src, ns)  # fonte controlada: e o nosso proprio template
+    out = ns["df"]
+
+    # Referencia: formulas pyinmet sem round().
+    vel15 = 3.0 * (1.5 / 10.0) ** 0.21
+    tn = 0.57175 * 20 + 0.19447 * 30 - 0.26523 * vel15 - 0.05134 * 55 + 10.44966
+    tg = 1.374385 * 30 + 0.083627 * 55 - 1.021632 * vel15
+    ibutg = 0.7 * tn + 0.2 * tg + 0.1 * 30
+
+    assert abs(out["inmet_tn"].iloc[0] - tn) < 1e-9
+    assert abs(out["inmet_tg"].iloc[0] - tg) < 1e-9
+    assert abs(out["inmet_ibutg"].iloc[0] - ibutg) < 1e-9
+    # ERA5-LAND: mesma entrada fisica; UR via Magnus ~55.08% -> IBUTG proximo.
+    assert abs(out["era5_land_ibutg"].iloc[0] - ibutg) < 0.05
+
+    # FEATURE_GROUPS montado com origem e cutoff certos.
+    groups = {base: (srccol, cut) for srccol, base, cut in ns["FEATURE_GROUPS"]}
+    assert groups["temperature_2m"] == ("era5_land_temperature_2m_bilinear", 168)
+    assert groups["era5_land_ibutg"] == ("era5_land_ibutg", 168)
