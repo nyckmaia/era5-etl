@@ -221,7 +221,7 @@ def test_xgboost_target_ibutg_template():
     assert ids["xgboost_target_ibutg"]["name"] == "XGBoost - Target IBUTG"
 
     tpl = load_template("xgboost_target_ibutg")
-    assert len(tpl["cells"]) == 23
+    assert len(tpl["cells"]) == 26
 
     src = _code_sources("xgboost_target_ibutg")
     for token in (
@@ -230,6 +230,16 @@ def test_xgboost_target_ibutg_template():
         "WORKING_HOUR_STOP",
         "INMET_CUTOFF_HOURS",
         "rmse_working_hours",
+        "mae_working_hours",        # metricas WH extras (Melhoria 04)
+        "r2_working_hours",
+        "fig_metrics_cmp",          # comparativo 24h vs WH (Melhoria 04)
+        "PERM_WH_REPEATS",          # importancia por permutacao nas WH
+        "TEST_FRACTION = 0.005",    # Melhoria 01
+        '"wind_speed_10m": True',   # Melhoria 02 (default de features)
+        '"wind_u_10m": False',
+        "MONITOR_EVERY",            # monitor de convergencia (Melhoria 05)
+        "OPTUNA_STAGNATION_PATIENCE",
+        "MONITOR_MLFLOW_LIVE",
         "derived_vars",
         "FEATURE_GROUPS",
         "0.57175",                  # coeficiente Tn (pyinmet)
