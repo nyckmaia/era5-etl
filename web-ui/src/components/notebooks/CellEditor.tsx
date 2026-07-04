@@ -1,5 +1,5 @@
 import Editor from "@monaco-editor/react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 interface Props {
   value: string;
@@ -9,6 +9,9 @@ interface Props {
   path?: string;
   onRunRequested?: () => void;
 }
+
+// Floor so an empty/short cell still has a comfortable click target.
+const MIN_HEIGHT = 3 * 19 + 12;
 
 export function CellEditor({
   value,
@@ -20,9 +23,11 @@ export function CellEditor({
   const valueRef = useRef(value);
   valueRef.current = value;
 
-  // Auto-grow: ~20 lines max, min 3.
-  const lineCount = Math.max(3, Math.min(20, value.split("\n").length));
-  const height = `${lineCount * 19 + 12}px`;
+  // The editor always shows its FULL content with no inner vertical scrollbar:
+  // height follows Monaco's real content height (accounts for wrapped lines),
+  // reported via onDidContentSizeChange. Long cells grow the page instead of
+  // scrolling inside a fixed box.
+  const [height, setHeight] = useState(MIN_HEIGHT);
 
   return (
     <Editor
@@ -39,11 +44,18 @@ export function CellEditor({
         scrollBeyondLastLine: false,
         wordWrap: "on",
         lineNumbers: language === "markdown" ? "off" : "on",
+        // No inner vertical scroll — the container grows to fit the content.
         scrollbar: { vertical: "hidden", horizontal: "auto", alwaysConsumeMouseWheel: false },
         renderLineHighlight: "none",
         padding: { top: 6, bottom: 6 },
       }}
       onMount={(editor, monaco) => {
+        const applyHeight = () => {
+          const next = Math.max(MIN_HEIGHT, editor.getContentHeight());
+          setHeight((prev) => (prev === next ? prev : next));
+        };
+        editor.onDidContentSizeChange(applyHeight);
+        applyHeight();
         editor.addCommand(
           monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
           () => {

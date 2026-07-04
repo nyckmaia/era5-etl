@@ -843,6 +843,12 @@ export type CellOutput =
         | "application/vnd.plotly.v1+json"
         | "text/plain";
       data: unknown;
+      /**
+       * Stable identity for in-place updates. When two display outputs share
+       * a `display_id`, the second REPLACES the first (live-updating chart,
+       * e.g. the Optuna convergence monitor) instead of appending.
+       */
+      display_id?: string;
     }
   | { type: "error"; ename: string; evalue: string; traceback: string[] };
 

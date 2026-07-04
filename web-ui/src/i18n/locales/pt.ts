@@ -831,6 +831,8 @@ export const pt = {
       runAll: "Rodar tudo",
       runAllTitle: "Executar todas as células em ordem",
       runAllRunning: "Rodando tudo…",
+      cleanOutputs: "Limpar Resultados",
+      cleanOutputsTitle: "Limpar os resultados de todas as células deste notebook",
       runStatusDone: "Executada",
       runStatusPending: "Ainda não executada",
       runStatusRunning: "Executando…",

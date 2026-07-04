@@ -827,6 +827,8 @@ export const en: Dictionary = {
       runAll: "Run all",
       runAllTitle: "Run every cell in order",
       runAllRunning: "Running all…",
+      cleanOutputs: "Clean All Outputs",
+      cleanOutputsTitle: "Clear the outputs of every cell in this notebook",
       runStatusDone: "Executed",
       runStatusPending: "Not executed yet",
       runStatusRunning: "Running…",

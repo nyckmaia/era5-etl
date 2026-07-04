@@ -9,6 +9,7 @@ import {
   CircleX,
   Clock,
   Download,
+  Eraser,
   FlaskConical,
   Loader2,
   Play,
@@ -113,6 +114,15 @@ export function NotebookEditorPage() {
       queryClient.setQueryData(["notebook", notebookId], data);
     },
   });
+  // "Clean All Outputs": persist the passed-in cleared cells (computed by the
+  // handler so it doesn't race the async setCells).
+  const cleanMut = useMutation({
+    mutationFn: (cleared: NotebookCell[]) =>
+      api.notebooks.save(notebookId, { name, cells: cleared }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["notebook", notebookId], data);
+    },
+  });
   const mlflowMut = useMutation({
     mutationFn: api.mlflow.start,
     onSuccess: ({ url }) => window.open(url, "_blank", "noopener"),
@@ -151,6 +161,20 @@ export function NotebookEditorPage() {
     [],
   );
 
+  // Clear every cell's executed outputs (and the run indicators) and persist,
+  // so a reload stays clean. Reversible: just re-run. Compute the cleared
+  // cells once and use them for both local state and the save.
+  const cleanAllOutputs = useCallback(() => {
+    const cleared = cellsRef.current.map((c) => ({
+      ...c,
+      outputs: [] as CellOutputT[],
+    }));
+    setCells(cleared);
+    setRunStatus({});
+    setElapsed({});
+    cleanMut.mutate(cleared);
+  }, [cleanMut]);
+
   // Execute one cell and resolve when the kernel signals "done". Used both by
   // the per-cell Run button and the sequential "Run all" loop. Resolves with
   // true if the cell finished without an error output, false otherwise.
@@ -178,6 +202,10 @@ export function NotebookEditorPage() {
           return next;
         });
         const collected: CellOutputT[] = [];
+        // Maps a display's `display_id` to its index in `collected`, so a
+        // repeated display with the same id REPLACES its previous output in
+        // place (live-updating chart) instead of stacking a new one.
+        const displayIndex = new Map<string, number>();
         let hadError = false;
         cancelRef.current = streamRunCell(
           notebookId,
@@ -188,7 +216,14 @@ export function NotebookEditorPage() {
             if (type === "stream") {
               collected.push(data as CellOutputT);
             } else if (type === "display") {
-              collected.push(data as CellOutputT);
+              const out = data as CellOutputT;
+              const did = (out as { display_id?: string }).display_id;
+              if (did != null && displayIndex.has(did)) {
+                collected[displayIndex.get(did)!] = out; // update in place
+              } else {
+                if (did != null) displayIndex.set(did, collected.length);
+                collected.push(out);
+              }
             } else if (type === "error") {
               hadError = true;
               collected.push({ type: "error", ...(data as object) } as CellOutputT);
@@ -324,6 +359,20 @@ export function NotebookEditorPage() {
             {mlflowMut.isPending
               ? t("notebooks.editor.mlflowStarting")
               : t("notebooks.editor.mlflow")}
+          </button>
+          <button
+            type="button"
+            className="btn-outline inline-flex items-center gap-1.5"
+            onClick={() => cleanAllOutputs()}
+            disabled={runningAll || runningCell !== null || cleanMut.isPending}
+            title={t("notebooks.editor.cleanOutputsTitle")}
+          >
+            {cleanMut.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Eraser className="h-4 w-4" />
+            )}
+            {t("notebooks.editor.cleanOutputs")}
           </button>
           <button
             type="button"
