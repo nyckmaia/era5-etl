@@ -49,6 +49,18 @@ class _FakeProc:
         self.terminated = True
 
 
+def test_server_concurrency_args_are_multithreaded(monkeypatch):
+    """The `mlflow ui` server must run multi-threaded so it doesn't 'load
+    forever' while a notebook run writes to the file store (single-threaded
+    default serves one request at a time)."""
+    from era5_etl.web.routes import mlflow_ui
+
+    monkeypatch.setattr(mlflow_ui.sys, "platform", "win32")
+    assert mlflow_ui._server_concurrency_args() == ["--waitress-opts", "--threads=8"]
+    monkeypatch.setattr(mlflow_ui.sys, "platform", "linux")
+    assert mlflow_ui._server_concurrency_args() == ["--workers", "4"]
+
+
 def test_status_initially_not_running(client):
     r = client.get("/api/mlflow/ui/status")
     assert r.status_code == 200

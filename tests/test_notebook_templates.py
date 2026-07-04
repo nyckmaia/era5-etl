@@ -234,12 +234,15 @@ def test_xgboost_target_ibutg_template():
         "r2_working_hours",
         "fig_metrics_cmp",          # comparativo 24h vs WH (Melhoria 04)
         "PERM_WH_REPEATS",          # importancia por permutacao nas WH
-        "TEST_FRACTION = 0.005",    # Melhoria 01
+        "TEST_FRACTION = 0.005",    # Melhoria 01 (rodada 2)
         '"wind_speed_10m": True',   # Melhoria 02 (default de features)
         '"wind_u_10m": False',
-        "MONITOR_EVERY",            # monitor de convergencia (Melhoria 05)
+        "MONITOR_EVERY",            # monitor de convergencia
         "OPTUNA_STAGNATION_PATIENCE",
-        "MONITOR_MLFLOW_LIVE",
+        "update_display(",          # grafico Optuna ao vivo in-place (rodada 3)
+        "optuna-monitor-",          # display_id do grafico ao vivo
+        "N_JOBS = max(",            # deixa 1 nucleo livre p/ a MLflow UI
+        'pd.DataFrame({"coluna": training_cols})',  # tabela sem indice redundante
         "derived_vars",
         "FEATURE_GROUPS",
         "0.57175",                  # coeficiente Tn (pyinmet)
@@ -254,6 +257,11 @@ def test_xgboost_target_ibutg_template():
     ):
         assert token in src, f"template must contain {token!r}"
     assert "log_model_run" not in src  # MLflow-only, como o template base
+    # Rodada 3 / M02: o monitor MLflow ao vivo por-trial foi REMOVIDO
+    # (o grafico ao vivo no proprio notebook o substitui) para nao contender
+    # com a MLflow UI durante a busca.
+    assert "MONITOR_MLFLOW_LIVE" not in src
+    assert "_MONITOR_RUN_ID" not in src
 
 
 def test_ibutg_template_derivation_between_load_and_validation():

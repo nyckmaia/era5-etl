@@ -42,6 +42,19 @@ def _port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _server_concurrency_args() -> list[str]:
+    """Extra ``mlflow ui`` args so the server isn't single-threaded.
+
+    Over a file store every request re-scans ``mlruns``; the default server
+    serves one request at a time, so while a notebook run writes runs the UI
+    "loads forever". Give it several worker threads. MLflow uses waitress on
+    Windows (``--waitress-opts``) and gunicorn on POSIX (``--workers``).
+    """
+    if sys.platform == "win32":
+        return ["--waitress-opts", "--threads=8"]
+    return ["--workers", "4"]
+
+
 def _spawn(port: int) -> subprocess.Popen:
     return subprocess.Popen(
         [
@@ -55,6 +68,7 @@ def _spawn(port: int) -> subprocess.Popen:
             "127.0.0.1",
             "--port",
             str(port),
+            *_server_concurrency_args(),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,

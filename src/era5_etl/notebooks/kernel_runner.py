@@ -162,10 +162,23 @@ def _jsonify(v: Any) -> Any:
         return repr(v)
 
 
-def _display(value: Any) -> None:
-    """Dispatch ``value`` to the most informative MIME type."""
+def _display(value: Any, display_id: str | None = None) -> None:
+    """Dispatch ``value`` to the most informative MIME type.
+
+    When ``display_id`` is given it is attached to the ``display`` message so
+    the front-end can REPLACE the previous output carrying the same id in
+    place (a live-updating chart) instead of appending a new one. Without it,
+    every emit appends (legacy behaviour).
+    """
     if value is None:
         return
+
+    def _emit(mime: str, data: dict[str, Any]) -> None:
+        msg: dict[str, Any] = {"type": "display", "mime": mime, "data": data}
+        if display_id is not None:
+            msg["display_id"] = display_id
+        _send(msg)
+
     # Plotly figure
     try:
         import plotly.graph_objects as go  # type: ignore
@@ -179,12 +192,9 @@ def _display(value: Any) -> None:
             # (1969-12-31). ``to_json()`` emits proper JSON (datetimes as
             # ISO-8601 strings, numpy arrays as lists); ``json.loads`` turns
             # it back into plain dict/list/str so the outer dump is a no-op.
-            _send(
-                {
-                    "type": "display",
-                    "mime": "application/vnd.plotly.v1+json",
-                    "data": {"figure": json.loads(value.to_json())},
-                }
+            _emit(
+                "application/vnd.plotly.v1+json",
+                {"figure": json.loads(value.to_json())},
             )
             return
     except ImportError:
@@ -194,21 +204,12 @@ def _display(value: Any) -> None:
         import pandas as pd  # type: ignore
 
         if isinstance(value, pd.DataFrame):
-            _send(
-                {
-                    "type": "display",
-                    "mime": "application/vnd.dataframe+json",
-                    "data": _serialize_dataframe(value),
-                }
-            )
+            _emit("application/vnd.dataframe+json", _serialize_dataframe(value))
             return
         if isinstance(value, pd.Series):
-            _send(
-                {
-                    "type": "display",
-                    "mime": "application/vnd.dataframe+json",
-                    "data": _serialize_dataframe(value.to_frame()),
-                }
+            _emit(
+                "application/vnd.dataframe+json",
+                _serialize_dataframe(value.to_frame()),
             )
             return
     except ImportError:
@@ -217,18 +218,32 @@ def _display(value: Any) -> None:
     text = repr(value)
     if len(text) > MAX_TEXT_BYTES:
         text = text[:MAX_TEXT_BYTES] + " ... [truncated]"
-    _send({"type": "display", "mime": "text/plain", "data": {"text": text}})
+    _emit("text/plain", {"text": text})
 
 
-def _user_display(*objects: Any) -> None:
+def _user_display(*objects: Any, display_id: str | None = None) -> None:
     """Jupyter-compatible ``display()`` exposed to user cells.
 
     Renders each object immediately — not only the cell's last expression —
     so a cell can show a DataFrame/figure *before* it raises or runs more
     code. Matches IPython's ``display`` so cells stay portable to Jupyter.
+
+    Pass ``display_id`` to give the output a stable identity; a later
+    ``display(obj, display_id=same)`` / ``update_display`` replaces it in
+    place (used for the live Optuna convergence chart).
     """
     for obj in objects:
-        _display(obj)
+        _display(obj, display_id=display_id)
+
+
+def _user_update_display(obj: Any, display_id: str) -> None:
+    """Update a previously shown output in place (IPython-compatible name).
+
+    ``update_display(fig, display_id="optuna-monitor")`` re-emits ``fig`` with
+    the same ``display_id`` so the front-end redraws that one output instead
+    of stacking a new chart on every Optuna trial.
+    """
+    _display(obj, display_id=display_id)
 
 
 def _user_warn(*messages: Any) -> None:
@@ -300,6 +315,7 @@ def _boot(data_dir: str, notebook_id: str, runs_url: str, runs_token: str) -> No
     _USER_NS["__notebook_id__"] = notebook_id
     _USER_NS["con"] = connect(Path(data_dir))
     _USER_NS["display"] = _user_display
+    _USER_NS["update_display"] = _user_update_display
     _USER_NS["warn"] = _user_warn
     install_helpers(
         _USER_NS,

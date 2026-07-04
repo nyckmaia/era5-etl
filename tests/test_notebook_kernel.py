@@ -192,6 +192,33 @@ def test_kernel_warn_emits_warning_stream(kernel):
     assert not [e for e in events if e["type"] == "error"]
 
 
+def test_kernel_update_display_carries_display_id(kernel):
+    """`display(obj, display_id=...)` and `update_display(obj, id)` tag the
+    display event with `display_id` so the front-end can replace the previous
+    output in place (live-updating chart) instead of appending a new one."""
+    code = (
+        'display("a", display_id="mon")\n'
+        'update_display("b", display_id="mon")\n'
+    )
+    events = _events(kernel.run_cell("upd", code, "python"))
+    tagged = [
+        e for e in events
+        if e["type"] == "display" and e.get("display_id") == "mon"
+    ]
+    assert len(tagged) == 2, "both emits must carry the same display_id"
+    # text/plain outputs are repr()'d, so "a" -> "'a'"; check containment.
+    assert "a" in tagged[0]["data"]["text"]
+    assert "b" in tagged[1]["data"]["text"]
+
+
+def test_kernel_plain_display_has_no_display_id(kernel):
+    """A display without a display_id must not carry the key — the front-end
+    then appends it (unchanged legacy behaviour)."""
+    events = _events(kernel.run_cell("plain", 'display("x")', "python"))
+    displays = [e for e in events if e["type"] == "display"]
+    assert displays and "display_id" not in displays[0]
+
+
 def test_kernel_busy_raises_for_concurrent_calls(kernel):
     # Start a cell but don't drain it — the lock is held inside run_cell.
     gen = kernel.run_cell("slow", "import time; time.sleep(0.3); 1", "python")
