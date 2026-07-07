@@ -21,6 +21,8 @@ interface Props {
   layout: CellLayout;
   /** Per series (index-aligned to results): draw a dashed mean line. */
   showMean: boolean[];
+  /** Per series (index-aligned): overlay NULL points as red ✕ markers. */
+  markNulls: boolean[];
   /** Per series (index-aligned): visual-only Y unit conversion. */
   transformFns: ((v: number) => number)[];
 }
@@ -31,6 +33,7 @@ export function PlotlyChart({
   styles,
   layout,
   showMean,
+  markNulls,
   transformFns,
 }: Props) {
   const data = useMemo(() => {
@@ -74,9 +77,59 @@ export function PlotlyChart({
           });
         }
       }
+      // Overlay NULL points as small red ✕, interpolated onto the line so the
+      // marker sits where the missing value would be (leading/trailing nulls
+      // use the single available neighbour; an all-null series is skipped).
+      if (markNulls[i]) {
+        const nullX: (typeof r.x)[number][] = [];
+        const nullY: number[] = [];
+        const n = yv.length;
+        let j = 0;
+        while (j < n) {
+          if (yv[j] != null) {
+            j++;
+            continue;
+          }
+          let jl = j - 1;
+          while (jl >= 0 && yv[jl] == null) jl--;
+          let jr = j + 1;
+          while (jr < n && yv[jr] == null) jr++;
+          const yl = jl >= 0 ? (yv[jl] as number) : null;
+          const yr = jr < n ? (yv[jr] as number) : null;
+          const end = jr < n ? jr : n;
+          for (let k = j; k < end; k++) {
+            let y: number | null = null;
+            if (yl != null && yr != null) {
+              y = yl + ((k - jl) / (jr - jl)) * (yr - yl);
+            } else if (yl != null) {
+              y = yl;
+            } else if (yr != null) {
+              y = yr;
+            }
+            if (y != null && Number.isFinite(y)) {
+              nullX.push(r.x[k]);
+              nullY.push(y);
+            }
+          }
+          j = end;
+        }
+        if (nullX.length) {
+          traces.push({
+            type: "scattergl",
+            mode: "markers",
+            name: `${r.name} (nulos)`,
+            x: nullX,
+            y: nullY,
+            yaxis,
+            marker: { color: "#dc2626", symbol: "x", size: 7 },
+            showlegend: false,
+            hovertemplate: "%{x}<br>nulo<extra></extra>",
+          });
+        }
+      }
     });
     return traces;
-  }, [results, styles, seriesId, showMean, transformFns]);
+  }, [results, styles, seriesId, showMean, markNulls, transformFns]);
 
   const hasY2 = results.some((r) => !r.error && r.axis === "y2");
 

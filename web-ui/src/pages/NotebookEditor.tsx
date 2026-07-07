@@ -324,7 +324,8 @@ export function NotebookEditorPage() {
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="rounded border border-transparent bg-transparent px-1 py-0.5 text-2xl font-semibold text-ink-800 outline-none hover:border-ink-200 focus:border-ocean-400"
+            size={Math.min(Math.max(name.length + 1, 12), 60)}
+            className="max-w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-2xl font-semibold text-ink-800 outline-none hover:border-ink-200 focus:border-ocean-400"
           />
         </div>
         <div className="flex items-center gap-3">

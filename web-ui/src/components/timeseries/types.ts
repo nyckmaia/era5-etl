@@ -13,6 +13,9 @@ export interface SeriesCfg {
   name?: string;
   /** Draw the series mean as a constant dashed horizontal line. */
   showMean?: boolean;
+  /** Overlay this series' NULL points as small red ✕ markers, interpolated
+   *  onto the line. Optional so series persisted before this default to off. */
+  markNulls?: boolean;
   /**
    * Visual-only unit conversion applied to Y before plotting/stats.
    * The stored data is never changed. ``preset`` is a key from

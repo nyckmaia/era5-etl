@@ -80,6 +80,22 @@ function loadInfo(r: NotebookRun): { source: string; seconds: number | null } {
   return { source: src, seconds: sec };
 }
 
+// Format seconds as a clock: hh:mm:ss (or dd:hh:mm:ss past a day). Under a
+// minute we keep decimal-seconds so short loads/trainings aren't flattened to
+// 00:00:00.
+function formatDurationClock(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds)) return "—";
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(2)}s`;
+  const total = Math.floor(totalSeconds);
+  const days = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(h)}:${pad(m)}:${pad(s)}`;
+  return days > 0 ? `${days}:${clock}` : clock;
+}
+
 type SortValue = number | string | null;
 
 interface Col {
@@ -136,7 +152,7 @@ export function ModelRunsPanel({ runs }: Props) {
         label: t("notebooks.runs.col.trainingDuration"),
         align: "right",
         sortValue: (r) => r.duration_s,
-        render: (r) => `${r.duration_s.toFixed(2)}s`,
+        render: (r) => formatDurationClock(r.duration_s),
       },
       {
         id: "dataSource",
@@ -152,7 +168,7 @@ export function ModelRunsPanel({ runs }: Props) {
         sortValue: (r) => loadInfo(r).seconds,
         render: (r) => {
           const s = loadInfo(r).seconds;
-          return s === null ? "—" : `${s.toFixed(2)}s`;
+          return s === null ? "—" : formatDurationClock(s);
         },
       },
       ...metricCols,

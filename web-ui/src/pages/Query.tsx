@@ -24,6 +24,8 @@ import { cn } from "@/lib/format";
 import { formatSql } from "@/lib/sql";
 import { buildColumnUnitMap } from "@/lib/units";
 
+import type { SqlEditorHandle } from "@/components/SqlEditor";
+
 const SqlEditor = lazy(() => import("@/components/SqlEditor"));
 
 const routeApi = getRouteApi("/query");
@@ -129,6 +131,9 @@ export function QueryPage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
+  // The SqlEditor is uncontrolled; external SQL (templates, format, builder,
+  // schema insert) is pushed in imperatively via this handle.
+  const editorRef = useRef<SqlEditorHandle>(null);
   const runQuery = useMutation({
     mutationFn: async (sqlArg?: string) => {
       const sql = sqlArg ?? activeTab?.sql;
@@ -214,6 +219,13 @@ export function QueryPage() {
     );
   }
 
+  // Replace the editor's content programmatically (templates, format, builder,
+  // schema insert): update tab state AND push into the uncontrolled editor.
+  function setEditorSql(sql: string) {
+    updateActiveSql(sql);
+    editorRef.current?.setValue(sql);
+  }
+
   function addTab() {
     const id = uid();
     setTabs((prev) => [
@@ -279,7 +291,7 @@ export function QueryPage() {
 
   function handleFormat() {
     if (!activeTab) return;
-    updateActiveSql(tryFormat(activeTab.sql));
+    setEditorSql(tryFormat(activeTab.sql));
   }
 
   // "Run query" (button + Ctrl+Enter): auto-format the active tab, then
@@ -288,7 +300,7 @@ export function QueryPage() {
   function formatAndRun() {
     if (!activeTab) return;
     const fmt = tryFormat(activeTab.sql);
-    updateActiveSql(fmt);
+    setEditorSql(fmt);
     runQuery.mutate(fmt);
   }
 
@@ -340,7 +352,7 @@ export function QueryPage() {
           collapsed={leftCollapsed}
           onToggle={() => setLeftCollapsed((c) => !c)}
           onInsert={(text) =>
-            updateActiveSql(activeTab ? `${activeTab.sql} ${text}` : text)
+            setEditorSql(activeTab ? `${activeTab.sql} ${text}` : text)
           }
           onNewView={() => {
             setEditTarget(null);
@@ -379,6 +391,7 @@ export function QueryPage() {
               {activeTab ? (
                 <SqlEditor
                   key={activeTab.id}
+                  ref={editorRef}
                   path={`tab-${activeTab.id}.sql`}
                   value={activeTab.sql}
                   onChange={(v) => updateActiveSql(v)}
@@ -418,12 +431,12 @@ export function QueryPage() {
                   <input
                     type="number"
                     min={1}
-                    max={100000}
                     value={limit}
                     onChange={(e) => {
                       const v = Number(e.target.value);
-                      if (Number.isFinite(v))
-                        setLimit(Math.min(100000, Math.max(1, v)));
+                      // No upper cap: the user may raise the row limit to any
+                      // value (the backend imposes none). Only floor at 1.
+                      if (Number.isFinite(v)) setLimit(Math.max(1, v));
                     }}
                     className="input w-24 text-xs"
                   />
@@ -480,7 +493,7 @@ export function QueryPage() {
                 <QueryBuilderPanel
                   dataset={focusedDataset}
                   onApply={(sql) => {
-                    updateActiveSql(sql);
+                    setEditorSql(sql);
                     setShowBuilder(false);
                     toast.success("SQL gerado na aba ativa");
                   }}
@@ -553,7 +566,7 @@ export function QueryPage() {
           view={focusedView}
           collapsed={rightCollapsed}
           onToggle={() => setRightCollapsed((c) => !c)}
-          onLoad={(sql) => updateActiveSql(sql)}
+          onLoad={(sql) => setEditorSql(sql)}
         />
       </div>
 

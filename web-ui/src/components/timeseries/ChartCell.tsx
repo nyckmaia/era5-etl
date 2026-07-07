@@ -340,6 +340,7 @@ export function ChartCell({
               styles={cell.traceStyles}
               layout={cell.layout}
               showMean={cell.series.map((s) => !!s.showMean)}
+              markNulls={cell.series.map((s) => !!s.markNulls)}
               transformFns={transformFns}
             />
 
@@ -366,6 +367,11 @@ export function ChartCell({
                     onToggleMean={(v) =>
                       cell.series[i] &&
                       setSeries(i, { ...cell.series[i], showMean: v })
+                    }
+                    markNulls={!!cell.series[i]?.markNulls}
+                    onToggleMarkNulls={(v) =>
+                      cell.series[i] &&
+                      setSeries(i, { ...cell.series[i], markNulls: v })
                     }
                   />
                 ),
@@ -459,12 +465,16 @@ function StatsRow({
   y,
   showMean,
   onToggleMean,
+  markNulls,
+  onToggleMarkNulls,
 }: {
   name: string;
   color: string;
   y: (number | null)[];
   showMean: boolean;
   onToggleMean: (v: boolean) => void;
+  markNulls: boolean;
+  onToggleMarkNulls: (v: boolean) => void;
 }) {
   const s = computeStats(y);
   const items: [string, number | null][] = [
@@ -501,6 +511,17 @@ function StatsRow({
           onChange={(e) => onToggleMean(e.target.checked)}
         />
         linha da média
+      </label>
+      <label
+        className="flex cursor-pointer items-center gap-1.5 text-ink-600"
+        title="Marcar os pontos nulos desta série com um ✕ vermelho, interpolado sobre a linha"
+      >
+        <input
+          type="checkbox"
+          checked={markNulls}
+          onChange={(e) => onToggleMarkNulls(e.target.checked)}
+        />
+        mark null values
       </label>
     </div>
   );

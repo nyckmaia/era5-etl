@@ -180,15 +180,12 @@ export function QueryBuilderPanel({ dataset, onApply }: Props) {
           <input
             type="number"
             min={1}
-            max={100000}
             value={state.limit}
             onChange={(e) =>
               setState((s) => ({
                 ...s,
-                limit: Math.min(
-                  100000,
-                  Math.max(1, Number(e.target.value) || 1),
-                ),
+                // No upper cap — only floor the generated LIMIT at 1.
+                limit: Math.max(1, Number(e.target.value) || 1),
               }))
             }
             className="input w-24 text-xs"

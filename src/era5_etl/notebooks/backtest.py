@@ -188,6 +188,66 @@ def sliding_windows(
     return out
 
 
+def anchored_end_windows(
+    index: pd.DatetimeIndex,
+    *,
+    train_days_list: list[int],
+    test_days: int,
+) -> list[BacktestWindow]:
+    """Fixed most-recent test block; the train slice grows backwards per size.
+
+    Every window shares the SAME test block — the last ``test_days`` of the
+    index (anchored at the most recent data, just before the operational gap).
+    For each entry in ``train_days_list`` the train slice is the ``train_days``
+    immediately preceding that fixed test block. Sizes whose train slice would
+    start before the index are skipped (not enough history). Bounds are
+    half-open, like the other generators; windows are returned sorted by
+    ascending train size (``index`` = position in that order).
+
+    This answers "which training-interval size gives the best score?" with the
+    evaluation point held fixed at the most recent data — unlike the
+    walk-forward generators, whose test block moves forward.
+    """
+    _check_positive(test_days=test_days)
+    _check_index(index)
+    if not train_days_list:
+        raise ValueError("train_days_list is empty")
+    start = index.min()
+    end = index.max()
+    # Half-open test block: +1h so the most recent row is included.
+    test_end = end + pd.Timedelta(hours=1)
+    test_start = test_end - pd.Timedelta(days=test_days)
+    if test_start <= start:
+        raise ValueError(
+            f"No anchored window fits: the period spans {_span_days(index):.1f} "
+            f"days but the fixed test block alone needs test_days={test_days}. "
+            f"Reduce STUDY_TEST_DAYS or widen DATE_START..DATE_END."
+        )
+    out: list[BacktestWindow] = []
+    for train_days in sorted(dict.fromkeys(train_days_list)):
+        _check_positive(train_days=train_days)
+        train_start = test_start - pd.Timedelta(days=train_days)
+        if train_start < start:
+            continue  # not enough history for this training size
+        out.append(
+            BacktestWindow(
+                index=len(out),
+                train_start=train_start,
+                train_end=test_start,
+                test_start=test_start,
+                test_end=test_end,
+            )
+        )
+    if not out:
+        raise ValueError(
+            f"No anchored window fits: the period spans {_span_days(index):.1f} "
+            f"days but even the smallest train size + fixed test block "
+            f"({min(train_days_list)} + {test_days} days) does not fit. "
+            f"Reduce STUDY_TRAIN_MONTHS / STUDY_TEST_DAYS or widen the period."
+        )
+    return out
+
+
 _SWEEP_COLUMNS = [
     "slide_step_days", "train_months", "n_windows",
     "rmse_mean", "rmse_std", "mae_mean", "r2_mean",
@@ -218,4 +278,4 @@ def summarize_sweep(records: list[dict]) -> pd.DataFrame:
     return grouped[_SWEEP_COLUMNS]
 
 
-__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows", "SweepConfig", "build_sweep_grid", "summarize_sweep"]
+__all__ = ["BacktestWindow", "expanding_windows", "sliding_windows", "anchored_end_windows", "SweepConfig", "build_sweep_grid", "summarize_sweep"]

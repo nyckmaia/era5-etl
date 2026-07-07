@@ -221,7 +221,7 @@ def test_xgboost_target_ibutg_template():
     assert ids["xgboost_target_ibutg"]["name"] == "XGBoost - Target IBUTG"
 
     tpl = load_template("xgboost_target_ibutg")
-    assert len(tpl["cells"]) == 26
+    assert len(tpl["cells"]) == 27
 
     src = _code_sources("xgboost_target_ibutg")
     for token in (
@@ -241,6 +241,8 @@ def test_xgboost_target_ibutg_template():
         "OPTUNA_STAGNATION_PATIENCE",
         "update_display(",          # grafico Optuna ao vivo in-place (rodada 3)
         "optuna-monitor-",          # display_id do grafico ao vivo
+        "plot_param_importances",   # celula de diagnostico do espaco de busca
+        "plot_parallel_coordinate",
         "N_JOBS = max(",            # deixa 1 nucleo livre p/ a MLflow UI
         'pd.DataFrame({"coluna": training_cols})',  # tabela sem indice redundante
         "derived_vars",
@@ -254,6 +256,12 @@ def test_xgboost_target_ibutg_template():
         "from era5_etl.notebooks.backtest import",
         "REPEAT_RUN_ID",
         "bilinear_weights(",        # macro builtin exigida pelo TODO (Task 0)
+        'STATION_ID    = "A701"',   # default de estacao
+        "N_SEEDS_PER_WINDOW = 3",   # barras de erro no estudo de tamanho
+        "anchored_end_windows",     # estudo de tamanho de treino (fim fixo)
+        "RUN_TRAIN_SIZE_STUDY",
+        "STUDY_TRAIN_MONTHS",
+        "plot_train_size_study",
     ):
         assert token in src, f"template must contain {token!r}"
     assert "log_model_run" not in src  # MLflow-only, como o template base
@@ -262,6 +270,10 @@ def test_xgboost_target_ibutg_template():
     # com a MLflow UI durante a busca.
     assert "MONITOR_MLFLOW_LIVE" not in src
     assert "_MONITOR_RUN_ID" not in src
+    # Sliding foi removido deste template (so expanding CV + estudo fim-fixo).
+    assert "sliding" not in src.lower()
+    assert "SLIDING_TRAIN_DAYS" not in src
+    assert "SHARE_HYPERPARAMS_ACROSS_METHODS" not in src
 
 
 def test_ibutg_template_derivation_between_load_and_validation():

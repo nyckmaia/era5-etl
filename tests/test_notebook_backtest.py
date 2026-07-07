@@ -8,6 +8,7 @@ import pytest
 from era5_etl.notebooks.backtest import (
     expanding_windows,
     sliding_windows,
+    anchored_end_windows,
     SweepConfig,
     build_sweep_grid,
     summarize_sweep,
@@ -45,6 +46,34 @@ def test_sliding_train_size_is_fixed_and_slides():
         assert w.train_end == w.test_start
     slide = wins[1].train_start - wins[0].train_start
     assert slide == pd.Timedelta(days=15)
+
+
+def test_anchored_end_windows_fixed_test_grows_backwards():
+    idx = _hourly_index(120)
+    wins = anchored_end_windows(idx, train_days_list=[90, 30, 60], test_days=15)
+    assert len(wins) == 3
+    test_end = idx.max() + pd.Timedelta(hours=1)
+    for w in wins:
+        # every window shares the SAME fixed most-recent test block
+        assert w.test_end == test_end
+        assert w.test_start == test_end - pd.Timedelta(days=15)
+        assert w.train_end == w.test_start          # contiguous, no gap
+    # returned sorted ascending by train size, regardless of input order
+    assert [(w.train_end - w.train_start).days for w in wins] == [30, 60, 90]
+    assert [w.index for w in wins] == [0, 1, 2]
+
+
+def test_anchored_end_windows_skips_sizes_that_dont_fit():
+    idx = _hourly_index(90)
+    # test=15 -> test_start at day 75; 30/60 fit, 80 would start before day 0.
+    wins = anchored_end_windows(idx, train_days_list=[30, 60, 80], test_days=15)
+    assert [(w.train_end - w.train_start).days for w in wins] == [30, 60]
+
+
+def test_anchored_end_windows_raises_when_test_block_too_big():
+    idx = _hourly_index(10)
+    with pytest.raises(ValueError, match="No anchored window fits"):
+        anchored_end_windows(idx, train_days_list=[5], test_days=15)
 
 
 def test_max_windows_caps_both_methods():
@@ -143,31 +172,30 @@ def test_summarize_sweep_empty_returns_typed_columns():
     assert len(df) == 0
 
 
-def test_plot_learning_curves_panels():
+def test_plot_train_size_study_panels():
     pytest.importorskip("plotly")
     from era5_etl.notebooks import helpers_module
 
-    sweep_df = pd.DataFrame({
-        "slide_step_days": [7, 7, 30, 30],
-        "train_months": [1, 2, 1, 2],
-        "n_windows": [3, 3, 2, 2],
-        "rmse_mean": [2.0, 1.8, 2.5, 2.1],
-        "rmse_std": [0.2, 0.1, 0.3, 0.2],
-        "mae_mean": [1.0, 0.9, 1.3, 1.1],
-        "r2_mean": [0.8, 0.85, 0.7, 0.75],
+    study_df = pd.DataFrame({
+        "train_months": [1, 2, 3],
+        "train_days": [30, 60, 90],
+        "rmse_mean": [2.5, 1.8, 2.1],
+        "rmse_std": [0.3, 0.1, 0.2],
+        "mae_mean": [1.3, 0.9, 1.1],
+        "r2_mean": [0.7, 0.85, 0.8],
     })
-    expanding_rows = [
-        {"n_train": 720, "rmse": 2.4},
-        {"n_train": 1440, "rmse": 2.0},
-    ]
-    fig = helpers_module.plot_learning_curves(sweep_df, expanding_rows)
-    # 2 unique slide steps (7, 30) + 1 expanding panel = 3 subplot-title annotations
+    fig = helpers_module.plot_train_size_study(study_df)
+    # 3 panels (RMSE / MAE / R²) -> 3 subplot-title annotations
     assert len(fig.layout.annotations) == 3
-    assert any("expanding" in a.text.lower() for a in fig.layout.annotations)
-    assert len(fig.data) >= 3  # at least one trace per panel
+    assert any("rmse" in a.text.lower() for a in fig.layout.annotations)
+    # RMSE + best-star + MAE + R² traces
+    assert len(fig.data) >= 4
+    # best size (min RMSE) is the 2-month one -> starred at x=2
+    star = next(d for d in fig.data if getattr(d.marker, "symbol", None) == "star")
+    assert list(star.x) == [2]
 
 
-def test_install_helpers_registers_plot_learning_curves(tmp_path):
+def test_install_helpers_registers_plot_train_size_study(tmp_path):
     from era5_etl.notebooks import helpers_module
 
     ns: dict = {}
@@ -178,4 +206,4 @@ def test_install_helpers_registers_plot_learning_curves(tmp_path):
         runs_url="http://localhost/runs",
         runs_token="t",
     )
-    assert ns["plot_learning_curves"] is helpers_module.plot_learning_curves
+    assert ns["plot_train_size_study"] is helpers_module.plot_train_size_study

@@ -1,12 +1,21 @@
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
-import { useRef } from "react";
+import { forwardRef, useImperativeHandle, useRef } from "react";
 
 export interface SchemaColumn {
   name: string;
   type: string;
 }
 
+/** Imperative handle so the parent can push SQL into the (uncontrolled)
+ *  editor — templates, formatting, builder output — without feeding `value`
+ *  back on every keystroke (which repositions the caret while typing). */
+export interface SqlEditorHandle {
+  setValue: (sql: string) => void;
+}
+
 interface SqlEditorProps {
+  /** Initial content only — the editor is UNCONTROLLED. Push later changes
+   *  through the imperative `setValue` handle, not by re-rendering `value`. */
   value: string;
   onChange: (value: string) => void;
   onRun: () => void;
@@ -136,15 +145,10 @@ function registerSqlCompletion(monaco: Monaco) {
   });
 }
 
-export default function SqlEditor({
-  value,
-  onChange,
-  onRun,
-  schemaColumns,
-  viewName,
-  path,
-  height = "240px",
-}: SqlEditorProps) {
+const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor(
+  { value, onChange, onRun, schemaColumns, viewName, path, height = "240px" },
+  ref,
+) {
   // Keep the module-level schema ref current on every render so the
   // globally-registered provider always sees the latest dataset.
   schemaRef.columns = schemaColumns;
@@ -153,7 +157,22 @@ export default function SqlEditor({
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
 
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+
+  // External SQL (templates / format / builder) is applied imperatively so
+  // the model — not a lagging React `value` prop — stays the source of truth.
+  useImperativeHandle(
+    ref,
+    () => ({
+      setValue: (sql: string) => {
+        editorRef.current?.setValue(sql);
+      },
+    }),
+    [],
+  );
+
   const handleMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
     registerSqlCompletion(monaco);
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       onRunRef.current();
@@ -167,7 +186,7 @@ export default function SqlEditor({
         language="sql"
         theme="light"
         path={path}
-        value={value}
+        defaultValue={value}
         onChange={(v) => onChange(v ?? "")}
         onMount={handleMount}
         options={{
@@ -181,4 +200,6 @@ export default function SqlEditor({
       />
     </div>
   );
-}
+});
+
+export default SqlEditor;

@@ -406,6 +406,137 @@ ORDER BY
   date,
   hour_utc;"""
 
+# IBUTG (WBGT) per INMET station, then the pairwise difference between every
+# pair of stations within max_dist_km on the same date+hour (haversine).
+_IBUTG_DIFF_STATIONS_SQL = """\
+WITH
+  params AS (
+    SELECT
+      DATE '2025-01-01' AS start_date,
+      DATE '2025-12-31' AS end_date,
+      40.0 AS max_dist_km,
+      'SP' AS uf_filter
+  ),
+  base AS (
+    SELECT
+      date,
+      hour_utc,
+      station,
+      uf,
+      latitude,
+      longitude,
+      altitude,
+      temp_ar,
+      temp_orvalho,
+      umidade_relativa,
+      vento_velocidade,
+      vento_velocidade * POWER(1.5 / 10.0, 0.21) AS vel15,
+      (
+        0.57175 * temp_orvalho + 0.19447 * temp_ar -
+        0.26523 * (vento_velocidade * POWER(1.5 / 10.0, 0.21)) -
+        0.05134 * umidade_relativa + 10.44966
+      ) AS tn,
+      (
+        1.374385 * temp_ar + 0.083627 * umidade_relativa -
+        1.021632 * (vento_velocidade * POWER(1.5 / 10.0, 0.21))
+      ) AS tg
+    FROM
+      inmet
+      CROSS JOIN params
+    WHERE
+      date BETWEEN start_date AND end_date
+      AND uf = uf_filter
+  ),
+  ibutg AS (
+    SELECT
+      *,
+      0.7 * tn + 0.2 * tg + 0.1 * temp_ar AS ibutg
+    FROM
+      base
+  ),
+  pairs AS (
+    SELECT
+      a.date,
+      a.hour_utc,
+      a.station AS station_A,
+      b.station AS station_B,
+      6371.0 * ACOS(
+        LEAST(
+          1.0,
+          COS(RADIANS(a.latitude)) * COS(RADIANS(b.latitude)) * COS(RADIANS(b.longitude) - RADIANS(a.longitude)) + SIN(RADIANS(a.latitude)) * SIN(RADIANS(b.latitude))
+        )
+      ) AS dist,
+      ABS(a.altitude - b.altitude) / 1000.0 AS dist_altura,
+      a.ibutg AS ibutg_A,
+      b.ibutg AS ibutg_B,
+      a.ibutg - b.ibutg AS ibutg_diff
+    FROM
+      ibutg a
+      JOIN ibutg b ON a.date = b.date
+      AND a.hour_utc = b.hour_utc
+      AND a.station < b.station
+  )
+SELECT
+  *
+FROM
+  pairs
+  CROSS JOIN params
+WHERE
+  dist <= max_dist_km
+ORDER BY
+  date, hour_utc;"""
+
+# Per INMET station: date span, row count, and NULL count + percentage for
+# the key observed variables (data-quality audit).
+_INMET_STATIONS_NULLS_SQL = """\
+SELECT
+  station,
+  uf,
+  MIN(date) AS start_date,
+  MAX(date) AS end_date,
+  COUNT(*) AS total_rows,
+  COUNT(*) FILTER(
+    WHERE
+      temp_ar IS NULL
+  ) AS temp_ar_nulls,
+  ROUND(
+    100.0 * COUNT(*) FILTER(
+      WHERE
+        temp_ar IS NULL
+    ) / COUNT(*),
+    2
+  ) AS temp_ar_nulls_pct,
+  COUNT(*) FILTER(
+    WHERE
+      temp_orvalho IS NULL
+  ) AS temp_orvalho_nulls,
+  ROUND(
+    100.0 * COUNT(*) FILTER(
+      WHERE
+        temp_orvalho IS NULL
+    ) / COUNT(*),
+    2
+  ) AS temp_orvalho_nulls_pct,
+  COUNT(*) FILTER(
+    WHERE
+      vento_velocidade IS NULL
+  ) AS vento_velocidade_nulls,
+  ROUND(
+    100.0 * COUNT(*) FILTER(
+      WHERE
+        vento_velocidade IS NULL
+    ) / COUNT(*),
+    2
+  ) AS vento_velocidade_nulls_pct
+FROM
+  inmet
+GROUP BY
+  station,
+  uf
+ORDER BY
+  uf,
+  station;"""
+
 _TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "era5-land-recent",
@@ -528,6 +659,18 @@ _TEMPLATES: list[dict[str, Any]] = [
         ),
         "category": "join",
         "sql": _INMET_ERA5_LAND_INTERPOLATED_QUERY_SQL,
+    },
+    {
+        "id": "inmet-ibutg-diff-stations",
+        "name": "IBUTG difference between INMET stations",
+        "category": "inmet",
+        "sql": _IBUTG_DIFF_STATIONS_SQL,
+    },
+    {
+        "id": "inmet-stations-nulls",
+        "name": "INMET Stations x Nulls",
+        "category": "inmet",
+        "sql": _INMET_STATIONS_NULLS_SQL,
     },
 ]
 

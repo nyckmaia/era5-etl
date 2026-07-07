@@ -33,88 +33,100 @@ def _require(mod: str) -> Any:
         ) from exc
 
 
-def plot_learning_curves(
-    sweep_df,
-    expanding_rows,
+def plot_train_size_study(
+    study_df,
     *,
     metric: str = "rmse",
-    hours_per_month: int = 720,
 ):
-    """Faceted learning curves: one panel per slide step + an expanding panel.
+    """Train-size study: score vs months of training, fixed most-recent test.
+
+    One point per training size (all sharing the same fixed test block, the
+    most recent data before the operational gap). Three panels — RMSE (with
+    error bars = population std across seeds, and the best size starred), MAE
+    and R² — all against months of training. This answers "which training
+    interval gives the best result?" with the evaluation point held fixed.
 
     Parameters
     ----------
-    sweep_df:
-        Output of ``summarize_sweep``. Must contain columns
-        ``slide_step_days``, ``train_months``, ``{metric}_mean``,
-        ``{metric}_std``.
-    expanding_rows:
-        List of dicts with keys ``n_train`` (hours) and ``{metric}``
-        (scalar score for that training window size).
+    study_df:
+        One row per training size. Must contain columns ``train_months``,
+        ``rmse_mean``, ``rmse_std``, ``mae_mean``, ``r2_mean``.
     metric:
-        Column prefix to plot (default ``"rmse"``).
-    hours_per_month:
-        Divisor to convert ``n_train`` hours → months on the X axis
-        (default 720 = 30 d × 24 h).
+        Which panel receives the "best" highlight (default ``"rmse"``).
 
     Returns
     -------
     plotly.graph_objects.Figure
-        One subplot per unique ``slide_step_days`` value, plus one final
-        ``"expanding (treino cresce)"`` subplot. Subplots share the Y axis.
+        A 1×3 subplot (RMSE / MAE / R²) vs months of training.
     """
     _require("pandas")
     go = _require("plotly").graph_objects  # type: ignore
     from plotly.subplots import make_subplots  # type: ignore
 
-    steps = (
-        sorted(sweep_df["slide_step_days"].unique().tolist())
-        if len(sweep_df)
-        else []
-    )
-    titles = [f"sliding: slide={s}d" for s in steps] + ["expanding (treino cresce)"]
-    n = len(titles)
+    df = study_df.sort_values("train_months")
     fig = make_subplots(
-        rows=1, cols=n, subplot_titles=titles, shared_yaxes=True
+        rows=1,
+        cols=3,
+        subplot_titles=(
+            "RMSE x meses de treino",
+            "MAE x meses de treino",
+            "R² x meses de treino",
+        ),
     )
-    mean_col = f"{metric}_mean"
-    std_col = f"{metric}_std"
-    for col, step in enumerate(steps, start=1):
-        sub = sweep_df[sweep_df["slide_step_days"] == step].sort_values(
-            "train_months"
-        )
+    x = df["train_months"]
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=df["rmse_mean"],
+            error_y=dict(type="data", array=df["rmse_std"]),
+            mode="lines+markers",
+            name="RMSE",
+            line=dict(color="#2563eb"),
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+    # Star the best training size on the highlighted metric's panel.
+    if len(df):
+        best = df.loc[df[f"{metric}_mean"].idxmin()]
         fig.add_trace(
             go.Scatter(
-                x=sub["train_months"],
-                y=sub[mean_col],
-                error_y=dict(type="data", array=sub[std_col]),
-                mode="lines+markers",
-                name=f"slide={step}d",
+                x=[best["train_months"]],
+                y=[best[f"{metric}_mean"]],
+                mode="markers+text",
+                marker=dict(color="#dc2626", size=13, symbol="star"),
+                text=[f"melhor: {best['train_months']:g}m"],
+                textposition="top center",
                 showlegend=False,
             ),
             row=1,
-            col=col,
+            col=1,
         )
-    # Expanding panel: X axis = months of training (n_train hours → months).
-    exp = sorted(expanding_rows, key=lambda r: r["n_train"])
     fig.add_trace(
         go.Scatter(
-            x=[r["n_train"] / hours_per_month for r in exp],
-            y=[r[metric] for r in exp],
-            mode="lines+markers",
-            name="expanding",
-            showlegend=False,
-            line=dict(color="#16a34a"),
+            x=x, y=df["mae_mean"], mode="lines+markers", name="MAE",
+            line=dict(color="#f59e0b"), showlegend=False,
         ),
         row=1,
-        col=n,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=df["r2_mean"], mode="lines+markers", name="R²",
+            line=dict(color="#16a34a"), showlegend=False,
+        ),
+        row=1,
+        col=3,
     )
     fig.update_xaxes(title_text="meses de treino")
-    fig.update_yaxes(title_text=metric.upper(), row=1, col=1)
+    fig.update_yaxes(title_text="RMSE", row=1, col=1)
+    fig.update_yaxes(title_text="MAE", row=1, col=2)
+    fig.update_yaxes(title_text="R²", row=1, col=3)
     fig.update_layout(
         template="plotly_white",
         height=380,
-        title=f"Curvas de aprendizado: {metric.upper()} x meses de treino",
+        title="Estudo de tamanho de treino (teste fixo na data mais recente)",
         margin=dict(t=90, b=40),
     )
     return fig
@@ -298,4 +310,4 @@ def install_helpers(
     ns["inmet_with_era5_land"] = inmet_with_era5_land
     ns["plot_predictions"] = plot_predictions
     ns["log_model_run"] = log_model_run
-    ns["plot_learning_curves"] = plot_learning_curves
+    ns["plot_train_size_study"] = plot_train_size_study

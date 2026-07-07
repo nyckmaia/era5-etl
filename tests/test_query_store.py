@@ -35,6 +35,20 @@ def test_templates_are_served(client: TestClient) -> None:
     assert {"id", "name", "sql"} <= set(items[0])
 
 
+def test_inmet_station_templates_present(client: TestClient) -> None:
+    items = {t["id"]: t for t in client.get("/api/query/templates").json()}
+
+    diff = items["inmet-ibutg-diff-stations"]
+    assert diff["name"] == "IBUTG difference between INMET stations"
+    assert "ibutg_diff" in diff["sql"]
+    assert "max_dist_km" in diff["sql"]
+
+    nulls = items["inmet-stations-nulls"]
+    assert nulls["name"] == "INMET Stations x Nulls"
+    assert "temp_ar_nulls_pct" in nulls["sql"]
+    assert "FROM\n  inmet" in nulls["sql"]
+
+
 def test_history_empty_then_append(client: TestClient) -> None:
     assert client.get("/api/query/history/era5_land").json() == []
 
