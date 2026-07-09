@@ -116,7 +116,18 @@ a Typer CLI, and a FastAPI + React/Vite web UI.
   templates still POST `/runs` via `log_model_run`). `web/routes/mlflow_ui.py`
   runs `mlflow ui` on demand (singleton subprocess, lifespan shutdown).
   Backtest window maths lives in `notebooks/backtest.py` (tested, half-open
-  bounds, hourly grid) — never inline it in template JSON. `.ipynb` export
+  bounds, hourly grid) — never inline it in template JSON. The training hot
+  loop of the Optuna templates is device-resident: `notebooks/device_data.py`
+  (tested) uploads features once (cupy when functional, numpy otherwise —
+  same code on Windows/Ubuntu), slices windows by position and caches one
+  `QuantileDMatrix` per window reused across all trials × seeds; templates
+  train via native `xgb.train` + `inplace_predict` with inline `xp` metrics,
+  and prune bad trials per window (`USE_OPTUNA_PRUNING`, **WilcoxonPruner**
+  with per-window reports — NOT MedianPruner, whose best-so-far semantics
+  never prunes when window difficulty varies; budgets must count pruned
+  trials via `remaining_trials(..., include_pruned=True)`). Changing the
+  training path requires bumping
+  `"train_pipeline"` in the fingerprint payload. `.ipynb` export
   goes through `notebooks/ipynb_export.py` + `GET /api/notebooks/{id}/export/ipynb`.
 - **`build_request_cells` is public planner contract.** Both
   `plan_with_diff` and `POST /api/pipeline/diff-preview` call it.

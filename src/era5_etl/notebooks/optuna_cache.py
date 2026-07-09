@@ -75,9 +75,28 @@ def completed_trials(study: optuna.Study) -> int:
     )
 
 
-def remaining_trials(study: optuna.Study, budget: int) -> int:
-    """Trials still to run to reach ``budget`` COMPLETE trials (never negative)."""
-    return max(0, budget - completed_trials(study))
+def finished_trials(study: optuna.Study) -> int:
+    """Number of finished (COMPLETE or PRUNED) trials in the study.
+
+    With a pruner active, the budget must count pruned trials too — otherwise
+    resuming a heavily-pruned cached study re-runs indefinitely (``optimize``
+    counts pruned trials toward ``n_trials``, ``completed_trials`` doesn't).
+    """
+    done = (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
+    return sum(1 for t in study.get_trials(deepcopy=False) if t.state in done)
+
+
+def remaining_trials(
+    study: optuna.Study, budget: int, *, include_pruned: bool = False
+) -> int:
+    """Trials still to run to reach ``budget`` finished trials (never negative).
+
+    ``include_pruned=False`` (default) preserves the historical semantics:
+    budget in COMPLETE trials. Pass ``include_pruned=True`` whenever the study
+    uses a pruner.
+    """
+    have = finished_trials(study) if include_pruned else completed_trials(study)
+    return max(0, budget - have)
 
 
 def _storage_url(db_path) -> str:
@@ -94,11 +113,14 @@ def open_cached_study(
     sampler,
     direction: str = "minimize",
     reset: bool = False,
+    pruner=None,
 ) -> optuna.Study:
     """Open (or create) a persistent study named ``<method>__<fingerprint>``.
 
     With ``load_if_exists=True`` an identical re-run resumes the same study.
-    ``reset=True`` deletes any existing study with that name first.
+    ``reset=True`` deletes any existing study with that name first. ``pruner``
+    lives on the Study object (not the storage), so it must be passed on every
+    open; ``None`` keeps optuna's default (inert without ``trial.report``).
     """
     storage = _storage_url(db_path)
     study_name = f"{method}__{fingerprint}"
@@ -113,6 +135,7 @@ def open_cached_study(
         sampler=sampler,
         direction=direction,
         load_if_exists=True,
+        pruner=pruner,
     )
 
 
@@ -122,6 +145,7 @@ __all__ = [
     "load_json_cache",
     "save_json_cache",
     "completed_trials",
+    "finished_trials",
     "remaining_trials",
     "open_cached_study",
 ]

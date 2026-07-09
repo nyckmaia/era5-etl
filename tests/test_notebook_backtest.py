@@ -207,3 +207,65 @@ def test_install_helpers_registers_plot_train_size_study(tmp_path):
         runs_token="t",
     )
     assert ns["plot_train_size_study"] is helpers_module.plot_train_size_study
+
+
+def test_plot_learning_curves_panels():
+    pytest.importorskip("plotly")
+    from era5_etl.notebooks import helpers_module
+
+    sweep_df = pd.DataFrame({
+        "slide_step_days": [7, 7, 30, 30],
+        "train_months": [1, 2, 1, 2],
+        "n_windows": [6, 6, 3, 3],
+        "rmse_mean": [2.0, 1.6, 2.2, 1.9],
+        "rmse_std": [0.2, 0.1, 0.3, 0.2],
+        "mae_mean": [1.0, 0.8, 1.1, 0.9],
+        "r2_mean": [0.6, 0.75, 0.55, 0.7],
+    })
+    expanding_rows = [
+        {"window": 0, "n_train": 720, "n_test": 360,
+         "rmse": 2.1, "mae": 1.0, "r2": 0.6},
+        {"window": 1, "n_train": 1440, "n_test": 360,
+         "rmse": 1.7, "mae": 0.8, "r2": 0.7},
+    ]
+    fig = helpers_module.plot_learning_curves(sweep_df, expanding_rows)
+    # 1 painel por passo unico (7d, 30d) + 1 painel expanding = 3
+    assert len(fig.layout.annotations) == 3
+    titles = [a.text.lower() for a in fig.layout.annotations]
+    assert any("expanding" in t for t in titles)
+    assert any("7" in t for t in titles) and any("30" in t for t in titles)
+    assert len(fig.data) >= 3
+    # eixo x do painel expanding em meses: n_train / hours_per_month
+    exp_trace = fig.data[-1]
+    assert list(exp_trace.x) == [1.0, 2.0]
+
+
+def test_plot_learning_curves_empty_expanding_rows():
+    pytest.importorskip("plotly")
+    from era5_etl.notebooks import helpers_module
+
+    sweep_df = pd.DataFrame({
+        "slide_step_days": [7],
+        "train_months": [1],
+        "n_windows": [6],
+        "rmse_mean": [2.0],
+        "rmse_std": [0.2],
+        "mae_mean": [1.0],
+        "r2_mean": [0.6],
+    })
+    fig = helpers_module.plot_learning_curves(sweep_df, [])
+    assert len(fig.layout.annotations) == 2      # 1 passo + painel expanding
+
+
+def test_install_helpers_registers_plot_learning_curves(tmp_path):
+    from era5_etl.notebooks import helpers_module
+
+    ns: dict = {}
+    helpers_module.install_helpers(
+        ns,
+        data_dir=tmp_path,
+        notebook_id="nb",
+        runs_url="http://localhost/runs",
+        runs_token="t",
+    )
+    assert ns["plot_learning_curves"] is helpers_module.plot_learning_curves

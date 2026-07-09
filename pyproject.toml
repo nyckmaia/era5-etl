@@ -91,6 +91,11 @@ regions-build = [
     "geopandas>=1.0",
     "shapely>=2.0",
 ]
+# Dados residentes na GPU nos templates de notebook (Windows/Linux, CUDA 12).
+# Opcional: sem cupy os templates detectam e caem para CPU sem quebrar.
+gpu = [
+    "cupy-cuda12x>=13",
+]
 
 [project.scripts]
 era5 = "era5_etl.cli:app"

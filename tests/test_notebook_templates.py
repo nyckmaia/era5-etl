@@ -197,6 +197,21 @@ def test_xgboost_optuna_windows_template():
     assert "SLIDING_TRAIN_DAYS" in joined
     # The removed search dimension must not resurface.
     assert "train_window_days" not in joined
+    # Hot loop residente no device: matrizes por janela + treino nativo.
+    for token in (
+        "from era5_etl.notebooks.device_data import",
+        "WindowMatrixCache",
+        "inplace_predict(",
+        "USE_OPTUNA_PRUNING",
+        "PRUNER_WARMUP_WINDOWS",
+        "TrialPruned",
+        "train_pipeline",
+        "include_pruned=",
+        # Eixo Y do grafico de previsao herda TARGET_VAR (dinamico).
+        "title_text=TARGET_VAR",
+    ):
+        assert token in joined, f"windows template must contain {token!r}"
+    assert "Air temperature" not in joined  # label fixo substituido pelo alvo
 
 
 def test_windows_template_has_cache_and_sweep_config():
@@ -262,8 +277,22 @@ def test_xgboost_target_ibutg_template():
         "RUN_TRAIN_SIZE_STUDY",
         "STUDY_TRAIN_MONTHS",
         "plot_train_size_study",
+        # Hot loop residente no device (dados sobem 1x; QDM cacheada/janela)
+        "from era5_etl.notebooks.device_data import",
+        "WindowMatrixCache",
+        "inplace_predict(",
+        "USE_OPTUNA_PRUNING",       # poda de trials ruins por janela
+        "PRUNER_WARMUP_WINDOWS",
+        "TrialPruned",
+        "train_pipeline",           # versao do pipeline no fingerprint do cache
+        "include_pruned=",
+        # Eixo Y dos graficos de previsao herda o alvo configurado -- mudou
+        # TARGET_VAR, o rotulo acompanha (nada de label fixo herdado do
+        # template base).
+        "title_text=TARGET_VAR",
     ):
         assert token in src, f"template must contain {token!r}"
+    assert "Air temperature" not in src  # rotulo fixo do template base
     assert "log_model_run" not in src  # MLflow-only, como o template base
     # Rodada 3 / M02: o monitor MLflow ao vivo por-trial foi REMOVIDO
     # (o grafico ao vivo no proprio notebook o substitui) para nao contender

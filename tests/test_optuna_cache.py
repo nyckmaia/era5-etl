@@ -83,3 +83,93 @@ def test_open_cached_study_separates_by_method_and_fingerprint(tmp_path):
     a.optimize(lambda t: t.suggest_float("x", 0, 1), n_trials=2)
     b = oc.open_cached_study(method="m", fingerprint="fp2", db_path=db, sampler=_sampler())
     assert oc.completed_trials(b) == 0           # different fingerprint = different study
+
+
+def _pruning_objective(trial):
+    """Poda os trials impares; completa os pares."""
+    x = trial.suggest_float("x", 0, 1)
+    trial.report(x, step=0)
+    if trial.number % 2 == 1:
+        raise optuna.TrialPruned()
+    return x
+
+
+def test_finished_trials_counts_pruned(tmp_path):
+    study = oc.open_cached_study(
+        method="m", fingerprint="fp", db_path=tmp_path / "nb.db",
+        sampler=_sampler(),
+    )
+    study.optimize(_pruning_objective, n_trials=6)
+    assert oc.completed_trials(study) == 3        # so os pares
+    assert oc.finished_trials(study) == 6         # COMPLETE + PRUNED
+
+
+def test_remaining_trials_include_pruned(tmp_path):
+    study = oc.open_cached_study(
+        method="m", fingerprint="fp", db_path=tmp_path / "nb.db",
+        sampler=_sampler(),
+    )
+    study.optimize(_pruning_objective, n_trials=6)
+    # default (back-compat): orcamento em trials COMPLETE
+    assert oc.remaining_trials(study, 5) == 2
+    # com pruning ligado o orcamento conta trials TERMINADOS (senao a retomada
+    # do cache re-roda indefinidamente estudos com muita poda)
+    assert oc.remaining_trials(study, 5, include_pruned=True) == 0
+    assert oc.remaining_trials(study, 10, include_pruned=True) == 4
+
+
+def test_wilcoxon_pruner_prunes_paired_window_reports(tmp_path):
+    """Pino do desenho dos templates: valores POR JANELA (passo = indice) +
+    WilcoxonPruner (pareado vs o melhor trial) devem podar trials ruins mesmo
+    com dificuldade variavel entre janelas — o cenario em que o MedianPruner
+    ('best-so-far' vs mediana) nao poda nada."""
+    import warnings
+
+    import numpy as np
+
+    base = np.array([2.45, 2.65, 2.60, 2.95, 3.00, 3.05])  # janela 0 facil
+    rng = np.random.default_rng(0)
+
+    def objective(trial):
+        q = trial.suggest_float("q", 0.0, 1.0)
+        vals = []
+        for step, b in enumerate(base):
+            v = float(b + q * 0.6 + rng.normal(0, 0.02))
+            vals.append(v)
+            trial.report(v, step=step)
+            done = trial.study.get_trials(
+                deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+            if len(done) >= 5 and trial.should_prune():
+                raise optuna.TrialPruned()
+        return float(np.mean(vals))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # WilcoxonPruner e experimental
+        pruner = optuna.pruners.WilcoxonPruner(p_threshold=0.1, n_startup_steps=2)
+    study = oc.open_cached_study(
+        method="m", fingerprint="fp", db_path=tmp_path / "nb.db",
+        sampler=optuna.samplers.TPESampler(seed=42), pruner=pruner,
+    )
+    study.optimize(objective, n_trials=30)
+    states = [t.state for t in study.trials]
+    n_pruned = sum(1 for s in states if s == optuna.trial.TrialState.PRUNED)
+    assert n_pruned >= 5                       # poda de verdade
+    assert oc.finished_trials(study) == 30     # podados contam no orcamento
+    assert study.best_trial.state == optuna.trial.TrialState.COMPLETE
+
+
+def test_open_cached_study_passes_pruner(tmp_path):
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=2, n_warmup_steps=1)
+    study = oc.open_cached_study(
+        method="m", fingerprint="fp", db_path=tmp_path / "nb.db",
+        sampler=_sampler(), pruner=pruner,
+    )
+    assert study.pruner is pruner
+    # default continua funcionando (pruner=None -> default do optuna, inerte
+    # sem chamadas a trial.report)
+    other = oc.open_cached_study(
+        method="m2", fingerprint="fp", db_path=tmp_path / "nb.db",
+        sampler=_sampler(),
+    )
+    other.optimize(lambda t: t.suggest_float("x", 0, 1), n_trials=1)
+    assert oc.completed_trials(other) == 1

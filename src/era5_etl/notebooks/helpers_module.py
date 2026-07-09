@@ -132,6 +132,98 @@ def plot_train_size_study(
     return fig
 
 
+def plot_learning_curves(
+    sweep_df,
+    expanding_rows,
+    *,
+    metric: str = "rmse",
+    hours_per_month: int = 720,
+):
+    """Learning curves of the window sweep: score vs months of training.
+
+    One panel per sliding step (``slide_step_days``) drawn from the sweep
+    summary, plus one final panel with the expanding backtest (train grows
+    window by window). All panels share the x axis "months of training" so
+    the panels answer, side by side, "how much history does the model need
+    and how fast can the window slide?".
+
+    Parameters
+    ----------
+    sweep_df:
+        Output of :func:`era5_etl.notebooks.backtest.summarize_sweep` — one
+        row per (slide step x training size) with ``<metric>_mean`` columns.
+    expanding_rows:
+        The per-window record dicts of the expanding backtest (each carrying
+        ``n_train`` and the metric). May be empty (panel stays blank).
+    metric:
+        Which metric to plot (default ``"rmse"``).
+    hours_per_month:
+        Hours per month used to convert ``n_train`` (rows, hourly grid) into
+        months on the expanding panel's x axis.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        A 1×(n_steps+1) subplot figure.
+    """
+    _require("pandas")
+    go = _require("plotly").graph_objects  # type: ignore
+    from plotly.subplots import make_subplots  # type: ignore
+
+    steps = sorted(sweep_df["slide_step_days"].unique().tolist())
+    titles = [f"passo {int(s)}d" for s in steps] + ["expanding (treino cresce)"]
+    fig = make_subplots(rows=1, cols=len(steps) + 1, subplot_titles=titles)
+
+    colors = ["#2563eb", "#f59e0b", "#16a34a", "#9333ea", "#dc2626"]
+    for i, step in enumerate(steps):
+        sub = sweep_df[sweep_df["slide_step_days"] == step].sort_values(
+            "train_months"
+        )
+        err = (
+            dict(type="data", array=sub[f"{metric}_std"])
+            if f"{metric}_std" in sub.columns
+            else None
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=sub["train_months"],
+                y=sub[f"{metric}_mean"],
+                error_y=err,
+                mode="lines+markers",
+                name=f"passo {int(step)}d",
+                line=dict(color=colors[i % len(colors)]),
+                showlegend=False,
+            ),
+            row=1,
+            col=i + 1,
+        )
+
+    exp_x = [r["n_train"] / float(hours_per_month) for r in expanding_rows]
+    exp_y = [r[metric] for r in expanding_rows]
+    fig.add_trace(
+        go.Scatter(
+            x=exp_x,
+            y=exp_y,
+            mode="lines+markers",
+            name="expanding",
+            line=dict(color="#0f766e"),
+            showlegend=False,
+        ),
+        row=1,
+        col=len(steps) + 1,
+    )
+
+    fig.update_xaxes(title_text="meses de treino")
+    fig.update_yaxes(title_text=metric.upper(), row=1, col=1)
+    fig.update_layout(
+        template="plotly_white",
+        height=380,
+        title=f"Curvas de aprendizado ({metric.upper()} x meses de treino)",
+        margin=dict(t=90, b=40),
+    )
+    return fig
+
+
 def install_helpers(
     ns: dict[str, Any],
     *,
@@ -311,3 +403,4 @@ def install_helpers(
     ns["plot_predictions"] = plot_predictions
     ns["log_model_run"] = log_model_run
     ns["plot_train_size_study"] = plot_train_size_study
+    ns["plot_learning_curves"] = plot_learning_curves
