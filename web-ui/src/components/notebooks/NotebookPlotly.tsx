@@ -18,9 +18,18 @@ interface PlotlyFigure {
 }
 
 export function NotebookPlotly({ figure }: { figure: PlotlyFigure }) {
+  // Reserve the figure's final height while plotly.js lazy-loads. A tiny
+  // fallback made every plot grow ~400px after load, shifting the whole
+  // page under the user's cursor (clicks landed on the wrong cell/line).
+  const height =
+    typeof figure.layout?.height === "number" ? figure.layout.height : 380;
   return (
     <Suspense
-      fallback={<div className="text-xs text-ink-400">Loading plot…</div>}
+      fallback={
+        <div style={{ minHeight: height }} className="text-xs text-ink-400">
+          Loading plot…
+        </div>
+      }
     >
       <Plot
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,7 +37,7 @@ export function NotebookPlotly({ figure }: { figure: PlotlyFigure }) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         layout={{ autosize: true, ...(figure.layout ?? {}) } as any}
         useResizeHandler
-        style={{ width: "100%", minHeight: 380 }}
+        style={{ width: "100%", minHeight: height }}
         config={{ displaylogo: false, responsive: true }}
       />
     </Suspense>

@@ -406,11 +406,15 @@ def test_xgboost_target_ibutg_diff_template():
         "fig_ci",
         '"quantiles": QUANTILES',      # param registrado no MLflow
         "quantile_model.save_model",   # artifact do booster quantilico
-        # 4 dummies de regime do dia (horario de Brasilia -> UTC, +3)
+        # 4 dummies de regime do dia (horario de Brasilia -> UTC, +3),
+        # com toggles no dicionario regime_vars (celula de catalogo) que
+        # tambem entram no fingerprint do cache do Optuna
         "regime_madrugada",
         "regime_manha",
         "regime_tarde",
         "regime_noite",
+        "regime_vars",
+        '"regime_vars": sorted(',
         # identidade MLflow renomeada
         '"model_name": "xgboost_target_ibutg_diff"',
         # invariantes herdados do template base
@@ -419,7 +423,18 @@ def test_xgboost_target_ibutg_diff_template():
         "r2_working_hours",
         "fig_metrics_cmp",
         "PERM_WH_REPEATS",
+        # holdout controlavel por horas (padrao, 24h) ou por fracao
+        'TEST_MODE     = "hours"',
+        "TEST_HOURS    = 24",
         "TEST_FRACTION = 0.005",
+        # espaco de busca do Optuna na celula de config, com learning_rate
+        # 0.1-0.5 discretizado em passos de 0.05, consumido por
+        # _suggest_hyper e incluso no fingerprint
+        "OPTUNA_SEARCH_SPACE = {",
+        '"low": 0.1,  "high": 0.5, "step": 0.05',
+        '"search_space": OPTUNA_SEARCH_SPACE',
+        '"search_space_version": "v2"',
+        "N_TRIALS  = 50",
         "INMET_CUTOFF_HOURS",
         "0.57175",                  # coeficiente Tn (pyinmet)
         "1.374385",                 # coeficiente Tg (pyinmet)
@@ -456,6 +471,7 @@ def test_xgboost_target_ibutg_diff_template():
     assert 'TARGET_VAR    = "inmet_ibutg"    #' not in src   # alvo antigo
     assert "list(range(0, 25))" not in src                   # lags antigos
     assert "INTERPOLATE_TARGET = False" not in src
+    assert 'learning_rate", 0.01, 0.3' not in src            # faixa antiga inline
 
 
 def test_ibutg_diff_template_derivation_between_load_and_validation():
@@ -530,17 +546,23 @@ def test_ibutg_diff_regime_features_cell():
         "era5_land_ibutg": np.linspace(20.0, 30.0, 200),
         "inmet_ibutg_diff": rng.normal(0.0, 1.0, 200),
     })
-    ns = {
-        "df": df,
-        "TARGET_VAR": "inmet_ibutg_diff",
-        "LAG_HOURS": list(range(0, 7)),
-        # cutoff pequeno para sobrar > 50 linhas na grade sintetica
-        "FEATURE_GROUPS": [("era5_land_temperature_2m_bilinear",
-                            "temperature_2m", 24)],
-    }
-    exec(src, ns)  # fonte controlada: e o nosso proprio template
-    out = ns["clean"]
     regimes = ["regime_madrugada", "regime_manha", "regime_tarde", "regime_noite"]
+
+    def _run(regime_vars):
+        ns = {
+            "df": df,
+            "TARGET_VAR": "inmet_ibutg_diff",
+            "LAG_HOURS": list(range(0, 7)),
+            "regime_vars": regime_vars,
+            # cutoff pequeno para sobrar > 50 linhas na grade sintetica
+            "FEATURE_GROUPS": [("era5_land_temperature_2m_bilinear",
+                                "temperature_2m", 24)],
+        }
+        exec(src, ns)  # fonte controlada: e o nosso proprio template
+        return ns
+
+    ns = _run({r: True for r in regimes})
+    out = ns["clean"]
     for r in regimes:
         assert r in ns["CYCLICAL_COLS"]
         assert r in ns["CANDIDATE_COLS"]
@@ -551,3 +573,50 @@ def test_ibutg_diff_regime_features_cell():
     assert ((out["regime_manha"] == 1) == ((h >= 9) & (h < 15))).all()
     assert ((out["regime_tarde"] == 1) == ((h >= 15) & (h < 21))).all()
     assert ((out["regime_noite"] == 1) == ((h >= 21) | (h < 3))).all()
+
+    # toggle desligado no dicionario regime_vars -> sai das candidatas
+    # (a coluna continua sendo calculada, so nao vira feature)
+    ns_off = _run({**{r: True for r in regimes}, "regime_noite": False})
+    assert "regime_noite" not in ns_off["CYCLICAL_COLS"]
+    assert "regime_noite" not in ns_off["CANDIDATE_COLS"]
+    assert "regime_madrugada" in ns_off["CANDIDATE_COLS"]
+    assert "regime_noite" in ns_off["clean"].columns
+
+
+def test_ibutg_diff_test_hours_split_cell():
+    """Executa a celula do split de holdout: TEST_MODE='hours' reserva
+    exatamente TEST_HOURS linhas e recalcula TEST_FRACTION; o modo
+    'fraction' preserva o comportamento antigo; modo invalido explode."""
+    import numpy as np
+    import pandas as pd
+    import pytest
+
+    from era5_etl.notebooks.templates import load_template
+
+    src = next(
+        c["source"] for c in load_template("xgboost_target_ibutg_diff")["cells"]
+        if c["type"] == "code" and "n_test = max(1, int(n * TEST_FRACTION))" in c["source"]
+    )
+    clean = pd.DataFrame(
+        {"x": np.arange(500.0)},
+        index=pd.date_range("2025-01-01", periods=500, freq="h"),
+    )
+
+    ns = {"clean": clean, "TEST_MODE": "hours", "TEST_HOURS": 24,
+          "TEST_FRACTION": 0.005}
+    exec(src, ns)  # fonte controlada: e o nosso proprio template
+    assert len(ns["test"]) == 24
+    assert len(ns["trainval"]) == 476
+    assert ns["TEST_FRACTION"] == 24 / 500          # fracao EFETIVA recalculada
+    assert ns["trainval"].index.max() < ns["test"].index.min()
+
+    ns = {"clean": clean, "TEST_MODE": "fraction", "TEST_HOURS": 24,
+          "TEST_FRACTION": 0.01}
+    exec(src, ns)
+    assert len(ns["test"]) == 5                      # int(500 * 0.01)
+    assert ns["TEST_FRACTION"] == 0.01               # modo antigo: intocado
+
+    ns = {"clean": clean, "TEST_MODE": "typo", "TEST_HOURS": 24,
+          "TEST_FRACTION": 0.01}
+    with pytest.raises(ValueError, match="TEST_MODE invalido"):
+        exec(src, ns)

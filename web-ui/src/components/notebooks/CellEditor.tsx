@@ -10,8 +10,11 @@ interface Props {
   onRunRequested?: () => void;
 }
 
+// Monaco's line height at fontSize 13, + vertical padding (6 top + 6 bottom).
+const LINE_HEIGHT = 19;
+const V_PADDING = 12;
 // Floor so an empty/short cell still has a comfortable click target.
-const MIN_HEIGHT = 3 * 19 + 12;
+const MIN_HEIGHT = 3 * LINE_HEIGHT + V_PADDING;
 
 export function CellEditor({
   value,
@@ -27,7 +30,14 @@ export function CellEditor({
   // height follows Monaco's real content height (accounts for wrapped lines),
   // reported via onDidContentSizeChange. Long cells grow the page instead of
   // scrolling inside a fixed box.
-  const [height, setHeight] = useState(MIN_HEIGHT);
+  // Initial height is ESTIMATED from the line count instead of the 3-line
+  // floor: with dozens of cells, mounting all of them tiny and growing them
+  // one by one reflowed the page for seconds — clicks aimed at a cell landed
+  // on the wrong spot (cursor at the start of the cell). Wrapped lines are
+  // corrected by onDidContentSizeChange with only a small shift.
+  const [height, setHeight] = useState(() =>
+    Math.max(MIN_HEIGHT, value.split("\n").length * LINE_HEIGHT + V_PADDING),
+  );
 
   return (
     <Editor
@@ -42,6 +52,9 @@ export function CellEditor({
         minimap: { enabled: false },
         fontSize: 13,
         scrollBeyondLastLine: false,
+        // Re-measure on container resize (side panel toggle, scrollbar
+        // appearing): a stale layout maps clicks to the wrong column.
+        automaticLayout: true,
         wordWrap: "on",
         lineNumbers: language === "markdown" ? "off" : "on",
         // No inner vertical scroll — the container grows to fit the content.
