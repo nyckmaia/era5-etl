@@ -366,3 +366,188 @@ def test_ibutg_derivation_cell_formulas():
     groups = {base: (srccol, cut) for srccol, base, cut in ns["FEATURE_GROUPS"]}
     assert groups["temperature_2m"] == ("era5_land_temperature_2m_bilinear", 168)
     assert groups["era5_land_ibutg"] == ("era5_land_ibutg", 168)
+
+
+# --- "XGBoost - Target IBUTG diff" template ---------------------------------
+
+
+def test_xgboost_target_ibutg_diff_template():
+    from era5_etl.notebooks.templates import list_templates, load_template
+
+    ids = {t["id"]: t for t in list_templates()}
+    assert "xgboost_target_ibutg_diff" in ids
+    assert ids["xgboost_target_ibutg_diff"]["name"] == "XGBoost - Target IBUTG diff"
+
+    tpl = load_template("xgboost_target_ibutg_diff")
+    assert len(tpl["cells"]) == 29
+
+    src = _code_sources("xgboost_target_ibutg_diff")
+    for token in (
+        # alvo diff + derivacao inline visivel na celula de derivadas
+        'TARGET_VAR    = "inmet_ibutg_diff"',
+        'df["inmet_ibutg_diff"] = df["inmet_ibutg"] - df["era5_land_ibutg"]',
+        # reconstrucao pred_final = era5_land_ibutg + diff previsto
+        'era5_offset = test["era5_land_ibutg"].to_numpy()',
+        "y_true_ibutg = era5_offset + y_true",
+        "y_pred_ibutg = era5_offset + y_pred",
+        "q_pred_ibutg = era5_offset[:, None] + q_pred_diff",
+        # lags curtos
+        "LAG_HOURS = list(range(0, 7))",
+        # horario de trabalho local de Brasilia expresso em UTC (+3)
+        "WORKING_HOUR_START = 7 + 3",
+        "WORKING_HOUR_STOP = 19 + 3",
+        # interpolacao do alvo LIGADA neste template
+        "INTERPOLATE_TARGET = True",
+        # incerteza quantilica no refit final + grafico de bandas
+        "QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]",
+        '"reg:quantileerror"',
+        '"quantile_alpha": QUANTILES',
+        "quantile_coverage_90",
+        "fig_ci",
+        '"quantiles": QUANTILES',      # param registrado no MLflow
+        "quantile_model.save_model",   # artifact do booster quantilico
+        # 4 dummies de regime do dia (horario de Brasilia -> UTC, +3)
+        "regime_madrugada",
+        "regime_manha",
+        "regime_tarde",
+        "regime_noite",
+        # identidade MLflow renomeada
+        '"model_name": "xgboost_target_ibutg_diff"',
+        # invariantes herdados do template base
+        "rmse_working_hours",
+        "mae_working_hours",
+        "r2_working_hours",
+        "fig_metrics_cmp",
+        "PERM_WH_REPEATS",
+        "TEST_FRACTION = 0.005",
+        "INMET_CUTOFF_HOURS",
+        "0.57175",                  # coeficiente Tn (pyinmet)
+        "1.374385",                 # coeficiente Tg (pyinmet)
+        "0.7 * tn + 0.2 * tg",      # IBUTG (pyinmet)
+        "273.15",                   # Kelvin -> Celsius
+        "17.625",                   # Magnus (umidade relativa ERA5-LAND)
+        "mlflow.set_experiment",
+        "from era5_etl.notebooks.backtest import",
+        "REPEAT_RUN_ID",
+        "bilinear_weights(",
+        'STATION_ID    = "A701"',
+        "N_SEEDS_PER_WINDOW = 3",
+        "anchored_end_windows",
+        "RUN_TRAIN_SIZE_STUDY",
+        "from era5_etl.notebooks.device_data import",
+        "WindowMatrixCache",
+        "inplace_predict(",
+        "USE_OPTUNA_PRUNING",
+        "PRUNER_WARMUP_WINDOWS",
+        "TrialPruned",
+        "train_pipeline",
+        "include_pruned=",
+    ):
+        assert token in src, f"template must contain {token!r}"
+    # negativos herdados do template base + garantias de que a config
+    # antiga (alvo absoluto, lags 0..24, interpolacao desligada) sumiu
+    assert "Air temperature" not in src
+    assert "log_model_run" not in src
+    assert "MONITOR_MLFLOW_LIVE" not in src
+    assert "_MONITOR_RUN_ID" not in src
+    assert "sliding" not in src.lower()
+    assert "SLIDING_TRAIN_DAYS" not in src
+    assert "SHARE_HYPERPARAMS_ACROSS_METHODS" not in src
+    assert 'TARGET_VAR    = "inmet_ibutg"    #' not in src   # alvo antigo
+    assert "list(range(0, 25))" not in src                   # lags antigos
+    assert "INTERPOLATE_TARGET = False" not in src
+
+
+def test_ibutg_diff_template_derivation_between_load_and_validation():
+    """A celula de derivacao (que cria o alvo inmet_ibutg_diff) roda DEPOIS
+    do load e ANTES da validacao, como no template base."""
+    from era5_etl.notebooks.templates import load_template
+
+    srcs = [c["source"] for c in load_template("xgboost_target_ibutg_diff")["cells"]
+            if c["type"] == "code"]
+    i_load = next(i for i, s in enumerate(srcs) if "load_inmet_with_cache(" in s)
+    i_der = next(i for i, s in enumerate(srcs) if "def calc_ibutg" in s)
+    i_val = next(i for i, s in enumerate(srcs) if "VALIDACAO DE DADOS FALHOU" in s)
+    assert i_load < i_der < i_val
+
+
+def test_ibutg_diff_derivation_cell_formulas():
+    """Executa a celula de derivacao numa DataFrame sintetica: o alvo diff
+    e exatamente inmet_ibutg - era5_land_ibutg (mesma linha)."""
+    import pandas as pd
+
+    from era5_etl.notebooks.templates import load_template
+
+    src = next(
+        c["source"] for c in load_template("xgboost_target_ibutg_diff")["cells"]
+        if c["type"] == "code" and "def calc_ibutg" in c["source"]
+    )
+    df = pd.DataFrame({
+        "era5_land_temperature_2m_bilinear": [303.15],  # 30 degC em Kelvin
+        "era5_land_dewpoint_2m_bilinear": [293.15],     # 20 degC em Kelvin
+        "era5_land_wind_u_10m_bilinear": [3.0],
+        "era5_land_wind_v_10m_bilinear": [0.0],
+        "temp_ar": [30.0],
+        "temp_orvalho": [20.0],
+        "umidade_relativa": [55.0],
+        "vento_velocidade": [3.0],
+    })
+    ns = {
+        "df": df,
+        "era5_land_vars": {"temperature_2m": True},
+        "inmet_vars": {"temp_ar": False},
+        "derived_vars": {"era5_land_ibutg": True, "inmet_tn": False},
+        "ERA5_LAND_CUTOFF_HOURS": 168,
+        "INMET_CUTOFF_HOURS": 24,
+    }
+    exec(src, ns)  # fonte controlada: e o nosso proprio template
+    out = ns["df"]
+    assert abs(out["inmet_ibutg_diff"].iloc[0]
+               - (out["inmet_ibutg"].iloc[0] - out["era5_land_ibutg"].iloc[0])) < 1e-12
+
+
+def test_ibutg_diff_regime_features_cell():
+    """Executa a celula de feature engineering com 200 h sinteticas: as 4
+    dummies de regime particionam as 24 h (exatamente 1 regime ativo por
+    linha, incluindo o wrap da 'noite' na meia-noite UTC) e seguem o mapa
+    Brasilia -> UTC (+3)."""
+    import numpy as np
+    import pandas as pd
+
+    from era5_etl.notebooks.templates import load_template
+
+    src = next(
+        c["source"] for c in load_template("xgboost_target_ibutg_diff")["cells"]
+        if c["type"] == "code" and "regime_madrugada" in c["source"]
+        and "def build_design_matrix" in c["source"]
+    )
+    idx = pd.date_range("2025-01-01", periods=200, freq="h")
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({
+        "date": idx.date,
+        "hour_utc": idx.hour,
+        "era5_land_temperature_2m_bilinear": np.linspace(290.0, 310.0, 200),
+        "era5_land_ibutg": np.linspace(20.0, 30.0, 200),
+        "inmet_ibutg_diff": rng.normal(0.0, 1.0, 200),
+    })
+    ns = {
+        "df": df,
+        "TARGET_VAR": "inmet_ibutg_diff",
+        "LAG_HOURS": list(range(0, 7)),
+        # cutoff pequeno para sobrar > 50 linhas na grade sintetica
+        "FEATURE_GROUPS": [("era5_land_temperature_2m_bilinear",
+                            "temperature_2m", 24)],
+    }
+    exec(src, ns)  # fonte controlada: e o nosso proprio template
+    out = ns["clean"]
+    regimes = ["regime_madrugada", "regime_manha", "regime_tarde", "regime_noite"]
+    for r in regimes:
+        assert r in ns["CYCLICAL_COLS"]
+        assert r in ns["CANDIDATE_COLS"]
+    # particao exata das 24 horas (1 regime ativo por linha, wrap incluido)
+    assert (out[regimes].sum(axis=1) == 1.0).all()
+    h = out.index.hour
+    assert ((out["regime_madrugada"] == 1) == ((h >= 3) & (h < 9))).all()
+    assert ((out["regime_manha"] == 1) == ((h >= 9) & (h < 15))).all()
+    assert ((out["regime_tarde"] == 1) == ((h >= 15) & (h < 21))).all()
+    assert ((out["regime_noite"] == 1) == ((h >= 21) | (h < 3))).all()
